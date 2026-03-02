@@ -471,6 +471,22 @@ type LongTermGoal = {
     completedAt?: string;
 }
 
+type PlanItemStatus = "pending" | "in_progress" | "completed" | "failed";
+
+type PlanItem = {
+    id: string;
+    sopName: string;
+    assistantId: string;
+    content: string;
+    scheduledTime: string;
+    completedAt: string | null;
+    status: PlanItemStatus;
+    result: string;
+    sessionId: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
 type GoalAddInput = {
     name: string;
     description: string;
@@ -547,6 +563,10 @@ type EventPayloadMapping = {
     "delete-scheduled-task": boolean;
     "read-dir": DirEntry[];
     "generate-skill-tags": string[];
+    // Plan table
+    "get-plan-items": PlanItem[];
+    "retry-plan-item": { ok: boolean; error?: string };
+    "run-plan-item-now": { ok: boolean; error?: string };
     "get-quick-window-shortcut": string;
     "save-quick-window-shortcut": boolean;
     // Goals
@@ -639,6 +659,11 @@ interface Window {
         updateScheduledTask: (id: string, updates: Partial<ScheduledTask>) => Promise<ScheduledTask | null>;
         deleteScheduledTask: (id: string) => Promise<boolean>;
         onSchedulerRunTask: (callback: (task: SchedulerRunTaskPayload) => void) => UnsubscribeFunction;
+        // Plan table
+        getPlanItems: () => Promise<PlanItem[]>;
+        retryPlanItem: (id: string) => Promise<{ ok: boolean; error?: string }>;
+        runPlanItemNow: (id: string) => Promise<{ ok: boolean; error?: string }>;
+        onPlanItemsChanged: (callback: () => void) => UnsubscribeFunction;
         readDir: (dirPath: string) => Promise<DirEntry[]>;
         generateSkillTags: (persona: string, skillNames: string[], assistantName: string) => Promise<string[]>;
         // Quick window

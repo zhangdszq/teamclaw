@@ -30,6 +30,7 @@ interface SidebarProps {
   onEffectiveWidthChange?: (width: number) => void;
   onShowSplash?: () => void;
   onOpenSop?: () => void;
+  onOpenPlanTable?: () => void;
   titleBarHeight?: number;
 }
 
@@ -46,6 +47,7 @@ export function Sidebar({
   onEffectiveWidthChange,
   onShowSplash,
   onOpenSop,
+  onOpenPlanTable,
   titleBarHeight = 0,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
@@ -232,6 +234,16 @@ export function Sidebar({
                 <line x1="8" y1="12" x2="16" y2="12" />
               </svg>
               <span className="text-[11px] font-medium">SOP</span>
+            </button>
+            <button
+              onClick={() => onOpenPlanTable?.()}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M3 9h18M9 3v18" />
+              </svg>
+              <span className="text-[11px] font-medium">计划表</span>
             </button>
             <button
               onClick={() => setShowAssistantManager(true)}

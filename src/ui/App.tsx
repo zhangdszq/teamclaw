@@ -16,6 +16,7 @@ import { ChapterSelector, parseChapters, isChapterSelectionText } from "./compon
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { SopPage } from "./components/SopPage";
+import { PlanTablePage } from "./components/PlanTablePage";
 import { TitleBar, usePlatform } from "./components/TitleBar";
 import MDContent from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -907,6 +908,7 @@ function App() {
 
   // SOP page state
   const [showSopPage, setShowSopPage] = useState(false);
+  const [showPlanTable, setShowPlanTable] = useState(false);
 
   // Header compact mode: hide button labels when header is narrow
   const headerRef = useRef<HTMLDivElement>(null);
@@ -1016,6 +1018,7 @@ function App() {
         onEffectiveWidthChange={setEffectiveSidebarWidth}
         onShowSplash={() => setShowSplash(true)}
         onOpenSop={() => setShowSopPage(true)}
+        onOpenPlanTable={() => setShowPlanTable(true)}
         titleBarHeight={titleBarH}
       />
 
@@ -1265,6 +1268,17 @@ function App() {
         <SopPage
           onClose={() => setShowSopPage(false)}
           titleBarHeight={titleBarH}
+        />
+      )}
+
+      {showPlanTable && (
+        <PlanTablePage
+          onClose={() => setShowPlanTable(false)}
+          titleBarHeight={titleBarH}
+          onNavigateToSession={(sessionId) => {
+            setShowPlanTable(false);
+            useAppStore.getState().setActiveSessionId(sessionId);
+          }}
         />
       )}
 

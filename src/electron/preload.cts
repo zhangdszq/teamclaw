@@ -179,6 +179,18 @@ electron.contextBridge.exposeInMainWorld("electron", {
         electron.ipcRenderer.on("scheduler:run-task", cb);
         return () => electron.ipcRenderer.off("scheduler:run-task", cb);
     },
+    // Plan table
+    getPlanItems: () =>
+        ipcInvoke("get-plan-items"),
+    retryPlanItem: (id: string) =>
+        ipcInvoke("retry-plan-item", id),
+    runPlanItemNow: (id: string) =>
+        ipcInvoke("run-plan-item-now", id),
+    onPlanItemsChanged: (callback: () => void) => {
+        const cb = () => callback();
+        electron.ipcRenderer.on("plan-items-changed", cb);
+        return () => electron.ipcRenderer.off("plan-items-changed", cb);
+    },
     readDir: (dirPath: string) =>
         ipcInvoke("read-dir", dirPath),
     generateSkillTags: (persona: string, skillNames: string[], assistantName: string) =>

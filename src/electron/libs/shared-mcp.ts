@@ -28,6 +28,13 @@ import {
   appendDailyMemory,
   ScopedMemory,
 } from "./memory-store.js";
+import {
+  loadPlanItems,
+  upsertPlanItem,
+  updatePlanItem,
+  type PlanItem,
+} from "./plan-store.js";
+import { sendProactiveDingtalkMessage } from "./dingtalk-bot.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1379,6 +1386,170 @@ const systemInfoTool = tool(
   },
 );
 
+// ── Plan Table Tools ─────────────────────────────────────────────────────────
+
+function createUpsertPlanItemTool(assistantId?: string) {
+  return tool(
+    "upsert_plan_item",
+    "创建或更新一条计划项。用于在执行 SOP 过程中记录计划步骤和进度。\n" +
+      "如果已存在相同 sopName + assistantId 的计划项，则更新；否则创建新项。\n\n" +
+      "使用时机：\n" +
+      "- 开始执行 SOP 某步骤前，创建计划项（status=pending 或 in_progress）\n" +
+      "- 步骤进展中更新状态和内容",
+    {
+      sop_name: z.string().describe("SOP 步骤名称，如 'T-1 课前准备'、'月度结算'"),
+      content: z.string().describe("具体执行内容描述"),
+      scheduled_time: z.string().optional().describe("计划执行时间，ISO 格式（可选）"),
+      status: z.enum(["pending", "in_progress", "completed", "failed"]).optional().describe("状态，默认 pending"),
+      result: z.string().optional().describe("执行结果摘要（可选）"),
+      session_id: z.string().optional().describe("关联的会话 ID（可选）"),
+    },
+    async (input) => {
+      try {
+        const item = upsertPlanItem({
+          sopName: String(input.sop_name),
+          assistantId: assistantId ?? "",
+          content: String(input.content),
+          scheduledTime: input.scheduled_time ? String(input.scheduled_time) : undefined,
+          status: input.status ?? "pending",
+          result: input.result ? String(input.result) : undefined,
+          sessionId: input.session_id ? String(input.session_id) : undefined,
+        });
+        return ok(
+          `计划项已${item.createdAt === item.updatedAt ? "创建" : "更新"}：\n` +
+            `- SOP：${item.sopName}\n- 内容：${item.content.slice(0, 80)}\n` +
+            `- 状态：${item.status}\n- ID：${item.id}`,
+        );
+      } catch (err) {
+        return ok(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
+function createCompletePlanItemTool(assistantId?: string) {
+  return tool(
+    "complete_plan_item",
+    "标记一条计划项为已完成，附带执行结果摘要。",
+    {
+      plan_item_id: z.string().optional().describe("计划项 ID（与 sop_name 二选一）"),
+      sop_name: z.string().optional().describe("SOP 步骤名称（与 plan_item_id 二选一）"),
+      result: z.string().describe("执行结果摘要"),
+      session_id: z.string().optional().describe("关联的会话 ID（可选）"),
+    },
+    async (input) => {
+      try {
+        const items = loadPlanItems();
+        let target: PlanItem | undefined;
+        if (input.plan_item_id) {
+          target = items.find((i) => i.id === input.plan_item_id);
+        } else if (input.sop_name) {
+          target = items.find(
+            (i) => i.sopName === input.sop_name && (!assistantId || i.assistantId === assistantId),
+          );
+        }
+        if (!target) return ok("未找到匹配的计划项。请检查 plan_item_id 或 sop_name。");
+
+        const updated = updatePlanItem(target.id, {
+          status: "completed",
+          completedAt: new Date().toISOString(),
+          result: String(input.result),
+          ...(input.session_id && { sessionId: String(input.session_id) }),
+        });
+        return ok(`计划项已完成：${updated?.sopName ?? target.sopName}\n结果：${input.result.slice(0, 120)}`);
+      } catch (err) {
+        return ok(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
+function createFailPlanItemTool(assistantId?: string) {
+  return tool(
+    "fail_plan_item",
+    "标记一条计划项为失败，记录失败原因。系统会自动发送钉钉告警通知。",
+    {
+      plan_item_id: z.string().optional().describe("计划项 ID（与 sop_name 二选一）"),
+      sop_name: z.string().optional().describe("SOP 步骤名称（与 plan_item_id 二选一）"),
+      reason: z.string().describe("失败原因"),
+    },
+    async (input) => {
+      try {
+        const items = loadPlanItems();
+        let target: PlanItem | undefined;
+        if (input.plan_item_id) {
+          target = items.find((i) => i.id === input.plan_item_id);
+        } else if (input.sop_name) {
+          target = items.find(
+            (i) => i.sopName === input.sop_name && (!assistantId || i.assistantId === assistantId),
+          );
+        }
+        if (!target) return ok("未找到匹配的计划项。请检查 plan_item_id 或 sop_name。");
+
+        updatePlanItem(target.id, {
+          status: "failed",
+          result: String(input.reason),
+        });
+
+        // Send DingTalk alert for failure
+        const aid = target.assistantId || assistantId;
+        if (aid) {
+          sendProactiveDingtalkMessage(aid, `**⚠️ 计划项执行失败**\n\n- SOP：${target.sopName}\n- 内容：${target.content}\n- 原因：${input.reason}`, {
+            title: `计划项失败: ${target.sopName}`,
+          }).catch((err: unknown) => {
+            console.error("[PlanStore] Failed to send DingTalk alert:", err);
+          });
+        }
+
+        return ok(`计划项已标记失败：${target.sopName}\n原因：${input.reason}\n已发送钉钉告警通知。`);
+      } catch (err) {
+        return ok(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
+function createListPlanItemsTool(assistantId?: string) {
+  return tool(
+    "list_plan_items",
+    "查询计划项列表，可按状态或助理筛选。",
+    {
+      status: z.enum(["pending", "in_progress", "completed", "failed"]).optional().describe("按状态筛选（可选）"),
+      all_assistants: z.boolean().optional().describe("是否查看所有助理的计划项，默认只看当前助理"),
+    },
+    async (input) => {
+      try {
+        let items = loadPlanItems();
+        if (!input.all_assistants && assistantId) {
+          items = items.filter((i) => i.assistantId === assistantId);
+        }
+        if (input.status) {
+          items = items.filter((i) => i.status === input.status);
+        }
+        if (items.length === 0) return ok("当前没有匹配的计划项。");
+
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const fmt = (iso: string) => new Date(iso).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
+
+        const lines = items.map((i) => {
+          const statusIcon = { pending: "⏳", in_progress: "🔄", completed: "✅", failed: "❌" }[i.status];
+          return (
+            `- ${statusIcon} **${i.sopName}**\n` +
+            `  内容：${i.content.slice(0, 80)}\n` +
+            `  时间：${fmt(i.scheduledTime)} | 状态：${i.status}\n` +
+            (i.result ? `  结果：${i.result.slice(0, 80)}\n` : "") +
+            `  ID：\`${i.id}\``
+          );
+        });
+
+        return ok(`**计划项列表（${items.length} 条）**\n\n${lines.join("\n\n")}`);
+      } catch (err) {
+        return ok(`查询失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 /**
@@ -1426,6 +1597,11 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       // 6551 OpenTwitter — Twitter/X data
       twitterUserTweetsTool,
       twitterSearchTool,
+      // Plan Table (AI writes, frontend reads)
+      createUpsertPlanItemTool(assistantId),
+      createCompletePlanItemTool(assistantId),
+      createFailPlanItemTool(assistantId),
+      createListPlanItemsTool(assistantId),
     ],
   });
 }

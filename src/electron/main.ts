@@ -82,6 +82,7 @@ import {
   type ScheduledTask
 } from "./libs/scheduler.js";
 import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer } from "./libs/heartbeat.js";
+import { loadPlanItems, updatePlanItem } from "./libs/plan-store.js";
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -842,6 +843,49 @@ app.on("ready", async () => {
 
     ipcMainHandle("delete-scheduled-task", (_: any, id: string) => {
         return deleteScheduledTask(id);
+    });
+
+    // Plan table handlers
+    ipcMainHandle("get-plan-items", () => {
+        return loadPlanItems();
+    });
+
+    ipcMainHandle("retry-plan-item", (_: any, id: string) => {
+        const items = loadPlanItems();
+        const item = items.find((i) => i.id === id);
+        if (!item) return { ok: false, error: "Plan item not found" };
+
+        updatePlanItem(id, { status: "pending", result: "", completedAt: null });
+
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("scheduler:run-task", {
+                name: `计划重试: ${item.sopName}`,
+                prompt: item.content,
+                assistantId: item.assistantId,
+                cwd: undefined,
+            });
+        }
+        return { ok: true };
+    });
+
+    ipcMainHandle("run-plan-item-now", (_: any, id: string) => {
+        const items = loadPlanItems();
+        const item = items.find((i) => i.id === id);
+        if (!item) return { ok: false, error: "Plan item not found" };
+
+        updatePlanItem(id, { status: "in_progress" });
+
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("scheduler:run-task", {
+                name: `立即执行: ${item.sopName}`,
+                prompt: item.content,
+                assistantId: item.assistantId,
+                cwd: undefined,
+            });
+        }
+        return { ok: true };
     });
 
     // Handle environment checks

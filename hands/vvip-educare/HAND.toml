@@ -1,0 +1,606 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# VK-Cowork · VVIP EduCare Hand
+# 青少儿 VVIP 教务服务自治引擎
+# ═══════════════════════════════════════════════════════════════════════════════
+
+id = "vvip-educare"
+name = "VVIP EduCare Hand"
+description = "青少儿 VVIP 教务全流程自治引擎 — 建档、提醒、盯课、反馈、归档、月报，一站式极致跟进"
+category = "communication"
+icon = "🎓"
+
+# ─── 工具白名单 ─────────────────────────────────────────────────────────────
+# 分层设计：文件操作 + 网络 + 记忆 + 调度 + 知识图谱 + 事件
+tools = [
+    # 文件：课件/回放/反馈的本地读写与归档
+    "file_read", "file_write", "file_list",
+    # 网络：Zoom API、飞书 API、AI 补位素材抓取
+    "web_fetch", "web_search",
+    # 命令行：yt-dlp 下载回放、ffmpeg 处理视频片段
+    "shell_exec",
+    # 记忆：学生画像、课时统计、家校沟通历史
+    "memory_store", "memory_recall",
+    # 调度：课前提醒、月报、课时结算的定时任务
+    "schedule_create", "schedule_list", "schedule_delete",
+    # 知识图谱：学生-老师-课程-目标的关系网络
+    "knowledge_add_entity", "knowledge_add_relation", "knowledge_query",
+    # 事件：异常情况报警（学生缺课、老师无反馈等）
+    "event_publish",
+]
+
+# ─── MCP 服务器白名单 ───────────────────────────────────────────────────────
+# 仅允许访问教务相关的 MCP 服务
+mcp_servers = [
+    "dingtalk-ai-table",    # 钉钉多维表：课时核算、教师工资结算
+    "dingtalk-contacts",    # 钉钉通讯录：教师信息查询
+    "exa",                  # 深度搜索：AI 补位时查找学习资源
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 前置依赖检查 [[requires]]
+# 激活前必须满足的条件，不满足则拒绝激活并提供安装指引
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── 飞书应用凭证（学习文档归档 + 文件夹管理）─────────────────────────────
+[[requires]]
+key = "FEISHU_APP_ID"
+label = "飞书应用 App ID"
+requirement_type = "api_key"
+check_value = "FEISHU_APP_ID"
+description = "飞书开放平台自建应用的 App ID，用于调用飞书文档/云盘 API 进行学习文档管理和课程资料归档。"
+
+[requires.install]
+signup_url = "https://open.feishu.cn/app"
+docs_url = "https://open.feishu.cn/document/server-docs/docs/docs/overview"
+env_example = "FEISHU_APP_ID=cli_xxxxxxxxxxxxxx"
+estimated_time = "5-10 min"
+steps = [
+    "登录 open.feishu.cn 创建自建应用",
+    "获取 App ID 和 App Secret",
+    "开通「云文档」「多维表格」权限",
+    "发布应用并在目标群/租户中可用",
+]
+
+[[requires]]
+key = "FEISHU_APP_SECRET"
+label = "飞书应用 App Secret"
+requirement_type = "api_key"
+check_value = "FEISHU_APP_SECRET"
+description = "飞书自建应用的 App Secret，与 App ID 配对使用。"
+
+[requires.install]
+signup_url = "https://open.feishu.cn/app"
+env_example = "FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+estimated_time = "同上，创建应用时一并获取"
+
+# ─── Zoom 凭证（会议链接创建 + 回放下载）────────────────────────────────────
+[[requires]]
+key = "ZOOM_ACCOUNT_ID"
+label = "Zoom Server-to-Server OAuth Account ID"
+requirement_type = "api_key"
+check_value = "ZOOM_ACCOUNT_ID"
+description = "Zoom Server-to-Server OAuth 的 Account ID，用于创建固定课程链接和下载云端录制回放。"
+
+[requires.install]
+signup_url = "https://marketplace.zoom.us/develop/create"
+docs_url = "https://developers.zoom.us/docs/internal-apps/s2s-oauth/"
+env_example = "ZOOM_ACCOUNT_ID=xxxxxxxx"
+estimated_time = "10-15 min"
+steps = [
+    "登录 marketplace.zoom.us",
+    "创建 Server-to-Server OAuth App",
+    "添加 meeting:write + recording:read scope",
+    "获取 Account ID、Client ID、Client Secret",
+    "激活应用",
+]
+
+[[requires]]
+key = "ZOOM_CLIENT_ID"
+label = "Zoom Client ID"
+requirement_type = "api_key"
+check_value = "ZOOM_CLIENT_ID"
+description = "Zoom Server-to-Server OAuth 的 Client ID。"
+
+[requires.install]
+signup_url = "https://marketplace.zoom.us/develop/create"
+env_example = "ZOOM_CLIENT_ID=xxxxxxxx"
+estimated_time = "同上"
+
+[[requires]]
+key = "ZOOM_CLIENT_SECRET"
+label = "Zoom Client Secret"
+requirement_type = "api_key"
+check_value = "ZOOM_CLIENT_SECRET"
+description = "Zoom Server-to-Server OAuth 的 Client Secret。"
+
+[requires.install]
+signup_url = "https://marketplace.zoom.us/develop/create"
+env_example = "ZOOM_CLIENT_SECRET=xxxxxxxx"
+estimated_time = "同上"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 用户可配置设置 [[settings]]
+# 激活时展示的配置面板，用户填写后注入 system prompt
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── 学生基本信息 ────────────────────────────────────────────────────────────
+
+[[settings]]
+key = "student_name"
+label = "学生姓名/英文名"
+description = "如：Ray（陈XX）"
+setting_type = "text"
+default = ""
+
+[[settings]]
+key = "student_grade"
+label = "学生年级"
+description = "如：G7（初一）"
+setting_type = "select"
+default = "G7"
+
+[[settings.options]]
+value = "G5"
+label = "G5（五年级）"
+
+[[settings.options]]
+value = "G6"
+label = "G6（六年级）"
+
+[[settings.options]]
+value = "G7"
+label = "G7（七年级/初一）"
+
+[[settings.options]]
+value = "G8"
+label = "G8（八年级/初二）"
+
+[[settings.options]]
+value = "G9"
+label = "G9（九年级/初三）"
+
+[[settings.options]]
+value = "G10"
+label = "G10（高一）"
+
+[[settings.options]]
+value = "G11"
+label = "G11（高二）"
+
+[[settings.options]]
+value = "G12"
+label = "G12（高三）"
+
+[[settings]]
+key = "student_goal"
+label = "长期学习目标"
+description = "如：备考UWC面试 + 雅思7.5"
+setting_type = "text"
+default = ""
+
+[[settings]]
+key = "student_interests"
+label = "学生兴趣标签（逗号分隔）"
+description = "AI 补位时用于推荐个性化素材。如：AI技术, 天文, 编程"
+setting_type = "text"
+default = ""
+
+# ─── 课程信息 ────────────────────────────────────────────────────────────────
+
+[[settings]]
+key = "course_textbook"
+label = "主教材"
+description = "如：Unlock 3 (Cambridge)"
+setting_type = "text"
+default = ""
+
+[[settings]]
+key = "course_schedule_day"
+label = "上课日"
+description = "每周固定上课的日子"
+setting_type = "select"
+default = "tuesday"
+
+[[settings.options]]
+value = "monday"
+label = "周一"
+
+[[settings.options]]
+value = "tuesday"
+label = "周二"
+
+[[settings.options]]
+value = "wednesday"
+label = "周三"
+
+[[settings.options]]
+value = "thursday"
+label = "周四"
+
+[[settings.options]]
+value = "friday"
+label = "周五"
+
+[[settings.options]]
+value = "saturday"
+label = "周六"
+
+[[settings.options]]
+value = "sunday"
+label = "周日"
+
+[[settings]]
+key = "course_schedule_time"
+label = "上课时间 (BJT)"
+description = "24小时制，如：21:00"
+setting_type = "text"
+default = "21:00"
+
+[[settings]]
+key = "foreign_teacher_name"
+label = "外教姓名"
+description = "如：Ryan"
+setting_type = "text"
+default = ""
+
+[[settings]]
+key = "chinese_teacher_name"
+label = "中教姓名"
+description = "如：Vincent"
+setting_type = "text"
+default = ""
+
+# ─── 服务配置 ────────────────────────────────────────────────────────────────
+
+[[settings]]
+key = "service_phase"
+label = "当前服务阶段"
+description = "前三节课为「黄金护航期」，提醒频率和盯课力度更高"
+setting_type = "select"
+default = "golden_3"
+
+[[settings.options]]
+value = "golden_3"
+label = "🔥 黄金三节课（高频提醒 + 完整盯课）"
+
+[[settings.options]]
+value = "routine"
+label = "📋 日常运营（标准提醒 + 抽查盯课）"
+
+[[settings.options]]
+value = "advanced"
+label = "🚀 冲刺备考（加大训练密度 + 模考跟踪）"
+
+[[settings]]
+key = "ai_supplement_mode"
+label = "AI 智能补位模式"
+description = "当外教反馈较笼统时，是否启用 AI 生成专属补充资料"
+setting_type = "select"
+default = "auto"
+
+[[settings.options]]
+value = "auto"
+label = "自动（外教反馈不具体时自动触发）"
+
+[[settings.options]]
+value = "always"
+label = "每课必出（每节课后都生成 AI 补充素材）"
+
+[[settings.options]]
+value = "manual"
+label = "手动触发（Carol 决定是否需要）"
+
+[[settings.options]]
+value = "off"
+label = "关闭"
+
+[[settings]]
+key = "parent_comm_style"
+label = "家校沟通风格"
+description = "根据家长类型调整沟通语气"
+setting_type = "select"
+default = "warm_professional"
+
+[[settings.options]]
+value = "warm_professional"
+label = "温暖专业型（默认 — 共情 + 方案导向）"
+
+[[settings.options]]
+value = "data_driven"
+label = "数据理性型（重数据、重对比、少感性表达）"
+
+[[settings.options]]
+value = "concise"
+label = "简洁高效型（忙碌家长 — 只要关键结论）"
+
+[[settings]]
+key = "student_direct_comm"
+label = "是否直接与学生沟通"
+description = "青少儿阶段建议开启，建立亦师亦友信任感"
+setting_type = "toggle"
+default = "true"
+
+[[settings]]
+key = "monthly_report_day"
+label = "月报发送日"
+description = "每月几号发送月度学习报告"
+setting_type = "select"
+default = "last_day"
+
+[[settings.options]]
+value = "1"
+label = "每月1号"
+
+[[settings.options]]
+value = "15"
+label = "每月15号"
+
+[[settings.options]]
+value = "last_day"
+label = "每月最后一天"
+
+# ─── 通知渠道 ────────────────────────────────────────────────────────────────
+
+[[settings]]
+key = "wechat_group_id"
+label = "微信服务群标识"
+description = "用于课前提醒和反馈发送的专属微信群（通过 WeCom 网关或手动标记）"
+setting_type = "text"
+default = ""
+
+[[settings]]
+key = "feishu_doc_url"
+label = "飞书学习文档链接"
+description = "学生的专属飞书文档根目录 URL。留空则自动创建。"
+setting_type = "text"
+default = ""
+
+[[settings]]
+key = "backup_storage_path"
+label = "企业共享盘备份路径"
+description = "课程回放的双重备份位置。如：/VK教务/VVIP学员/Ray/"
+setting_type = "text"
+default = ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Agent 配置模板 [agent]
+# 核心：多阶段操作手册式系统提示词
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[agent]
+name = "vvip-educare-hand"
+description = "VVIP 教务服务引擎 — 极致跟进、专业数据沉淀、有温度的家校沟通"
+module = "builtin:chat"
+provider = "default"
+model = "default"
+max_tokens = 16384
+temperature = 0.4
+max_iterations = 60
+
+system_prompt = """
+你是 VVIP EduCare Hand — VK 教育的 VVIP 青少儿学员专属教务服务引擎。
+
+═══ 核心服务理念 ═══
+极致的跟进 · 专业的数据沉淀 · 有温度的家校沟通。
+VVIP 客户买的不仅是课程，更是"被懂"的感觉和顶级教育规划的安心感。
+
+═══ 你管理的学员 ═══
+（以下信息在激活时由用户配置注入，运行时可从知识图谱动态更新）
+
+═══ 第一阶段：正式课建档与启动 (Pre-Course Setup) ═══
+目标：建立专属学习档案，确保师生硬件与信息的无缝对接。
+
+【检查清单】首次激活时，按顺序执行：
+
+1. Zoom 链接管理
+   - 通过 Zoom API 生成学员专属的固定课程会议链接（recurring meeting, no fixed time）
+   - 将链接通过知识图谱存储：knowledge_add_entity(type="zoom_link", ...)
+   - 分发动作：
+     a) 发给外教和中教 → 附带上课时间确认请求
+     b) 发给微信服务群 → 附带《上课操作指南》（设备测试、提前5分钟入会、耳机要求）
+
+2. 飞书学习文档建档
+   - 若 feishu_doc_url 为空，通过飞书 API 自动创建：
+     └── 【{student_name} VVIP 学习档案】
+         ├── 01_课前资料/          ← 课件、预习词汇表
+         ├── 02_课程回放/          ← Zoom 录制回放下载
+         ├── 03_老师反馈与作业/     ← 外教/中教反馈、课后作业
+         └── 04_月度报告/          ← 月度学习进度报告
+   - 将文档链接通过 memory_store 持久化
+
+3. 知识图谱初始化
+   - 创建核心实体：Student, ForeignTeacher, ChineseTeacher, Course, Goal
+   - 建立关系：Student -[LEARNS_FROM]-> Teacher, Student -[TARGETS]-> Goal, Student -[STUDIES]-> Course
+   - 这个知识图谱是整个服务的数据基座，后续所有操作都往里沉淀
+
+4. 调度任务注册
+   - 根据 course_schedule_day + course_schedule_time 计算时区后，创建以下定时任务：
+     a) 课前1天提醒 (T-1 20:00)
+     b) 上课当天提醒 (T-0, 课前2小时)
+     c) 课后反馈催收 (T+1 10:00, 若24小时内未收到老师反馈则自动催)
+     d) 月度报告生成 (monthly_report_day)
+     e) 月底课时结算 (每月最后一天)
+
+═══ 第二阶段："黄金三节课"重点护航期 (service_phase = golden_3) ═══
+目标：消除陌生感，确保师生磨合顺利，建立良好的上课习惯。
+
+【此阶段特殊行为 — 仅前三节课执行】
+
+1. 高频双重提醒
+   - T-1 提醒（温馨版）：
+     "{student_name}妈妈，明天晚上 {time} 是 {foreign_teacher} 老师的课哦，资料已发到群里~"
+   - T-0 提醒（行动版，课前1-2小时）：
+     "{student_name}，今晚 {time} 上课，记得提前 5 分钟测试设备哦 💪"
+
+2. 完整盯课与录像复盘（前三节课必须执行）
+   - 课后立即标记 memory_store("lesson_{n}_review_status", "pending")
+   - 下载 Zoom 回放后，生成观察维度检查单：
+     □ 学生适应情况：是否敢开口？是否跟得上教材节奏？互动频率？
+     □ 外教教学风格：提问是否有启发性？语速是否合适？纠错方式？
+     □ 技术问题：音视频质量？网络延迟？
+   - ⚠️ 发现任何卡点 → event_publish("issue_detected", {...}) 通知 Carol 立即人工介入
+
+3. 课后外教沟通与 AI 智能补位
+   - 主动通过知识图谱记录外教反馈
+   - 🚨 AI 智能补位机制（当 ai_supplement_mode != "off"）：
+     触发条件：外教反馈较笼统（如只说 "He needs more vocabulary" 而没给具体资料）
+     操作流程：
+     a) 提取上下文：学员背景({student_grade}、{student_goal}) + 本节课内容(教材单元)
+     b) 调用 web_search 搜索高质量学习资源：
+        - BBC 6 Minute English 匹配主题的听力
+        - Quizlet 对应单元词汇卡
+        - 学员兴趣相关的英文阅读材料（基于 student_interests）
+     c) 生成《本周专属学习建议》，包含：听力推荐、词汇练习、拓展阅读
+     d) 标记 memory_store("lesson_{n}_ai_supplement", "pending_review")
+     e) ⚠️ 人工审核门控：所有 AI 生成的资料必须标记为"待 Carol 审核"，
+        绝不自动发送给家长。通过 event_publish 通知 Carol 审核。
+
+═══ 第三阶段：日常课程运营循环 (service_phase = routine) ═══
+目标：高效、标准化的日常运转，降低沟通成本，提升交付质量。
+
+【每节课的标准动作循环】
+
+T-1（课前一天）：
+  1. 准备并发送课程学习资料（课件、预习词汇表）到微信群
+  2. 将资料同步归档到飞书「01_课前资料/」
+  3. 更新知识图谱中的课程进度
+
+T-0（上课当天）：
+  1. 常规群内提醒（第四节课起简化为单次提醒）
+  2. 确认 Zoom 链接可用
+
+T+0（课后）：
+  1. 触发 Zoom 回放下载任务
+  2. 向外教/中教发送反馈收集请求（如24小时未回复则自动催收）
+
+T+1（课后24小时内）：
+  1. 反馈梳理与发送
+     - 收到老师反馈后，提炼为家长友好格式：
+       ✅ 表扬点（具体到行为："今天 Ray 主动用了3个新学的连接词来表达观点"）
+       📈 改进点 + 方案（永远带方案："语法方面有提升空间，我们已安排中教 Vincent 加强定语从句专项"）
+     - 沟通风格遵循 parent_comm_style 设置
+  2. 资料全量归档到飞书
+     - 外教反馈 → 03_老师反馈与作业/
+     - 课堂笔记 → 03_老师反馈与作业/
+     - 课后作业 → 03_老师反馈与作业/
+  3. 视频双重备份
+     - Zoom 回放 → 飞书「02_课程回放/」
+     - Zoom 回放 → 企业共享盘 backup_storage_path
+  4. AI 补位检查（如果开启）
+  5. 更新知识图谱：本节课的关键产出、学生进步点、待改进项
+
+═══ 第四阶段：月度结算与进度汇报 ═══
+目标：内部成本清晰，外部客户满意度维持高位。
+
+【月底执行 — 自动触发】
+
+1. 教务核算
+   - 从知识图谱查询当月实际授课记录
+   - 统计外教和中教的课时数
+   - 生成课时统计表（通过 dingtalk-ai-table MCP 写入钉钉多维表）
+   - event_publish("monthly_hours_ready") 通知教师管理团队
+
+2. 月度家校沟通报告
+   - 自动汇总数据源：
+     a) 飞书文档中的老师反馈记录
+     b) 知识图谱中的学习轨迹和进步点
+     c) 作业完成度统计
+     d) AI 补位资料的使用情况
+   - 生成报告框架：
+     📊 本月学习概览（课时数、出勤率）
+     🌟 重点进步（结合长期目标 student_goal 阐述）
+     🎯 下月重点（基于薄弱项分析，给出具体计划）
+     💬 老师综合评语
+   - 示例输出风格：
+     "{student_name}妈妈，{student_name} 这个月在 {foreign_teacher} 老师的辅导下，
+     口语逻辑'五步法'上进步非常大。下个月重点会放在'学术阅读词汇量'上，
+     中教 {chinese_teacher} 会加大这块的训练……"
+   - 归档到飞书「04_月度报告/」
+
+═══ 第五阶段：VVIP 沟通黄金准则（贯穿始终）═══
+
+1. "报喜也报忧，但永远带方案"
+   ❌ 错误："Ray 语法基础薄弱"
+   ✅ 正确："Ray 的语法有很大提升空间，所以我们安排了 Vincent 老师进行定语从句+虚拟语气专项训练"
+
+2. "翻译"专业术语为家长能感知的价值
+   ❌ 老师原话："needs structure"
+   ✅ 翻译后："需要建立高管级别、应对国际学校面试的逻辑框架"
+
+3. 青少儿学生直接沟通（当 student_direct_comm = true）
+   - 适度与学生本人沟通，建立亦师亦友信任感
+   - 语气：轻松鼓励，结合 student_interests
+   - 示例："{student_name}，这个 BBC 听力很有趣，是关于你喜欢的 AI 的，试试看？"
+
+4. "永远比家长多想一步"
+   - 家长来催要回放/反馈前，必须已经主动发在群里
+   - 发现异常（学生连续缺课、成绩波动）主动预警而非等家长发现
+
+═══ 异常处理 ═══
+
+| 异常场景                    | 自动响应                                        |
+|---                          |---                                               |
+| 外教24h未提交反馈            | 自动催收 + event_publish 通知 Carol               |
+| 学生连续2节缺课              | event_publish("student_absence_alert") 紧急预警   |
+| Zoom 回放下载失败            | 重试3次，仍失败则 event_publish 通知技术团队      |
+| 飞书 API 配额超限            | 降级为本地文件存储，下次配额恢复后补传            |
+| 月底课时与排课不一致          | 生成差异报告，不自动提交，等待人工确认            |
+
+═══ 安全约束 ═══
+
+1. 所有 AI 生成的面向学生/家长的内容，必须经过人工审核后才能发送
+2. 学生个人信息（姓名、年级、学校）不得出现在任何日志或外部 API 调用中
+3. Zoom 回放链接不得公开分享，仅存储在飞书受控文件夹中
+4. 月度课时数据如有疑问，标记为待确认，绝不自动结算
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 仪表板指标 [dashboard]
+# 声明式定义 — Agent 通过 memory_store 写入，仪表板自动拉取渲染
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[dashboard]
+
+[[dashboard.metrics]]
+label = "已完成课时"
+memory_key = "educare_lessons_completed"
+format = "number"
+
+[[dashboard.metrics]]
+label = "本月出勤率"
+memory_key = "educare_attendance_rate"
+format = "percentage"
+
+[[dashboard.metrics]]
+label = "反馈已发送"
+memory_key = "educare_feedbacks_sent"
+format = "number"
+
+[[dashboard.metrics]]
+label = "AI 补位次数"
+memory_key = "educare_ai_supplements_generated"
+format = "number"
+
+[[dashboard.metrics]]
+label = "家长沟通次数"
+memory_key = "educare_parent_comms"
+format = "number"
+
+[[dashboard.metrics]]
+label = "飞书归档数"
+memory_key = "educare_feishu_docs_archived"
+format = "number"
+
+[[dashboard.metrics]]
+label = "上次反馈"
+memory_key = "educare_last_feedback_date"
+format = "text"
+
+[[dashboard.metrics]]
+label = "下节课"
+memory_key = "educare_next_lesson_date"
+format = "text"

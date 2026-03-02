@@ -29,6 +29,7 @@ interface SidebarProps {
   onToggleTaskPanel: () => void;
   onEffectiveWidthChange?: (width: number) => void;
   onShowSplash?: () => void;
+  onOpenSop?: () => void;
   titleBarHeight?: number;
 }
 
@@ -44,6 +45,7 @@ export function Sidebar({
   onToggleTaskPanel,
   onEffectiveWidthChange,
   onShowSplash,
+  onOpenSop,
   titleBarHeight = 0,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
@@ -220,6 +222,17 @@ export function Sidebar({
           </div>
 
           <div className="mt-auto border-t border-ink-900/5 pt-2 grid gap-1 px-2">
+            <button
+              onClick={() => onOpenSop?.()}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M9 17H7A5 5 0 017 7h2" />
+                <path d="M15 7h2a5 5 0 010 10h-2" />
+                <line x1="8" y1="12" x2="16" y2="12" />
+              </svg>
+              <span className="text-[11px] font-medium">SOP</span>
+            </button>
             <button
               onClick={() => setShowAssistantManager(true)}
               className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"

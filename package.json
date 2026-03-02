@@ -39,6 +39,7 @@
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-tabs": "^1.1.13",
     "@tailwindcss/vite": "^4.1.18",
+    "@xyflow/react": "^12.10.1",
     "better-sqlite3": "^12.6.0",
     "dotenv": "^17.2.3",
     "electron-updater": "^6.8.3",

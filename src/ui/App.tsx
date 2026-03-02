@@ -15,6 +15,7 @@ import { DecisionPanel } from "./components/DecisionPanel";
 import { ChapterSelector, parseChapters, isChapterSelectionText } from "./components/ChapterSelector";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { SopPage } from "./components/SopPage";
 import { TitleBar, usePlatform } from "./components/TitleBar";
 import MDContent from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -904,6 +905,9 @@ function App() {
   const [mcpSkillModalOpen, setMcpSkillModalOpen] = useState(false);
   const [mcpSkillInitialTab, setMcpSkillInitialTab] = useState<"mcp" | "skill">("mcp");
 
+  // SOP page state
+  const [showSopPage, setShowSopPage] = useState(false);
+
   // Header compact mode: hide button labels when header is narrow
   const headerRef = useRef<HTMLDivElement>(null);
   const [headerCompact, setHeaderCompact] = useState(false);
@@ -1011,6 +1015,7 @@ function App() {
         onToggleTaskPanel={handleToggleTaskPanel}
         onEffectiveWidthChange={setEffectiveSidebarWidth}
         onShowSplash={() => setShowSplash(true)}
+        onOpenSop={() => setShowSopPage(true)}
         titleBarHeight={titleBarH}
       />
 
@@ -1255,6 +1260,13 @@ function App() {
         onOpenChange={setMcpSkillModalOpen}
         initialTab={mcpSkillInitialTab}
       />
+
+      {showSopPage && (
+        <SopPage
+          onClose={() => setShowSopPage(false)}
+          titleBarHeight={titleBarH}
+        />
+      )}
 
       {/* Workspace Panel - right sidebar */}
       {showWorkspacePanel && (

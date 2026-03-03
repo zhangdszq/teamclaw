@@ -71,6 +71,8 @@ type UserSettings = {
     googleTokens?: GoogleTokens;
     googleUser?: GoogleUser;
     splashSeen?: boolean;
+    alertDingtalkWebhook?: string;
+    alertDingtalkSecret?: string;
 }
 
 type ScheduledTaskHookFilter = {

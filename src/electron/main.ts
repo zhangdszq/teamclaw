@@ -1184,6 +1184,19 @@ app.on("ready", async () => {
         }
     });
 
+    // Return skills-catalog.json for SOP panel categorisation
+    ipcMainHandle("skill-catalog", () => {
+        const catalogPath = app.isPackaged
+            ? join(process.resourcesPath, "skills-catalog.json")
+            : join(app.getAppPath(), "skills-catalog.json");
+        try {
+            if (!existsSync(catalogPath)) return { skills: [], categories: [] };
+            return JSON.parse(readFileSync(catalogPath, "utf8"));
+        } catch {
+            return { skills: [], categories: [] };
+        }
+    });
+
     // Get Claude config (MCP servers and Skills)
     ipcMainHandle("get-claude-config", () => {
         const claudeDir = join(homedir(), ".claude");

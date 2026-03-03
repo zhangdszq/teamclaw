@@ -55,43 +55,76 @@ const LEGEND_ITEMS = [
   { color: "#D97706", label: "Branch/Event" },
 ];
 
-const TOOL_OPTIONS: { value: string; group: string }[] = [
-  { value: "file_read",               group: "文件" },
-  { value: "file_write",              group: "文件" },
-  { value: "file_list",               group: "文件" },
-  { value: "web_fetch",               group: "网络" },
-  { value: "web_search",              group: "网络" },
-  { value: "shell_exec",              group: "命令行" },
-  { value: "memory_store",            group: "记忆" },
-  { value: "memory_recall",           group: "记忆" },
-  { value: "schedule_create",         group: "调度" },
-  { value: "schedule_list",           group: "调度" },
-  { value: "schedule_delete",         group: "调度" },
-  { value: "knowledge_add_entity",    group: "知识图谱" },
-  { value: "knowledge_add_relation",  group: "知识图谱" },
-  { value: "knowledge_query",         group: "知识图谱" },
-  { value: "event_publish",           group: "事件" },
+interface ToolOption { value: string; group: string; desc: string }
+
+const TOOL_OPTIONS: ToolOption[] = [
+  // 文件
+  { value: "file_read",               group: "文件",    desc: "读取本地文件内容" },
+  { value: "file_write",              group: "文件",    desc: "将内容写入本地文件" },
+  { value: "file_list",               group: "文件",    desc: "列出目录下的文件列表" },
+  // 网络
+  { value: "web_fetch",               group: "网络",    desc: "抓取指定 URL 的网页内容" },
+  { value: "web_search",              group: "网络",    desc: "调用搜索引擎检索信息" },
+  // 命令行
+  { value: "shell_exec",              group: "命令行",  desc: "执行终端命令或 Shell 脚本" },
+  // 记忆
+  { value: "memory_store",            group: "记忆",    desc: "将键值信息持久化存入记忆" },
+  { value: "memory_recall",           group: "记忆",    desc: "从记忆中检索已存储的信息" },
+  // 调度
+  { value: "schedule_create",         group: "调度",    desc: "创建定时/周期任务" },
+  { value: "schedule_list",           group: "调度",    desc: "查看当前所有调度任务" },
+  { value: "schedule_delete",         group: "调度",    desc: "删除指定的调度任务" },
+  // 知识图谱
+  { value: "knowledge_add_entity",    group: "知识图谱", desc: "向图谱添加实体节点" },
+  { value: "knowledge_add_relation",  group: "知识图谱", desc: "建立实体间的关联关系" },
+  { value: "knowledge_query",         group: "知识图谱", desc: "查询图谱中的实体和关系" },
+  // 事件
+  { value: "event_publish",           group: "事件",    desc: "发布事件以触发外部通知或告警" },
+  // 新闻
+  { value: "news_latest",             group: "新闻",    desc: "获取最新实时新闻资讯" },
+  { value: "news_search",             group: "新闻",    desc: "按关键词全文检索新闻" },
+  // 社交媒体
+  { value: "twitter_search",          group: "社交媒体", desc: "按关键词搜索 Twitter 内容" },
+  { value: "twitter_user_tweets",     group: "社交媒体", desc: "获取指定用户的历史推文" },
+  // 桌面自动化
+  { value: "take_screenshot",         group: "桌面",    desc: "截取当前屏幕画面" },
+  { value: "screen_analyze",          group: "桌面",    desc: "AI 视觉分析屏幕内容" },
+  { value: "desktop_control",         group: "桌面",    desc: "模拟鼠标/键盘执行桌面操作" },
+  { value: "clipboard",               group: "桌面",    desc: "读取或写入系统剪贴板" },
 ];
 
-const MCP_OPTIONS: { value: string; group: string }[] = [
-  { value: "dingtalk-ai-table",  group: "钉钉" },
-  { value: "dingtalk-contacts",  group: "钉钉" },
-  { value: "dingtalk-message",   group: "钉钉" },
-  { value: "feishu-doc",         group: "飞书" },
-  { value: "feishu-sheet",       group: "飞书" },
-  { value: "feishu-message",     group: "飞书" },
-  { value: "feishu-calendar",    group: "飞书" },
-  { value: "exa",                group: "搜索" },
-  { value: "github",             group: "开发" },
-  { value: "slack",              group: "协作" },
-  { value: "notion",             group: "协作" },
-  { value: "airtable",           group: "数据" },
-  { value: "google-calendar",    group: "Google" },
-  { value: "google-sheets",      group: "Google" },
-  { value: "google-docs",        group: "Google" },
-  { value: "jira",               group: "项目管理" },
-  { value: "linear",             group: "项目管理" },
-  { value: "asana",              group: "项目管理" },
+const MCP_OPTIONS: ToolOption[] = [
+  // 钉钉
+  { value: "dingtalk-ai-table",   group: "钉钉",   desc: "多维表格 — 读写结构化业务数据、课时核算" },
+  { value: "dingtalk-contacts",   group: "钉钉",   desc: "通讯录 — 查询成员、部门和员工信息" },
+  { value: "dingtalk-message",    group: "钉钉",   desc: "消息 — 向群或个人发送钉钉消息" },
+  // 飞书
+  { value: "feishu-doc",          group: "飞书",   desc: "文档 — 创建/读写飞书知识库文档" },
+  { value: "feishu-sheet",        group: "飞书",   desc: "表格 — 操作飞书多维表格和电子表格" },
+  { value: "feishu-message",      group: "飞书",   desc: "消息 — 向飞书群或用户发送富文本消息" },
+  { value: "feishu-calendar",     group: "飞书",   desc: "日历 — 创建、查询和更新飞书日程" },
+  // 搜索
+  { value: "exa",                 group: "搜索",   desc: "Exa 深度语义搜索，适合学术/技术资料" },
+  { value: "user-opennews",       group: "搜索",   desc: "OpenNews — 实时新闻聚合与主题订阅" },
+  { value: "user-opentwitter",    group: "搜索",   desc: "OpenTwitter — 推文检索与用户时间线" },
+  // 协作
+  { value: "github",              group: "协作",   desc: "GitHub — 读写代码仓库、Issue 和 PR" },
+  { value: "slack",               group: "协作",   desc: "Slack — 消息、频道和工作区管理" },
+  { value: "notion",              group: "协作",   desc: "Notion — 文档、数据库和页面操作" },
+  // 数据库
+  { value: "airtable",            group: "数据库", desc: "Airtable — 低代码关系数据库读写" },
+  // Google
+  { value: "google-calendar",     group: "Google", desc: "Google 日历 — 事件创建和查询" },
+  { value: "google-sheets",       group: "Google", desc: "Google Sheets — 电子表格读写" },
+  { value: "google-docs",         group: "Google", desc: "Google Docs — 文档内容操作" },
+  // 项目管理
+  { value: "jira",                group: "项目管理", desc: "Jira — Issue 创建和冲刺管理" },
+  { value: "linear",              group: "项目管理", desc: "Linear — 现代研发任务跟踪" },
+  { value: "asana",               group: "项目管理", desc: "Asana — 项目和任务协作管理" },
+  // 通信
+  { value: "sendgrid",            group: "通信",   desc: "SendGrid — 事务邮件发送" },
+  { value: "twilio",              group: "通信",   desc: "Twilio — SMS 短信和语音通话" },
+  { value: "stripe",              group: "通信",   desc: "Stripe — 支付和订阅管理" },
 ];
 
 // ═══ Custom Node Components ═══
@@ -386,6 +419,8 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [nodeOverrides, setNodeOverrides] = useState<Record<string, { tools: string[]; mcp: string[] }>>({});
+  const [installedSkillOptions, setInstalledSkillOptions] = useState<ToolOption[]>([]);
+  const [installedMcpOptions, setInstalledMcpOptions] = useState<ToolOption[]>([]);
   const loadedRef = useRef(false);
   const sopButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
@@ -411,6 +446,49 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
       }
     }).catch(() => { /* keep fallback list */ });
   }, [selectedSopId]);
+
+  // Load installed Skills and MCPs once on mount
+  useEffect(() => {
+    Promise.all([
+      window.electron.getClaudeConfig(),
+      window.electron.skillCatalog(),
+    ]).then(([claudeConfig, catalog]) => {
+      // Build lookup maps from catalog
+      const catalogMap = new Map(catalog.skills.map((s) => [s.name, s]));
+      const categoryMap = new Map(catalog.categories.map((c) => [c.id, c.label]));
+
+      // Build skill options from installed skills, enriched with catalog metadata
+      const skillOptions: ToolOption[] = claudeConfig.skills
+        .filter((s) => s.name && !s.name.startsWith("."))
+        .map((s) => {
+          const entry = catalogMap.get(s.name);
+          const groupId = entry?.category ?? "other";
+          return {
+            value: s.name,
+            group: categoryMap.get(groupId) ?? "其他",
+            desc: entry?.description ?? s.description ?? "",
+          };
+        })
+        .sort((a, b) => a.group.localeCompare(b.group, "zh"));
+      setInstalledSkillOptions(skillOptions);
+
+      // Build MCP options from installed MCPs, enriched with known catalog
+      const mcpOptions: ToolOption[] = claudeConfig.mcpServers.map((m) => {
+        const known = MCP_OPTIONS.find((o) => o.value === m.name);
+        return {
+          value: m.name,
+          group: known?.group ?? "已安装",
+          desc: known?.desc ?? (m.command ? `${m.command} ${(m.args ?? []).slice(0, 2).join(" ")}`.trim() : ""),
+        };
+      });
+      // Merge with known MCP catalog entries not yet installed (as reference)
+      setInstalledMcpOptions(mcpOptions.length > 0 ? mcpOptions : MCP_OPTIONS);
+    }).catch(() => {
+      // Fallback to static lists if IPC fails (e.g. in dev/mock)
+      setInstalledSkillOptions(TOOL_OPTIONS);
+      setInstalledMcpOptions(MCP_OPTIONS);
+    });
+  }, []);
 
   const selectedSop = sopList.find((s) => s.id === selectedSopId) ?? sopList[0];
 
@@ -677,6 +755,8 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
                 color={selectedNodeData.color}
                 tools={selectedNodeData.tools}
                 mcp={selectedNodeData.mcp}
+                skillOptions={installedSkillOptions.length > 0 ? installedSkillOptions : TOOL_OPTIONS}
+                mcpOptions={installedMcpOptions.length > 0 ? installedMcpOptions : MCP_OPTIONS}
                 onClose={() => setSelectedNodeId(null)}
                 onChangeTools={(tools) => handleNodeEdit(selectedNodeId, tools, selectedNodeData.mcp)}
                 onChangeMcp={(mcp) => handleNodeEdit(selectedNodeId, selectedNodeData.tools, mcp)}
@@ -728,21 +808,26 @@ function TagEditor({
   label: string;
   icon: React.ReactNode;
   items: string[];
-  options: { value: string; group: string }[];
+  options: ToolOption[];
   badgeStyle: { backgroundColor: string; color: string };
   onChange: (items: string[]) => void;
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [customInput, setCustomInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!showPicker) return;
+    // Auto-focus search when picker opens
+    setTimeout(() => searchRef.current?.focus(), 30);
     const handler = (e: MouseEvent) => {
       const target = e.target;
       if (!(target instanceof Node)) return;
       if (pickerRef.current && !pickerRef.current.contains(target)) {
         setShowPicker(false);
+        setSearchQuery("");
       }
     };
     document.addEventListener("mousedown", handler);
@@ -750,10 +835,27 @@ function TagEditor({
   }, [showPicker]);
 
   const available = options.filter((o) => !items.includes(o.value));
-  const groups = available.reduce<Record<string, string[]>>((acc, opt) => {
-    (acc[opt.group] ??= []).push(opt.value);
-    return acc;
-  }, {});
+
+  // Filter by search query
+  const q = searchQuery.trim().toLowerCase();
+  const filtered = q
+    ? available.filter(
+        (o) =>
+          o.value.toLowerCase().includes(q) ||
+          o.desc.toLowerCase().includes(q) ||
+          o.group.toLowerCase().includes(q),
+      )
+    : available;
+
+  // When searching show flat "搜索结果" group, otherwise show by category
+  const groups: Record<string, ToolOption[]> = q
+    ? { "搜索结果": filtered }
+    : filtered.reduce<Record<string, ToolOption[]>>((acc, opt) => {
+        (acc[opt.group] ??= []).push(opt);
+        return acc;
+      }, {});
+
+  const descOf = (val: string) => options.find((o) => o.value === val)?.desc ?? "";
 
   const addItem = (val: string) => {
     if (!items.includes(val)) onChange([...items, val]);
@@ -783,70 +885,114 @@ function TagEditor({
         </button>
       </div>
 
-      {/* Current items */}
-      <div className="flex flex-wrap gap-1.5 min-h-[22px] mb-1.5">
-        {items.map((item) => (
-          <span
-            key={item}
-            className="group flex items-center gap-1 rounded-md pl-2 pr-1 py-[3px] text-[9px] font-mono leading-none"
-            style={badgeStyle}
-          >
-            {item}
-            <button
-              onClick={() => removeItem(item)}
-              className="opacity-40 group-hover:opacity-100 rounded hover:bg-red-100 hover:text-red-600 p-px transition-all"
+      {/* Current items — card style with description */}
+      <div className="flex flex-col gap-1 min-h-[22px] mb-1.5">
+        {items.map((item) => {
+          const desc = descOf(item);
+          return (
+            <div
+              key={item}
+              className="group flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5"
+              style={{ backgroundColor: badgeStyle.backgroundColor }}
             >
-              <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M2 2l6 6M8 2l-6 6" />
-              </svg>
-            </button>
-          </span>
-        ))}
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-mono font-medium leading-tight" style={{ color: badgeStyle.color }}>
+                  {item}
+                </span>
+                {desc && (
+                  <span className="text-[9px] text-muted/70 leading-tight mt-0.5">{desc}</span>
+                )}
+              </div>
+              <button
+                onClick={() => removeItem(item)}
+                className="opacity-30 group-hover:opacity-80 rounded hover:bg-red-100 hover:text-red-600 p-0.5 shrink-0 transition-all"
+              >
+                <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M2 2l6 6M8 2l-6 6" />
+                </svg>
+              </button>
+            </div>
+          );
+        })}
         {items.length === 0 && (
-          <span className="text-[10px] text-muted/60 italic">暂未配置</span>
+          <span className="text-[10px] text-muted/60 italic px-1">暂未配置</span>
         )}
       </div>
 
-      {/* Picker dropdown */}
+      {/* Picker dropdown — grouped with search and descriptions */}
       {showPicker && (
         <div
           ref={pickerRef}
-          className="mt-1 rounded-xl border border-ink-900/10 bg-surface shadow-lg overflow-hidden"
-          style={{ maxHeight: 220, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.15) transparent" }}
+          className="mt-1 rounded-xl border border-ink-900/10 bg-surface shadow-lg overflow-hidden flex flex-col"
+          style={{ maxHeight: 300 }}
         >
-          {Object.entries(groups).map(([group, opts]) => (
-            <div key={group}>
-              <div className="px-3 py-1 text-[8px] font-semibold text-muted/70 bg-surface-secondary uppercase tracking-wider sticky top-0">
-                {group}
-              </div>
-              {opts.map((opt) => (
-                <button
-                  key={opt}
-                  onClick={() => { addItem(opt); setShowPicker(false); }}
-                  className="w-full text-left px-3 py-1.5 text-[10px] font-mono text-ink-700 hover:bg-surface-secondary transition-colors"
-                >
-                  {opt}
+          {/* Search input */}
+          <div className="px-3 pt-2 pb-1.5 border-b border-ink-900/6 shrink-0">
+            <div className="flex items-center gap-1.5 rounded-lg bg-surface-secondary px-2.5 py-1.5">
+              <svg viewBox="0 0 14 14" className="h-3 w-3 text-muted shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="5.5" cy="5.5" r="3.5" />
+                <path d="M8.5 8.5l3 3" />
+              </svg>
+              <input
+                ref={searchRef}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Escape") { setShowPicker(false); setSearchQuery(""); } }}
+                placeholder="搜索名称或描述…"
+                className="flex-1 text-[10px] bg-transparent outline-none text-ink-700 placeholder:text-muted/50 min-w-0"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery("")} className="text-muted/60 hover:text-muted transition-colors shrink-0">
+                  <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M2 2l6 6M8 2l-6 6" />
+                  </svg>
                 </button>
-              ))}
+              )}
             </div>
-          ))}
-          {available.length === 0 && (
-            <div className="px-3 py-2 text-[10px] text-muted italic">所有选项已添加</div>
-          )}
-          <div className="flex items-center gap-2 border-t border-ink-900/8 px-3 py-2 bg-surface sticky bottom-0">
+          </div>
+
+          {/* Options list */}
+          <div style={{ overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.15) transparent" }}>
+            {Object.entries(groups).length > 0 ? (
+              Object.entries(groups).map(([group, opts]) => (
+                <div key={group}>
+                  <div className="px-3 py-1.5 text-[8px] font-semibold text-muted/60 bg-surface-secondary uppercase tracking-wider sticky top-0 border-b border-ink-900/5 z-10">
+                    {group} <span className="font-normal normal-case opacity-60">({opts.length})</span>
+                  </div>
+                  {opts.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => { addItem(opt.value); setShowPicker(false); setSearchQuery(""); }}
+                      className="w-full text-left px-3 py-2 hover:bg-surface-secondary transition-colors border-b border-ink-900/4 last:border-0"
+                    >
+                      <div className="text-[10px] font-mono font-medium text-ink-700 leading-tight">{opt.value}</div>
+                      {opt.desc && <div className="text-[9px] text-muted mt-0.5 leading-tight">{opt.desc}</div>}
+                    </button>
+                  ))}
+                </div>
+              ))
+            ) : (
+              <div className="px-3 py-3 text-[10px] text-muted italic text-center">
+                {q ? `没有匹配"${q}"的选项` : "所有选项已添加"}
+              </div>
+            )}
+          </div>
+
+          {/* Custom input footer */}
+          <div className="flex items-center gap-2 border-t border-ink-900/8 px-3 py-2 bg-surface shrink-0">
             <input
               value={customInput}
               onChange={(e) => setCustomInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { addCustom(); setShowPicker(false); } }}
-              placeholder="自定义名称…"
+              onKeyDown={(e) => { if (e.key === "Enter") { addCustom(); setShowPicker(false); setSearchQuery(""); } }}
+              placeholder="输入自定义名称…"
               className="flex-1 text-[10px] font-mono bg-transparent outline-none text-ink-700 placeholder:text-muted/40"
             />
             <button
-              onClick={() => { addCustom(); setShowPicker(false); }}
+              onClick={() => { addCustom(); setShowPicker(false); setSearchQuery(""); }}
               disabled={!customInput.trim()}
-              className="text-[10px] text-accent hover:text-accent-hover disabled:opacity-30 transition-colors"
+              className="text-[10px] text-accent hover:text-accent-hover disabled:opacity-30 transition-colors shrink-0"
             >
-              ↵
+              ↵ 添加
             </button>
           </div>
         </div>
@@ -862,6 +1008,8 @@ function NodeEditPanel({
   color,
   tools,
   mcp,
+  skillOptions,
+  mcpOptions,
   onClose,
   onChangeTools,
   onChangeMcp,
@@ -870,6 +1018,8 @@ function NodeEditPanel({
   color: string;
   tools: string[];
   mcp: string[];
+  skillOptions: ToolOption[];
+  mcpOptions: ToolOption[];
   onClose: () => void;
   onChangeTools: (tools: string[]) => void;
   onChangeMcp: (mcp: string[]) => void;
@@ -916,7 +1066,7 @@ function NodeEditPanel({
             </svg>
           }
           items={tools}
-          options={TOOL_OPTIONS}
+          options={skillOptions}
           badgeStyle={{ backgroundColor: `${color}18`, color }}
           onChange={onChangeTools}
         />
@@ -934,7 +1084,7 @@ function NodeEditPanel({
             </svg>
           }
           items={mcp}
-          options={MCP_OPTIONS}
+          options={mcpOptions}
           badgeStyle={{ backgroundColor: "#CCFBF180", color: "#0F766E" }}
           onChange={onChangeMcp}
         />

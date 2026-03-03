@@ -206,6 +206,27 @@ type ClaudeConfigInfo = {
     skills: SkillInfo[];
 }
 
+type SkillCatalogItem = {
+    name: string;
+    label: string;
+    description: string;
+    category: string;
+    tags: string[];
+}
+
+type SkillCatalogCategory = {
+    id: string;
+    label: string;
+    icon?: string;
+    color?: string;
+    order?: number;
+}
+
+type SkillCatalogData = {
+    skills: SkillCatalogItem[];
+    categories: SkillCatalogCategory[];
+}
+
 type SaveMcpResult = {
     success: boolean;
     message: string;
@@ -536,6 +557,7 @@ type EventPayloadMapping = {
     "install-nodejs": InstallResult;
     "install-sdk": InstallResult;
     "get-claude-config": ClaudeConfigInfo;
+    "skill-catalog": SkillCatalogData;
     "save-mcp-server": SaveMcpResult;
     "delete-mcp-server": SaveMcpResult;
     "read-skill-content": string | null;
@@ -650,6 +672,7 @@ interface Window {
         installSdk: () => Promise<InstallResult>;
         // Claude config (MCP & Skills)
         getClaudeConfig: () => Promise<ClaudeConfigInfo>;
+        skillCatalog: () => Promise<SkillCatalogData>;
         saveMcpServer: (server: McpServer) => Promise<SaveMcpResult>;
         deleteMcpServer: (name: string) => Promise<SaveMcpResult>;
         readSkillContent: (skillPath: string) => Promise<string | null>;

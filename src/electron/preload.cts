@@ -75,6 +75,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
     // Claude config (MCP & Skills)
     getClaudeConfig: () => 
         ipcInvoke("get-claude-config"),
+    skillCatalog: () =>
+        ipcInvoke("skill-catalog"),
     saveMcpServer: (server: any) => 
         ipcInvoke("save-mcp-server", server),
     deleteMcpServer: (name: string) => 

@@ -24,6 +24,9 @@ import { join } from "path";
 import { homedir } from "os";
 import { loadUserSettings } from "./user-settings.js";
 
+// Write lock to prevent concurrent writes
+const writeLocks = new Map<string, Promise<void>>();
+
 // ─── Paths ──────────────────────────────────────────────────
 
 const MEMORY_ROOT        = join(homedir(), ".vk-cowork", "memory");
@@ -193,8 +196,37 @@ function dailyPath(date: string): string {
   return join(DAILY_DIR, `${date}.md`);
 }
 
-// ─── Atomic write ─────────────────────────────────────────────
+// ─── Atomic write with lock ───────────────────────────────────
 
+async function atomicWriteWithLock(filePath: string, content: string): Promise<void> {
+  // Wait for any existing write to this file to complete
+  let lockPromise = writeLocks.get(filePath);
+  if (lockPromise) {
+    await lockPromise;
+  }
+
+  // Create new lock
+  const writePromise = (async () => {
+    const tmp = filePath + ".tmp";
+    writeFileSync(tmp, content, "utf8");
+    try {
+      renameSync(tmp, filePath);
+    } catch {
+      // Windows: destination may already exist
+      try { unlinkSync(filePath); } catch { /* ignore */ }
+      renameSync(tmp, filePath);
+    }
+  })();
+
+  writeLocks.set(filePath, writePromise);
+  try {
+    await writePromise;
+  } finally {
+    writeLocks.delete(filePath);
+  }
+}
+
+// Sync version for backward compatibility (without lock)
 function atomicWrite(filePath: string, content: string): void {
   const tmp = filePath + ".tmp";
   writeFileSync(tmp, content, "utf8");

@@ -12,6 +12,16 @@ import { loadAssistantsConfig } from '../../libs/assistants-config.js';
 
 const agent = new Hono();
 
+// Helper to safely parse JSON body
+async function parseBody<T>(c: any): Promise<{ success: true; data: T } | { success: false; error: string }> {
+  try {
+    const data = await c.req.json();
+    return { success: true, data };
+  } catch {
+    return { success: false, error: 'Invalid JSON body' };
+  }
+}
+
 function applyAssistantContext(prompt: string, skillNames?: string[], persona?: string, assistantId?: string): string {
   const config = assistantId ? loadAssistantsConfig() : undefined;
   const assistant = config?.assistants.find((a: any) => a.id === assistantId);

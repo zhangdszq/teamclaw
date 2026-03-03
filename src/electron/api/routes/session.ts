@@ -25,12 +25,18 @@ session.get('/recent-cwds', (c) => {
 
 // Create a new session
 session.post('/', async (c) => {
-  const body = await c.req.json<{
+  let body: {
     cwd?: string;
     title: string;
     allowedTools?: string;
     prompt?: string;
-  }>();
+  };
+
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
 
   if (!body.title) {
     return c.json({ error: 'title is required' }, 400);

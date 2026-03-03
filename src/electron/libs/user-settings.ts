@@ -72,6 +72,22 @@ export function loadUserSettings(): UserSettings {
 }
 
 export function saveUserSettings(settings: UserSettings): void {
+  // Basic validation
+  if (!settings || typeof settings !== 'object') {
+    console.warn('[UserSettings] Invalid settings object, skipping save');
+    return;
+  }
+
+  // Validate proxy URL format if provided
+  if (settings.proxyUrl) {
+    try {
+      new URL(settings.proxyUrl);
+    } catch {
+      console.warn('[UserSettings] Invalid proxy URL format, skipping save');
+      return;
+    }
+  }
+
   ensureDirectory();
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
 }

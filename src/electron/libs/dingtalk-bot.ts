@@ -21,11 +21,20 @@ import { networkInterfaces, homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
-import { buildSmartMemoryContext, recordConversation, getRecentConversationBlocks } from "./memory-store.js";
-import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
+import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import {
+  type ConvMessage,
+  FILE_PATH_RE,
+  buildQueryEnv,
+  buildStructuredPersona,
+  buildHistoryContext,
+  isDuplicate as isDuplicateMsg,
+  markProcessed as markProcessedMsg,
+} from "./bot-base.js";
 
 function getLocalIp(): string {
   const nets = networkInterfaces();
@@ -125,10 +134,6 @@ interface DingtalkMessage {
   };
 }
 
-interface ConvMessage {
-  role: "user" | "assistant";
-  content: string;
-}
 
 interface AICardInstance {
   outTrackId: string;
@@ -406,87 +411,19 @@ async function downloadMediaToTempFile(
   }
 }
 
-// ─── Structured persona builder ──────────────────────────────────────────────
+// ─── Conversation history context (delegated to bot-base, with DingTalk file-path strip) ───
 
-// Regex to detect absolute file paths that indicate file-analysis assistant replies.
-const FILE_PATH_RE = /\/(?:tmp|var\/folders|private\/var|home|Users)\/\S+\.\w{2,6}/i;
-
-function buildHistoryContext(
-  history: { role: string; content: string }[],
-  assistantId?: string,
-): string {
-  // Primary: parse today's daily log for full Q&A pairs (persists across restarts).
-  if (assistantId) {
-    const fromLog = getRecentConversationBlocks(assistantId, 4);
-    if (fromLog) return fromLog;
-  }
-
-  // Fallback: in-memory history — include both roles, filter file-analysis replies.
-  if (!history.length) return "";
-  const lines = history.slice(-8).map((m) => {
-    const label = m.role === "user" ? "用户" : "助手";
-    if (m.role === "assistant" && FILE_PATH_RE.test(m.content)) {
-      return `${label}: [对某文件进行了分析，内容已省略]`;
-    }
-    // Strip file path instructions from user messages — temp paths are meaningless as history
-    const rawContent = m.role === "user"
-      ? m.content.replace(/\n\n文件路径:[\s\S]*$/, "").trim()
-      : m.content;
-    const content = rawContent.length > 400 ? rawContent.slice(0, 400) + "…" : rawContent;
-    return `${label}: ${content}`;
-  });
-  if (!lines.length) return "";
-  return [
-    "## 近期对话上下文（仅供参考）",
-    "⚠️ 如历史中出现文件路径，那是以前的文件，与当前任务无关。",
-    lines.join("\n"),
-  ].join("\n");
-}
-
-function buildStructuredPersona(
-  opts: DingtalkBotOptions,
-  ...extras: (string | undefined | null)[]
-): string {
-  const sections: string[] = [];
-  const nameLine = `你的名字是「${opts.assistantName}」。`;
-  const p = opts.persona?.trim();
-  if (p) sections.push(`## 你的身份\n${nameLine}\n${p}`);
-  else sections.push(`## 你的身份\n${nameLine}\n你是一个智能助手，请简洁有用地回答问题。`);
-  if (opts.coreValues?.trim()) sections.push(`## 核心价值观\n${opts.coreValues.trim()}`);
-  if (opts.relationship?.trim()) sections.push(`## 与用户的关系\n${opts.relationship.trim()}`);
-  if (opts.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${opts.cognitiveStyle.trim()}`);
-  if (opts.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${opts.operatingGuidelines.trim()}`);
-  if (opts.userContext?.trim()) sections.push(`## 关于用户\n${opts.userContext.trim()}`);
-  for (const extra of extras) {
-    if (extra?.trim()) sections.push(extra.trim());
-  }
-  return sections.join("\n\n");
+/** DingTalk: enable stripUserFilePaths to clean temp paths from user message history. */
+function buildHistoryContextDt(history: ConvMessage[], assistantId?: string): string {
+  return buildHistoryContext(history, assistantId, true);
 }
 
 // ─── Message deduplication ────────────────────────────────────────────────────
 
-const DEDUP_TTL_MS = 5 * 60 * 1000;
 const processedMsgs = new Map<string, number>();
 
-function isDuplicate(key: string): boolean {
-  const ts = processedMsgs.get(key);
-  if (!ts) return false;
-  if (Date.now() - ts > DEDUP_TTL_MS) {
-    processedMsgs.delete(key);
-    return false;
-  }
-  return true;
-}
-
-function markProcessed(key: string): void {
-  processedMsgs.set(key, Date.now());
-  if (processedMsgs.size > 5000) {
-    const cutoff = Date.now() - DEDUP_TTL_MS;
-    for (const [k, ts] of processedMsgs) {
-      if (ts < cutoff) processedMsgs.delete(k);
-    }
-  }
-}
+function isDuplicate(key: string): boolean { return isDuplicateMsg(key, processedMsgs); }
+function markProcessed(key: string): void { markProcessedMsg(key, processedMsgs); }
 
 // ─── Peer-ID registry ────────────────────────────────────────────────────────
 // DingTalk conversationIds are base64-encoded and case-sensitive.
@@ -1248,23 +1185,6 @@ function setBotClaudeSessionId(assistantId: string, claudeSessionId: string): vo
   }
 }
 
-/** Build env vars for query() — includes user's API key from settings */
-function buildQueryEnv(): Record<string, string | undefined> {
-  const settings = loadUserSettings();
-  const apiKey =
-    settings.anthropicAuthToken ||
-    process.env.ANTHROPIC_API_KEY ||
-    process.env.ANTHROPIC_AUTH_TOKEN ||
-    "";
-  const baseURL = settings.anthropicBaseUrl || "";
-
-  return {
-    ...getEnhancedEnv(),
-    ...(apiKey ? { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: apiKey } : {}),
-    ...(baseURL ? { ANTHROPIC_BASE_URL: baseURL } : {}),
-  };
-}
-
 // ─── DingtalkConnection ───────────────────────────────────────────────────────
 
 class DingtalkConnection {
@@ -1639,7 +1559,7 @@ class DingtalkConnection {
     // File messages start a fresh session — injecting previous file analyses causes
     // content mix-ups (Claude blends details from the old file into the new reply).
     const historySection = (!hasFiles && history.length > 1)
-      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
+      ? buildHistoryContextDt(history.slice(0, -1), this.opts.assistantId)
       : undefined;
 
     const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, historySection);

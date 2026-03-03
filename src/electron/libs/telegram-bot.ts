@@ -29,11 +29,22 @@ const __dirname = dirname(__filename);
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
-import { buildSmartMemoryContext, recordConversation, getRecentConversationBlocks } from "./memory-store.js";
-import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
+import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import {
+  type ConvMessage,
+  type BaseBotOptions,
+  FILE_PATH_RE,
+  FILE_SEND_RULE,
+  buildQueryEnv,
+  buildStructuredPersona as buildStructuredPersonaBase,
+  buildHistoryContext,
+  isDuplicate as isDuplicateMsg,
+  markProcessed as markProcessedMsg,
+} from "./bot-base.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -64,10 +75,6 @@ export interface TelegramBotOptions {
   skillNames?: string[];
 }
 
-interface ConvMessage {
-  role: "user" | "assistant";
-  content: string;
-}
 
 interface StreamResult {
   text: string;
@@ -177,96 +184,22 @@ function loadSkillContent(skillName: string): string | null {
   return null;
 }
 
-// ─── Conversation history context (for fresh sessions) ───────────────────────
+// ─── Conversation history / persona (delegated to bot-base) ──────────────────
 
-// Regex to detect absolute file paths that indicate file-analysis assistant replies.
-const FILE_PATH_RE = /\/(?:tmp|var\/folders|private\/var|home|Users)\/\S+\.\w{2,6}/i;
-
-function buildHistoryContext(history: ConvMessage[], assistantId?: string): string {
-  // Primary: parse today's daily log for full Q&A pairs (persists across restarts).
-  if (assistantId) {
-    const fromLog = getRecentConversationBlocks(assistantId, 4);
-    if (fromLog) return fromLog;
-  }
-
-  // Fallback: in-memory history — include both roles, filter file-analysis replies.
-  if (!history.length) return "";
-  const lines = history.slice(-8).map((m) => {
-    const label = m.role === "user" ? "用户" : "助手";
-    if (m.role === "assistant" && FILE_PATH_RE.test(m.content)) {
-      return `${label}: [对某文件进行了分析，内容已省略]`;
-    }
-    const content = m.content.length > 400 ? m.content.slice(0, 400) + "…" : m.content;
-    return `${label}: ${content}`;
-  });
-  if (!lines.length) return "";
-  return [
-    "## 近期对话上下文（仅供参考）",
-    "⚠️ 如历史中出现文件路径，那是以前的文件，与当前任务无关。",
-    lines.join("\n"),
-  ].join("\n");
-}
-
-// ─── Structured persona builder ──────────────────────────────────────────────
-
+/** Telegram-specific persona wrapper: injects FILE_SEND_RULE as a built-in extra. */
 function buildStructuredPersona(
   opts: TelegramBotOptions,
   ...extras: (string | undefined | null)[]
 ): string {
-  const sections: string[] = [];
-  const nameLine = `你的名字是「${opts.assistantName}」。`;
-  const p = opts.persona?.trim();
-  if (p) sections.push(`## 你的身份\n${nameLine}\n${p}`);
-  else sections.push(`## 你的身份\n${nameLine}\n你是一个智能助手，请简洁有用地回答问题。`);
-  if (opts.coreValues?.trim()) sections.push(`## 核心价值观\n${opts.coreValues.trim()}`);
-  if (opts.relationship?.trim()) sections.push(`## 与用户的关系\n${opts.relationship.trim()}`);
-  if (opts.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${opts.cognitiveStyle.trim()}`);
-  if (opts.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${opts.operatingGuidelines.trim()}`);
-  if (opts.userContext?.trim()) sections.push(`## 关于用户\n${opts.userContext.trim()}`);
-
-  const normalized = (opts.skillNames ?? []).map((s) => s.trim()).filter(Boolean);
-  if (normalized.length > 0) {
-    sections.push(`## 可用技能\n用户可通过 /<技能名> 调用以下技能：\n${normalized.map((s) => `/${s}`).join("\n")}`);
-  }
-
-  sections.push(
-    "## 文件发送规则（强制）\n" +
-    "当你生成了任何文件（音频、图片、视频、PDF、Excel 等），必须调用 `send_file` 工具将文件发送给用户。\n" +
-    "- 不要说「已通过钉钉/其他渠道发送」\n" +
-    "- 不要只告诉用户文件路径\n" +
-    "- 直接调用 send_file(file_path='/tmp/xxx') 发送",
-  );
-
-  for (const extra of extras) {
-    if (extra?.trim()) sections.push(extra.trim());
-  }
-  return sections.join("\n\n");
+  return buildStructuredPersonaBase(opts, FILE_SEND_RULE, ...extras);
 }
 
 // ─── Message deduplication ────────────────────────────────────────────────────
 
-const DEDUP_TTL_MS = 5 * 60 * 1000;
 const processedMsgs = new Map<string, number>();
 
-function isDuplicate(key: string): boolean {
-  const ts = processedMsgs.get(key);
-  if (!ts) return false;
-  if (Date.now() - ts > DEDUP_TTL_MS) {
-    processedMsgs.delete(key);
-    return false;
-  }
-  return true;
-}
-
-function markProcessed(key: string): void {
-  processedMsgs.set(key, Date.now());
-  if (processedMsgs.size > 5000) {
-    const cutoff = Date.now() - DEDUP_TTL_MS;
-    for (const [k, ts] of processedMsgs) {
-      if (ts < cutoff) processedMsgs.delete(k);
-    }
-  }
-}
+function isDuplicate(key: string): boolean { return isDuplicateMsg(key, processedMsgs); }
+function markProcessed(key: string): void { markProcessedMsg(key, processedMsgs); }
 
 // ─── Access control ───────────────────────────────────────────────────────────
 
@@ -570,22 +503,6 @@ function setBotClaudeSessionId(key: string, claudeSessionId: string): void {
   if (appSessionId && sessionStore) {
     sessionStore.updateSession(appSessionId, { claudeSessionId });
   }
-}
-
-function buildQueryEnv(): Record<string, string | undefined> {
-  const settings = loadUserSettings();
-  const apiKey =
-    settings.anthropicAuthToken ||
-    process.env.ANTHROPIC_API_KEY ||
-    process.env.ANTHROPIC_AUTH_TOKEN ||
-    "";
-  const baseURL = settings.anthropicBaseUrl || "";
-
-  return {
-    ...getEnhancedEnv(),
-    ...(apiKey ? { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: apiKey } : {}),
-    ...(baseURL ? { ANTHROPIC_BASE_URL: baseURL } : {}),
-  };
 }
 
 // ─── Media extraction ─────────────────────────────────────────────────────────

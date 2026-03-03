@@ -20,10 +20,18 @@ import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
-import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
+import { getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import {
+  type ConvMessage,
+  buildQueryEnv,
+  buildStructuredPersona,
+  buildHistoryContext,
+  isDuplicate as isDuplicateMsg,
+  markProcessed as markProcessedMsg,
+} from "./bot-base.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -49,57 +57,13 @@ export interface FeishuBotOptions {
   maxConnectionAttempts?: number;
 }
 
-interface ConvMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-// ─── Structured persona builder ──────────────────────────────────────────────
-
-function buildStructuredPersona(
-  opts: FeishuBotOptions,
-  ...extras: (string | undefined | null)[]
-): string {
-  const sections: string[] = [];
-  const nameLine = `你的名字是「${opts.assistantName}」。`;
-  const p = opts.persona?.trim();
-  if (p) sections.push(`## 你的身份\n${nameLine}\n${p}`);
-  else sections.push(`## 你的身份\n${nameLine}\n你是一个智能助手，请简洁有用地回答问题。`);
-  if (opts.coreValues?.trim()) sections.push(`## 核心价值观\n${opts.coreValues.trim()}`);
-  if (opts.relationship?.trim()) sections.push(`## 与用户的关系\n${opts.relationship.trim()}`);
-  if (opts.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${opts.cognitiveStyle.trim()}`);
-  if (opts.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${opts.operatingGuidelines.trim()}`);
-  if (opts.userContext?.trim()) sections.push(`## 关于用户\n${opts.userContext.trim()}`);
-  for (const extra of extras) {
-    if (extra?.trim()) sections.push(extra.trim());
-  }
-  return sections.join("\n\n");
-}
 
 // ─── Message deduplication ─────────────────────────────────────────────────────
 
-const DEDUP_TTL_MS = 5 * 60 * 1000;
 const processedMsgs = new Map<string, number>();
 
-function isDuplicate(key: string): boolean {
-  const ts = processedMsgs.get(key);
-  if (!ts) return false;
-  if (Date.now() - ts > DEDUP_TTL_MS) {
-    processedMsgs.delete(key);
-    return false;
-  }
-  return true;
-}
-
-function markProcessed(key: string): void {
-  processedMsgs.set(key, Date.now());
-  if (processedMsgs.size > 5000) {
-    const cutoff = Date.now() - DEDUP_TTL_MS;
-    for (const [k, ts] of processedMsgs) {
-      if (ts < cutoff) processedMsgs.delete(k);
-    }
-  }
-}
+function isDuplicate(key: string): boolean { return isDuplicateMsg(key, processedMsgs); }
+function markProcessed(key: string): void { markProcessedMsg(key, processedMsgs); }
 
 // ─── Status emitter ────────────────────────────────────────────────────────────
 
@@ -211,23 +175,6 @@ function setBotClaudeSessionId(assistantId: string, claudeSessionId: string): vo
   if (appSessionId && sessionStore) {
     sessionStore.updateSession(appSessionId, { claudeSessionId });
   }
-}
-
-/** Build env vars for query() — includes user's API key from settings */
-function buildQueryEnv(): Record<string, string | undefined> {
-  const settings = loadUserSettings();
-  const apiKey =
-    settings.anthropicAuthToken ||
-    process.env.ANTHROPIC_API_KEY ||
-    process.env.ANTHROPIC_AUTH_TOKEN ||
-    "";
-  const baseURL = settings.anthropicBaseUrl || "";
-
-  return {
-    ...getEnhancedEnv(),
-    ...(apiKey ? { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: apiKey } : {}),
-    ...(baseURL ? { ANTHROPIC_BASE_URL: baseURL } : {}),
-  };
 }
 
 // ─── FeishuConnection ──────────────────────────────────────────────────────────
@@ -467,7 +414,10 @@ class FeishuConnection {
     while (history.length > MAX_TURNS * 2) history.shift();
 
     const memoryContext = buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
-    const system = buildStructuredPersona(this.opts, memoryContext);
+    const historySection = history.length > 1
+      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
+      : undefined;
+    const system = buildStructuredPersona(this.opts, memoryContext, historySection);
 
     let replyText: string;
 

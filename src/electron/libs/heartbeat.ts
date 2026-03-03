@@ -151,6 +151,18 @@ export function stopHeartbeatLoop(): void {
   }
 }
 
+/**
+ * Clean up heartbeat data for a specific assistant.
+ * Call this when an assistant is deleted or reconfigured.
+ */
+export function cleanupHeartbeatData(assistantId: string): void {
+  lastHeartbeatRun.delete(assistantId);
+  lastMemoryMtime.delete(assistantId);
+  noActionStreak.delete(assistantId);
+  lastMemoryOffset.delete(assistantId);
+  console.log(`[Heartbeat] Cleaned up data for assistant: ${assistantId}`);
+}
+
 function runAssistantHeartbeat(assistant: AssistantConfig, runner: SessionRunner): void {
   const prompt = buildHeartbeatPrompt(assistant);
   const streak = noActionStreak.get(assistant.id) ?? 0;

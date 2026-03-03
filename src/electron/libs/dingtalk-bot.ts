@@ -709,6 +709,12 @@ export function stopDingtalkBot(assistantId: string): void {
     conn.stop();
     pool.delete(assistantId);
   }
+  // Clean up related maps to prevent memory leaks
+  const keysToClean = Array.from(histories.keys()).filter(k => k.startsWith(assistantId));
+  for (const key of keysToClean) {
+    histories.delete(key);
+    botSessionIds.delete(key);
+  }
   emit(assistantId, "disconnected");
 }
 

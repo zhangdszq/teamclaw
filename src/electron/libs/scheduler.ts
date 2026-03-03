@@ -4,6 +4,11 @@ import { app } from "electron";
 import type { ClientEvent } from "../types.js";
 import { loadAssistantsConfig } from "./assistants-config.js";
 
+// Task cache to reduce frequent file I/O
+let taskCache: ScheduledTask[] | null = null;
+let taskCacheTime = 0;
+const TASK_CACHE_TTL_MS = 60000; // 1 minute cache
+
 // Types
 export interface ScheduledTaskHookFilter {
   assistantId?: string;
@@ -66,19 +71,36 @@ function ensureDirectory() {
   }
 }
 
-// Load tasks
+// Load tasks with caching to reduce I/O
 export function loadScheduledTasks(): ScheduledTask[] {
+  const now = Date.now();
+
+  // Return cached tasks if still valid
+  if (taskCache !== null && (now - taskCacheTime) < TASK_CACHE_TTL_MS) {
+    return taskCache;
+  }
+
   try {
     if (!existsSync(SCHEDULER_FILE)) {
+      taskCache = [];
+      taskCacheTime = now;
       return [];
     }
     const raw = readFileSync(SCHEDULER_FILE, "utf8");
     const state = JSON.parse(raw) as SchedulerState;
-    return state.tasks || [];
+    taskCache = state.tasks || [];
+    taskCacheTime = now;
+    return taskCache;
   } catch (error) {
     console.error("Failed to load scheduled tasks:", error);
     return [];
   }
+}
+
+// Invalidate cache when tasks are modified
+export function invalidateTaskCache(): void {
+  taskCache = null;
+  taskCacheTime = 0;
 }
 
 // Save tasks
@@ -86,6 +108,8 @@ export function saveScheduledTasks(tasks: ScheduledTask[]): void {
   ensureDirectory();
   const state: SchedulerState = { tasks };
   writeFileSync(SCHEDULER_FILE, JSON.stringify(state, null, 2), "utf8");
+  // Invalidate cache after saving
+  invalidateTaskCache();
 }
 
 // Add task

@@ -3,6 +3,20 @@
  */
 import { getApiBaseUrl, isEmbeddedApiRunning, startEmbeddedApi } from '../api/server.js';
 import type { ServerEvent } from '../types.js';
+import { fetch as undiciFetch, Agent } from 'undici';
+
+// Use undici directly for SSE requests to disable body timeout (prevents UND_ERR_BODY_TIMEOUT
+// during long-running Claude agent tasks where the stream may be idle for minutes).
+const noTimeoutAgent = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
+
+async function sseFetch(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+  // @ts-ignore — undici Blob type conflicts with global Blob in strict TS; works at runtime
+  return undiciFetch(url, {
+    ...init,
+    dispatcher: noTimeoutAgent,
+    signal,
+  }) as unknown as Response;
+}
 
 // Ensure embedded API is running
 async function ensureEmbeddedApi(): Promise<void> {
@@ -273,6 +287,13 @@ async function handleSSEStream(
     // Ignore abort errors
     if ((error as Error).name === 'AbortError') {
       console.log('[API Client] Stream aborted');
+      return;
+    }
+    // undici body timeout — the SSE connection went idle for too long (default 300s).
+    // Treat as a graceful stream end so the session result is not lost.
+    const code = (error as NodeJS.ErrnoException & { code?: string }).code;
+    if (code === 'UND_ERR_BODY_TIMEOUT') {
+      console.warn('[API Client] SSE body timeout — treating as stream end');
       return;
     }
     console.error('[API Client] SSE stream error:', error);

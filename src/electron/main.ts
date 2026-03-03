@@ -11,7 +11,7 @@ setTelegramSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
-import { loadAssistantsConfig, saveAssistantsConfig, type AssistantsConfig } from "./libs/assistants-config.js";
+import { loadAssistantsConfig, saveAssistantsConfig, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
 import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type TelegramBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
@@ -648,7 +648,18 @@ app.on("ready", async () => {
     });
 
     ipcMainHandle("get-assistants-config", () => {
-        return loadAssistantsConfig();
+        const config = loadAssistantsConfig();
+        return {
+            ...config,
+            defaults: {
+                persona: DEFAULT_PERSONA,
+                coreValues: DEFAULT_CORE_VALUES,
+                relationship: DEFAULT_RELATIONSHIP,
+                cognitiveStyle: DEFAULT_COGNITIVE_STYLE,
+                operatingGuidelines: DEFAULT_OPERATING_GUIDELINES,
+                heartbeatRules: DEFAULT_HEARTBEAT_RULES,
+            },
+        };
     });
 
     ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
@@ -850,6 +861,29 @@ app.on("ready", async () => {
         return loadPlanItems();
     });
 
+    function buildPlanPrompt(content: string, sopName: string, planItemId: string): string {
+        return `${content}
+
+---
+【计划项执行规范 - 必须遵守】
+本次任务来自计划表（SOP: ${sopName}，计划项 ID: ${planItemId}），执行全程须调用以下 MCP 工具管理状态：
+
+1. **任务开始时**：调用 upsert_plan_item
+   - sop_name: "${sopName}"
+   - status: "in_progress"
+   - content: 当前任务描述
+
+2. **任务完成后**：必须调用 complete_plan_item
+   - sop_name: "${sopName}"
+   - result: 执行结果摘要（100字以内）
+
+3. **任务失败时**：调用 fail_plan_item
+   - sop_name: "${sopName}"
+   - reason: 失败原因
+
+⚠️ 无论任务成功还是失败，结束前都必须调用对应工具更新计划项状态，否则计划表将无法同步进度。`;
+    }
+
     ipcMainHandle("retry-plan-item", (_: any, id: string) => {
         const items = loadPlanItems();
         const item = items.find((i) => i.id === id);
@@ -860,10 +894,13 @@ app.on("ready", async () => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
             win.webContents.send("scheduler:run-task", {
-                name: `计划重试: ${item.sopName}`,
-                prompt: item.content,
+                name: item.sopName,
+                sopName: item.sopName,
+                planTaskName: item.content.split("\n")[0].slice(0, 40),
+                prompt: buildPlanPrompt(item.content, item.sopName, id),
                 assistantId: item.assistantId,
                 cwd: undefined,
+                planItemId: id,
             });
         }
         return { ok: true };
@@ -879,13 +916,21 @@ app.on("ready", async () => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
             win.webContents.send("scheduler:run-task", {
-                name: `立即执行: ${item.sopName}`,
-                prompt: item.content,
+                name: item.sopName,
+                sopName: item.sopName,
+                planTaskName: item.content.split("\n")[0].slice(0, 40),
+                prompt: buildPlanPrompt(item.content, item.sopName, id),
                 assistantId: item.assistantId,
                 cwd: undefined,
+                planItemId: id,
             });
         }
         return { ok: true };
+    });
+
+    ipcMainHandle("update-plan-item-session", (_: any, planItemId: string, sessionId: string) => {
+        const result = updatePlanItem(planItemId, { sessionId });
+        return result ? { ok: true } : { ok: false, error: "Plan item not found" };
     });
 
     // Handle environment checks

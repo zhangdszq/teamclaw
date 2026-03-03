@@ -428,7 +428,11 @@ function buildHistoryContext(
     if (m.role === "assistant" && FILE_PATH_RE.test(m.content)) {
       return `${label}: [对某文件进行了分析，内容已省略]`;
     }
-    const content = m.content.length > 400 ? m.content.slice(0, 400) + "…" : m.content;
+    // Strip file path instructions from user messages — temp paths are meaningless as history
+    const rawContent = m.role === "user"
+      ? m.content.replace(/\n\n文件路径:[\s\S]*$/, "").trim()
+      : m.content;
+    const content = rawContent.length > 400 ? rawContent.slice(0, 400) + "…" : rawContent;
     return `${label}: ${content}`;
   });
   if (!lines.length) return "";
@@ -1539,10 +1543,10 @@ class DingtalkConnection {
 
     if (!extracted.text) return;
 
-    // Append file paths to the text so Agent SDK can read/view them
+    // Append file paths and reading instruction so Claude knows to use read_document tool.
     if (extracted.filePaths && extracted.filePaths.length > 0) {
       const pathsNote = extracted.filePaths.map((p: string) => `文件路径: ${p}`).join("\n");
-      extracted = { ...extracted, text: `${extracted.text}\n\n${pathsNote}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。` };
+      extracted = { ...extracted, text: `${extracted.text}\n\n${pathsNote}\n⚠️ 这是一个新文件。如果是文档（PDF/Word/Excel 等），请立即调用 read_document 工具读取文件内容，再基于工具返回的实际内容回复，不得凭训练数据猜测文件内容。` };
     }
 
     console.log(`[DingTalk] Message (${msg.msgtype}): ${extracted.text.slice(0, 100)}`);
@@ -1623,16 +1627,18 @@ class DingtalkConnection {
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
+    // File messages must not see previous file analyses in daily logs — skip daily log injection.
+    const memoryContext = buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd, { skipDailyLog: hasFiles });
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const msgNow = msg.createAt ?? Date.now();
     const nowStr = new Date(msgNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）\n创建定时任务时，若需要相对时间（如"X分钟后"），请使用 delay_minutes 参数，服务器会自动计算。`;
 
-    // When starting a fresh session for file messages, inject recent history so
-    // Claude knows what was discussed before, even without a resumed session.
-    const historySection = (hasFiles && history.length > 1)
+    // Non-file messages resume an existing session and benefit from recent history.
+    // File messages start a fresh session — injecting previous file analyses causes
+    // content mix-ups (Claude blends details from the old file into the new reply).
+    const historySection = (!hasFiles && history.length > 1)
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;
 
@@ -2043,8 +2049,12 @@ class DingtalkConnection {
     } as unknown as import("../types.js").StreamMessage);
 
     if (userText) {
+      // Strip file path instructions before logging — temp paths must not appear in
+      // conversation history, otherwise the next file message will inherit stale
+      // "read this file" instructions and Claude will read the wrong file.
+      const logUserText = userText.replace(/\n\n文件路径:[\s\S]*$/, "").trim();
       recordConversation(
-        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${logUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
         { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },
       );
     }

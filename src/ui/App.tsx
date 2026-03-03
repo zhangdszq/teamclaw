@@ -630,22 +630,46 @@ function App() {
     return unsubscribe;
   }, [assistantsList]);
 
+  // Track which plan item triggered the current scheduler run, for session linkback
+  const pendingPlanItemIdRef = useRef<string | null>(null);
+  const prevActiveSessionIdRef = useRef<string | null>(activeSessionId);
+
   // Listen for scheduler task execution events
   useEffect(() => {
     const unsubscribe = window.electron.onSchedulerRunTask((task) => {
       console.log("[Scheduler] Running task:", task);
-      // Start a new session with the scheduled task
-      // Use task.cwd, or current cwd state, or fallback to a default
+      if (task.planItemId) {
+        pendingPlanItemIdRef.current = task.planItemId;
+      }
       const effectiveCwd = task.cwd || cwd || "/Users";
+      const sessionTitle = task.planItemId
+        ? `SOP · ${task.sopName || task.name}${task.planTaskName ? ` · ${task.planTaskName}` : ""}`
+        : `定时任务: ${task.name}`;
       handleStartFromModal({
         prompt: task.prompt,
         cwd: effectiveCwd,
-        title: `定时任务: ${task.name}`,
+        title: sessionTitle,
         assistantId: task.assistantId,
       });
     });
     return unsubscribe;
   }, [handleStartFromModal, cwd]);
+
+  // When a new session is activated after a plan item run, write sessionId back to the plan item
+  useEffect(() => {
+    if (
+      activeSessionId &&
+      activeSessionId !== prevActiveSessionIdRef.current &&
+      pendingPlanItemIdRef.current
+    ) {
+      const planItemId = pendingPlanItemIdRef.current;
+      pendingPlanItemIdRef.current = null;
+      window.electron.updatePlanItemSession(planItemId, activeSessionId).catch((err: unknown) => {
+        console.error("[PlanTable] Failed to link session to plan item:", err);
+      });
+    }
+    prevActiveSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   // Send DingTalk notification when a scheduled-task session completes
   const prevSessionStatusRef = useRef<Record<string, string>>({});
@@ -654,10 +678,11 @@ function App() {
       const prevStatus = prevSessionStatusRef.current[sessionId];
       const curStatus = session.status;
 
+      const isScheduledSession = session.title?.startsWith("定时任务:") || session.title?.startsWith("SOP ·");
       if (
         prevStatus === "running" &&
         curStatus !== "running" &&
-        session.title?.startsWith("定时任务:") &&
+        isScheduledSession &&
         session.assistantId
       ) {
         // Extract last assistant text as notification body
@@ -671,14 +696,18 @@ function App() {
             ?.join("\n")
             ?.trim() || "任务已完成";
 
-        const taskName = session.title.replace(/^定时任务:\s*/, "");
+        const isSop = session.title?.startsWith("SOP ·");
+        const taskName = isSop
+          ? session.title!.replace(/^SOP\s*·\s*/, "")   // keeps "VVIP EduCare · 课前提醒"
+          : session.title!.replace(/^定时任务:\s*/, "");
+        const prefix = isSop ? "SOP 任务" : "定时任务";
         const statusLabel = curStatus === "error" ? "执行出错" : "执行完成";
-        const notifyText = `**📋 定时任务${statusLabel}：${taskName}**\n\n${resultText}`;
+        const notifyText = `**📋 ${prefix}${statusLabel}：${taskName}**\n\n${resultText}`;
 
         window.electron.sendProactiveDingtalk({
           assistantId: session.assistantId,
           text: notifyText,
-          title: `定时任务${statusLabel}: ${taskName}`,
+          title: `${prefix}${statusLabel}: ${taskName}`,
         }).catch((err: unknown) => {
           console.error("[Scheduler] Failed to send DingTalk notification:", err);
         });
@@ -1018,7 +1047,6 @@ function App() {
         onEffectiveWidthChange={setEffectiveSidebarWidth}
         onShowSplash={() => setShowSplash(true)}
         onOpenSop={() => setShowSopPage(true)}
-        onOpenPlanTable={() => setShowPlanTable(true)}
         titleBarHeight={titleBarH}
       />
 
@@ -1267,6 +1295,10 @@ function App() {
       {showSopPage && (
         <SopPage
           onClose={() => setShowSopPage(false)}
+          onOpenPlanTable={() => {
+            setShowSopPage(false);
+            setShowPlanTable(true);
+          }}
           titleBarHeight={titleBarH}
         />
       )}
@@ -1274,10 +1306,31 @@ function App() {
       {showPlanTable && (
         <PlanTablePage
           onClose={() => setShowPlanTable(false)}
-          titleBarHeight={titleBarH}
-          onNavigateToSession={(sessionId) => {
+          onBack={() => {
             setShowPlanTable(false);
-            useAppStore.getState().setActiveSessionId(sessionId);
+            setShowSopPage(true);
+          }}
+          titleBarHeight={titleBarH}
+          onNavigateToSession={(sessionId, assistantId) => {
+            setShowPlanTable(false);
+            window.electron.getAssistantsConfig().then((config) => {
+              const assistant = config.assistants?.find((a) => a.id === assistantId);
+              if (assistant) {
+                useAppStore.getState().setSelectedAssistant(
+                  assistant.id,
+                  assistant.skillNames ?? [],
+                  assistant.provider,
+                  assistant.model,
+                  assistant.persona,
+                  assistant.skillTags ?? [],
+                );
+                const savedCwd = loadAssistantCwdLocal(assistant.id);
+                if (savedCwd) useAppStore.getState().setCwd(savedCwd);
+              }
+              useAppStore.getState().setActiveSessionId(sessionId);
+            }).catch(() => {
+              useAppStore.getState().setActiveSessionId(sessionId);
+            });
           }}
         />
       )}

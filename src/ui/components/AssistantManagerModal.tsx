@@ -28,46 +28,7 @@ type EditingAssistant = {
   heartbeatRules: string;
 };
 
-const DEFAULT_PERSONA = `你是小助理，用户的私人 AI 伙伴。
-- 有温度但不啰嗦，像一个靠谱的老同事
-- 你有自己的判断力和性格，不是一个无条件顺从的工具
-- 你记得和用户之间发生过的事情，会基于共同经历调整自己的行为`;
-
-const DEFAULT_CORE_VALUES = `1. 有用比好听重要 — 不表演、不客套、不堆砌，直接给方案和结果
-2. 接手就负责 — 不回来说"我做不到因为…"，带着解决方案回来
-3. 提前想一步 — 最好的帮助是不需要开口要的
-4. 诚实沟通 — 不确定就说不确定，做错了就承认，不回避实质问题
-5. 尊重隐私 — 不主动探询用户不愿分享的信息，对已知隐私严格保密`;
-
-const DEFAULT_RELATIONSHIP = `我为你工作，但不卑不亢。更像一个值得信赖的幕僚：
-- 被问到时给出真实看法，不说"你说得对但是…"这类废话
-- 认为重要时主动提建议，而不是等着被问
-- 对明显有问题的事情会礼貌反驳一次，但不反复纠缠
-- 最终尊重你的决定，执行时全力以赴
-- 关系随时间成长 — 合作越久越了解你的偏好，不需要反复解释`;
-
-const DEFAULT_COGNITIVE_STYLE = `- 默认行动：明显有帮助就直接做，不为小事请示
-- 大事请示：对外沟通、重大决策、不可逆操作先确认
-- 记下来：可能以后有用的信息先记录到记忆
-- 从纠正中学习：你指出的问题我会更新认知，不犯同样的错
-- 结构化思维：复杂问题先拆解再逐步解决，不一股脑堆砌
-- 承认边界：超出能力范围的事坦诚说明，给出替代方案`;
-
-const DEFAULT_OPERATING_GUIDELINES = `- 直接给出结果，不要叙述思考过程或执行步骤
-- 调用工具时保持沉默，只在工具全部完成后给出结论
-- 禁止把工具调用的中间状态、路径、API 返回值写进最终回复
-- 遇到障碍时主动换方法重试，穷尽所有途径
-- 截图/发文件类任务：工具执行完只需回复"已完成"或简短说明
-- 多步骤任务先做完再汇报，不要边做边播报进度`;
-
-const DEFAULT_HEARTBEAT_RULES = `- 检查未处理的消息和待办事项
-- 重要/紧急事项立即汇报
-- 不重要的信息积累到日报
-- 没有值得汇报的事就输出 <no-action> 保持沉默
-- 晚 22 点至早 8 点只报紧急事项
-- 汇报时简明扼要，不重复已知信息`;
-
-function emptyAssistant(): EditingAssistant {
+function emptyAssistant(defaults?: AssistantDefaults): EditingAssistant {
   return {
     id: "",
     name: "",
@@ -76,13 +37,13 @@ function emptyAssistant(): EditingAssistant {
     model: "",
     skillNames: [],
     skillTags: [],
-    persona: DEFAULT_PERSONA,
-    coreValues: DEFAULT_CORE_VALUES,
-    relationship: DEFAULT_RELATIONSHIP,
-    cognitiveStyle: DEFAULT_COGNITIVE_STYLE,
-    operatingGuidelines: DEFAULT_OPERATING_GUIDELINES,
+    persona: defaults?.persona ?? "",
+    coreValues: defaults?.coreValues ?? "",
+    relationship: defaults?.relationship ?? "",
+    cognitiveStyle: defaults?.cognitiveStyle ?? "",
+    operatingGuidelines: defaults?.operatingGuidelines ?? "",
     heartbeatInterval: 30,
-    heartbeatRules: DEFAULT_HEARTBEAT_RULES,
+    heartbeatRules: defaults?.heartbeatRules ?? "",
   };
 }
 
@@ -121,6 +82,8 @@ export function AssistantManagerModal({
   const [botTargetAssistant, setBotTargetAssistant] = useState<AssistantConfig | null>(null);
   const [generatingTags, setGeneratingTags] = useState(false);
   const [newTagInput, setNewTagInput] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [assistantDefaults, setAssistantDefaults] = useState<AssistantDefaults | undefined>(undefined);
 
   const [globalUserContext, setGlobalUserContext] = useState<string | undefined>(undefined);
 
@@ -133,6 +96,7 @@ export function AssistantManagerModal({
       setAssistants(config.assistants ?? []);
       setAvailableSkills(claudeConfig.skills ?? []);
       setGlobalUserContext(config.userContext);
+      if (config.defaults) setAssistantDefaults(config.defaults);
     } catch (err) {
       console.error("Failed to load assistants config:", err);
     }
@@ -144,6 +108,7 @@ export function AssistantManagerModal({
 
   const handleSave = async () => {
     if (!editing || !editing.name.trim()) return;
+    setSaveError(null);
 
     const existing = assistants.find((a) => a.id === editing.id);
     const updated: AssistantConfig = {
@@ -183,6 +148,7 @@ export function AssistantManagerModal({
       onAssistantsChanged?.();
     } catch (err) {
       console.error("Failed to save:", err);
+      setSaveError(err instanceof Error ? err.message : "保存失败，请重试");
     }
   };
 
@@ -263,12 +229,14 @@ export function AssistantManagerModal({
       heartbeatRules: assistant.heartbeatRules ?? "",
     });
     setIsNew(false);
+    setSaveError(null);
   };
 
   const startNew = () => {
-    setEditing(emptyAssistant());
+    setEditing(emptyAssistant(assistantDefaults));
     setIsNew(true);
     setSkillSearch("");
+    setSaveError(null);
   };
 
   const startEditWithReset = (assistant: AssistantConfig) => {
@@ -729,20 +697,25 @@ export function AssistantManagerModal({
               </div>
 
               {/* 操作按钮 */}
-              <div className="flex flex-shrink-0 items-center gap-3 border-t border-ink-900/6 pt-4 mt-4">
-                <button
-                  onClick={handleSave}
-                  disabled={!editing.name.trim()}
-                  className="flex-1 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isNew ? "创建助理" : "保存修改"}
-                </button>
-                <button
-                  onClick={() => setEditing(null)}
-                  className="rounded-xl border border-ink-900/10 bg-surface px-4 py-2 text-sm text-ink-700 hover:bg-surface-tertiary transition-colors"
-                >
-                  取消
-                </button>
+              <div className="flex flex-shrink-0 flex-col gap-2 border-t border-ink-900/6 pt-4 mt-4">
+                {saveError && (
+                  <p className="text-xs text-error px-1">{saveError}</p>
+                )}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleSave}
+                    disabled={!editing.name.trim()}
+                    className="flex-1 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isNew ? "创建助理" : "保存修改"}
+                  </button>
+                  <button
+                    onClick={() => { setEditing(null); setSaveError(null); }}
+                    className="rounded-xl border border-ink-900/10 bg-surface px-4 py-2 text-sm text-ink-700 hover:bg-surface-tertiary transition-colors"
+                  >
+                    取消
+                  </button>
+                </div>
               </div>
             </div>
           ) : (

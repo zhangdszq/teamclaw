@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 
 interface PlanTablePageProps {
   onClose: () => void;
-  onNavigateToSession?: (sessionId: string) => void;
+  onBack?: () => void;
+  onNavigateToSession?: (sessionId: string, assistantId: string) => void;
   titleBarHeight?: number;
 }
 
@@ -65,7 +66,7 @@ type SopGroup = {
   completedCount: number;
 };
 
-export function PlanTablePage({ onClose, onNavigateToSession, titleBarHeight = 0 }: PlanTablePageProps) {
+export function PlanTablePage({ onClose, onBack, onNavigateToSession, titleBarHeight = 0 }: PlanTablePageProps) {
   const [items, setItems] = useState<PlanItem[]>([]);
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
   const [filter, setFilter] = useState<FilterStatus>("all");
@@ -164,7 +165,7 @@ export function PlanTablePage({ onClose, onNavigateToSession, titleBarHeight = 0
 
   const handleRowClick = (item: PlanItem) => {
     if (item.sessionId && onNavigateToSession) {
-      onNavigateToSession(item.sessionId);
+      onNavigateToSession(item.sessionId, item.assistantId);
     }
   };
 
@@ -174,10 +175,20 @@ export function PlanTablePage({ onClose, onNavigateToSession, titleBarHeight = 0
       style={{ top: `${titleBarHeight}px` }}
     >
       {/* Header */}
-      <header className="flex items-center justify-between px-6 h-12 border-b border-ink-900/10 bg-surface-cream shrink-0 select-none">
-        <div className="flex items-center gap-4">
+      <header
+        className="flex items-center justify-between h-12 border-b border-ink-900/10 bg-surface-cream shrink-0 select-none"
+        style={{
+          paddingLeft: titleBarHeight === 0 ? '80px' : '24px',
+          paddingRight: '24px',
+          ...(titleBarHeight === 0 && { WebkitAppRegion: 'drag' } as React.CSSProperties),
+        }}
+      >
+        <div
+          className="flex items-center gap-4"
+          style={titleBarHeight === 0 ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties : undefined}
+        >
           <button
-            onClick={onClose}
+            onClick={onBack ?? onClose}
             className="flex items-center gap-1.5 text-sm text-muted hover:text-ink-700 transition-colors"
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -197,7 +208,10 @@ export function PlanTablePage({ onClose, onNavigateToSession, titleBarHeight = 0
         </div>
 
         {/* Filter tabs */}
-        <div className="flex items-center gap-1 rounded-xl bg-surface p-1 border border-ink-900/8">
+        <div
+          className="flex items-center gap-1 rounded-xl bg-surface p-1 border border-ink-900/8"
+          style={titleBarHeight === 0 ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties : undefined}
+        >
           {FILTER_TABS.map((tab) => {
             const count = statusCounts[tab.key] ?? 0;
             const active = filter === tab.key;

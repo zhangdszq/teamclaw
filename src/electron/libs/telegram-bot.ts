@@ -20,8 +20,12 @@ import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod";
 import { EventEmitter } from "events";
 import { homedir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
@@ -224,6 +228,14 @@ function buildStructuredPersona(
   if (normalized.length > 0) {
     sections.push(`## 可用技能\n用户可通过 /<技能名> 调用以下技能：\n${normalized.map((s) => `/${s}`).join("\n")}`);
   }
+
+  sections.push(
+    "## 文件发送规则（强制）\n" +
+    "当你生成了任何文件（音频、图片、视频、PDF、Excel 等），必须调用 `send_file` 工具将文件发送给用户。\n" +
+    "- 不要说「已通过钉钉/其他渠道发送」\n" +
+    "- 不要只告诉用户文件路径\n" +
+    "- 直接调用 send_file(file_path='/tmp/xxx') 发送",
+  );
 
   for (const extra of extras) {
     if (extra?.trim()) sections.push(extra.trim());
@@ -676,7 +688,17 @@ class TelegramConnection {
       if (proxyDispatcher) {
         const dispatcher = proxyDispatcher;
         const undiciModule = await import("undici");
+        const { InputFile } = await import("grammy");
+
         this.bot.api.config.use(async (_prev, method, payload, signal) => {
+          // File upload methods contain InputFile instances which cannot be JSON-serialized.
+          // Fall back to grammY's native multipart handler for these methods.
+          const isFileUpload = payload != null && Object.values(payload as object).some((v) => v instanceof InputFile);
+          if (isFileUpload) {
+            if (method !== "getUpdates") console.log(`[Telegram] API call (native): ${method}`);
+            return _prev(method, payload, signal);
+          }
+
           const url = `https://api.telegram.org/bot${this.bot!.token}/${method}`;
           const body = payload !== undefined ? JSON.stringify(payload) : undefined;
           if (method !== "getUpdates") {
@@ -1398,8 +1420,8 @@ class TelegramConnection {
 
     const sendFileTool = tool(
       "send_file",
-      "通过 Telegram 将本地文件发送给当前对话的用户。支持图片、PDF、文档等。",
-      { file_path: z.string().describe("要发送的文件的完整本地路径") },
+      "通过 Telegram 将本地文件直接发送给当前对话的用户。支持所有文件类型：图片（jpg/png）、音频（mp3/m4a/wav/aac）、视频（mp4/mov）、文档（pdf/xlsx/docx）、压缩包等。生成任何文件后必须立即调用此工具发送，不要通过其他渠道发送。",
+      { file_path: z.string().describe("要发送的文件的完整本地路径，例如 /tmp/voice.m4a") },
       async (input) => {
         const result = await self.doSendFile(String(input.file_path ?? ""), ctx);
         return { content: [{ type: "text" as const, text: result }] };
@@ -1477,16 +1499,28 @@ class TelegramConnection {
     if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
 
     const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-    const isImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext);
     const fileName = path.basename(filePath);
+
+    const isImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext);
+    const isAudio = ["mp3", "m4a", "aac", "flac", "wav", "wma", "ogg"].includes(ext);
+    const isVoice = ext === "oga";
+    const isVideo = ["mp4", "mov", "avi", "mkv", "webm", "flv", "wmv"].includes(ext);
 
     try {
       const fileBuffer = fs.readFileSync(filePath);
-      const inputFile = new (await import("grammy")).InputFile(fileBuffer, fileName);
+      const { InputFile } = await import("grammy");
+      const inputFile = new InputFile(fileBuffer, fileName);
 
       if (isImage) {
         await ctx.replyWithPhoto(inputFile);
+      } else if (isVoice) {
+        await ctx.replyWithVoice(inputFile);
+      } else if (isAudio) {
+        await ctx.replyWithAudio(inputFile);
+      } else if (isVideo) {
+        await ctx.replyWithVideo(inputFile);
       } else {
+        // PDF, Excel, Word, zip, txt, etc.
         await ctx.replyWithDocument(inputFile);
       }
       return `文件已发送: ${fileName}`;

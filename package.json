@@ -2,7 +2,7 @@
   "name": "vk-cowork",
   "productName": "AI Team",
   "private": true,
-  "version": "0.0.30",
+  "version": "0.0.48",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -48,6 +48,7 @@
     "hono": "^4.11.7",
     "https-proxy-agent": "^7.0.6",
     "os-utils": "^0.0.14",
+    "pdf-parse": "^2.4.5",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-markdown": "^10.1.0",

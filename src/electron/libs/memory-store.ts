@@ -832,7 +832,12 @@ SOP 是所有助理共享的知识库。当你完成一个复杂任务时，用 
  *   - Full SOP content (names+descriptions are in .abstract)
  *   - Insight files
  */
-export function buildSmartMemoryContext(prompt: string, assistantId?: string, sessionCwd?: string): string {
+export function buildSmartMemoryContext(
+  prompt: string,
+  assistantId?: string,
+  sessionCwd?: string,
+  opts?: { skipDailyLog?: boolean },
+): string {
   ensureDirs();
 
   const scoped = assistantId ? new ScopedMemory(assistantId) : null;
@@ -901,15 +906,19 @@ export function buildSmartMemoryContext(prompt: string, assistantId?: string, se
     parts.push(sessionState);
     parts.push("");
   }
-  if (sharedToday) {
-    parts.push(`## 今日共享日志 (${todayDate})`);
-    parts.push(sharedToday);
-    parts.push("");
-  }
-  if (assistantToday) {
-    parts.push(`## 今日对话日志 (${todayDate})`);
-    parts.push(assistantToday);
-    parts.push("");
+  // Skip daily logs for file-analysis messages — the logs contain previous file analyses
+  // that pollute Claude's output with content from a different file.
+  if (!opts?.skipDailyLog) {
+    if (sharedToday) {
+      parts.push(`## 今日共享日志 (${todayDate})`);
+      parts.push(sharedToday);
+      parts.push("");
+    }
+    if (assistantToday) {
+      parts.push(`## 今日对话日志 (${todayDate})`);
+      parts.push(assistantToday);
+      parts.push("");
+    }
   }
 
   if (parts.length <= preamble.length + 1) {
@@ -944,10 +953,27 @@ export function getRecentConversationBlocks(assistantId: string, n = 4): string 
     const recent = blocks.slice(-n);
     if (!recent.length) return "";
 
+    // Truncate long assistant replies (e.g. full file analyses) to avoid polluting
+    // subsequent messages with details from a previous file.
+    const MAX_REPLY_CHARS = 300;
+    const FILE_PATH_LINE = /^文件路径:\s*\/\S+/m;
+    const truncated = recent.map((block) =>
+      block.replace(
+        /(\*\*[^*]+\*\*:\s)([\s\S]+)$/m,
+        (_, prefix, body) => {
+          // If this assistant reply mentions a file path or is very long, shorten it
+          if (FILE_PATH_LINE.test(body) || body.length > MAX_REPLY_CHARS) {
+            return `${prefix}${body.slice(0, MAX_REPLY_CHARS).trimEnd()}…（内容已截断）`;
+          }
+          return `${prefix}${body}`;
+        },
+      )
+    );
+
     return [
       "## 近期对话记录（来自今日日志）",
       "⚠️ 以下是之前的对话，仅供了解背景。如有提及文件内容，均属过去任务，请勿参考历史文件内容。",
-      recent.join("\n").trim(),
+      truncated.join("\n").trim(),
     ].join("\n");
   } catch {
     return "";

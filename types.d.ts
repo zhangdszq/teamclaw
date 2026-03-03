@@ -117,6 +117,9 @@ type SchedulerRunTaskPayload = {
     cwd?: string;
     skillPath?: string;
     assistantId?: string;
+    planItemId?: string;
+    sopName?: string;
+    planTaskName?: string;
 }
 
 type EnvironmentCheck = {
@@ -180,10 +183,20 @@ type AssistantConfig = {
     bots?: Partial<Record<BotPlatformType, BotPlatformConfig>>;
 }
 
+type AssistantDefaults = {
+    persona: string;
+    coreValues: string;
+    relationship: string;
+    cognitiveStyle: string;
+    operatingGuidelines: string;
+    heartbeatRules: string;
+}
+
 type AssistantsConfig = {
     assistants: AssistantConfig[];
     defaultAssistantId?: string;
     userContext?: string;
+    defaults?: AssistantDefaults;
 }
 
 type ClaudeConfigInfo = {
@@ -567,6 +580,7 @@ type EventPayloadMapping = {
     "get-plan-items": PlanItem[];
     "retry-plan-item": { ok: boolean; error?: string };
     "run-plan-item-now": { ok: boolean; error?: string };
+    "update-plan-item-session": { ok: boolean; error?: string };
     "get-quick-window-shortcut": string;
     "save-quick-window-shortcut": boolean;
     // Goals
@@ -663,6 +677,7 @@ interface Window {
         getPlanItems: () => Promise<PlanItem[]>;
         retryPlanItem: (id: string) => Promise<{ ok: boolean; error?: string }>;
         runPlanItemNow: (id: string) => Promise<{ ok: boolean; error?: string }>;
+        updatePlanItemSession: (planItemId: string, sessionId: string) => Promise<{ ok: boolean; error?: string }>;
         onPlanItemsChanged: (callback: () => void) => UnsubscribeFunction;
         readDir: (dirPath: string) => Promise<DirEntry[]>;
         generateSkillTags: (persona: string, skillNames: string[], assistantName: string) => Promise<string[]>;

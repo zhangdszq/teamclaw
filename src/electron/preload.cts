@@ -186,6 +186,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("retry-plan-item", id),
     runPlanItemNow: (id: string) =>
         ipcInvoke("run-plan-item-now", id),
+    updatePlanItemSession: (planItemId: string, sessionId: string) =>
+        ipcInvoke("update-plan-item-session", planItemId, sessionId),
     onPlanItemsChanged: (callback: () => void) => {
         const cb = () => callback();
         electron.ipcRenderer.on("plan-items-changed", cb);

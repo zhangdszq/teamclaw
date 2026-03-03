@@ -573,6 +573,64 @@ const webFetchTool = tool(
   },
 );
 
+const readDocumentTool = tool(
+  "read_document",
+  "读取本地文件内容并返回纯文本。支持 PDF、Word（.docx）、Excel（.xlsx/.xls）、纯文本、CSV 等格式。" +
+  "收到文件路径时必须优先调用此工具获取实际内容，不得凭猜测或训练数据捏造文件内容。",
+  {
+    file_path: z.string().describe("本地文件的绝对路径"),
+    max_chars: z.number().optional().describe("最多返回字符数，默认 20000"),
+  },
+  async (input) => {
+    const filePath = String(input.file_path ?? "").trim();
+    if (!filePath) return ok("file_path 不能为空");
+    const maxChars = Math.min(Number(input.max_chars ?? 20_000), 60_000);
+
+    const fs = await import("fs");
+    if (!fs.existsSync(filePath)) return ok(`文件不存在: ${filePath}`);
+
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+
+    try {
+      // PDF
+      if (ext === "pdf") {
+        const { createRequire } = await import("module");
+        const require = createRequire(import.meta.url);
+        const pdfParse = require("pdf-parse");
+        const buffer = fs.readFileSync(filePath);
+        const data = await pdfParse(buffer);
+        const text = (data.text as string).trim();
+        if (!text) return ok("PDF 内容为空或无法提取文本（可能是扫描件图片 PDF）");
+        return ok(text.slice(0, maxChars));
+      }
+
+      // Word (.docx)
+      if (ext === "docx") {
+        const { createRequire } = await import("module");
+        const require = createRequire(import.meta.url);
+        try {
+          const mammoth = require("mammoth");
+          const result = await mammoth.extractRawText({ path: filePath });
+          return ok((result.value as string).trim().slice(0, maxChars));
+        } catch {
+          return ok("需要安装 mammoth 包以读取 .docx 文件：npm install mammoth");
+        }
+      }
+
+      // Plain text / CSV / JSON / XML / Markdown etc.
+      const textExts = ["txt", "csv", "json", "xml", "md", "yaml", "yml", "log", "html", "htm"];
+      if (textExts.includes(ext) || ext === "") {
+        const content = fs.readFileSync(filePath, "utf8");
+        return ok(content.slice(0, maxChars));
+      }
+
+      return ok(`不支持的文件类型: .${ext}。支持: pdf, docx, txt, csv, json, xml, md 等文本格式。`);
+    } catch (err) {
+      return ok(`读取失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
 const takeScreenshotTool = tool(
   "take_screenshot",
   "截取当前桌面屏幕截图。返回截图的临时文件路径，之后可用 send_file 发送给用户。",
@@ -1569,9 +1627,10 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       createScheduledTaskTool,
       listScheduledTasksTool,
       deleteScheduledTaskTool,
-      // Web
+      // Web & Documents
       webSearchTool,
       webFetchTool,
+      readDocumentTool,
       // Screen & Desktop
       takeScreenshotTool,
       screenAnalyzeTool,

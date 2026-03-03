@@ -538,7 +538,11 @@ function parseUserPrompt(raw: string): { attachments: { path: string; name: stri
 }
 
 const UserMessageCard = ({ message, showIndicator = false, userName = "User" }: { message: { type: "user_prompt"; prompt: string }; showIndicator?: boolean; userName?: string }) => {
-  const { attachments, text } = parseUserPrompt(message.prompt);
+  // Strip hidden plan execution instructions injected by the system
+  const visiblePrompt = message.prompt
+    .replace(/\n---\n【计划项执行规范[\s\S]*$/m, "")
+    .trimEnd();
+  const { attachments, text } = parseUserPrompt(visiblePrompt);
   return (
     <div className="flex flex-col mt-4">
       <div className="text-[13px] font-semibold text-accent flex items-center gap-2">
@@ -580,6 +584,7 @@ export const MessageCard = memo(function MessageCard({
   onAskUserQuestionAnswer,
   assistantName,
   userName,
+  excludeToolUseIds,
 }: {
   message: StreamMessage;
   isLast?: boolean;
@@ -588,6 +593,7 @@ export const MessageCard = memo(function MessageCard({
   onAskUserQuestionAnswer?: (toolUseId: string, answers: Record<string, string>) => void;
   assistantName?: string;
   userName?: string;
+  excludeToolUseIds?: Set<string>;
 }) {
   const showIndicator = isLast && isRunning;
 
@@ -635,6 +641,8 @@ export const MessageCard = memo(function MessageCard({
             return <AssistantBlockCard key={idx} title={assistantName || "Assistant"} text={content.text} showIndicator={isLastContent && showIndicator} copyable />;
           }
           if (content.type === "tool_use") {
+            // Skip tool uses that are rendered outside the collapsed section
+            if (excludeToolUseIds?.has(content.id)) return null;
             if (content.name === "AskUserQuestion") {
               return (
                 <AskUserQuestionCard 
@@ -708,6 +716,23 @@ export function ProcessGroup({
     }
   }
 
+  // Extract unanswered AskUserQuestion tool uses to render outside the collapsed section
+  const activeAskQuestions: { content: MessageContent; toolUseId: string }[] = [];
+  for (const msg of messages) {
+    const m = msg as any;
+    if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+      for (const c of m.message.content) {
+        if (c.type === "tool_use" && c.name === "AskUserQuestion") {
+          const input = c.input as AskUserQuestionInput | null;
+          if (!input?.answers || Object.keys(input.answers).length === 0) {
+            activeAskQuestions.push({ content: c as MessageContent, toolUseId: c.id });
+          }
+        }
+      }
+    }
+  }
+  const activeAskIds = new Set(activeAskQuestions.map((q) => q.toolUseId));
+
   const unique = [...new Set(toolNames)];
   const count = toolNames.length;
   const summaryText =
@@ -763,11 +788,21 @@ export function ProcessGroup({
                 onAskUserQuestionAnswer={onAskUserQuestionAnswer}
                 assistantName={assistantName}
                 userName={userName}
+                excludeToolUseIds={activeAskIds}
               />
             );
           })}
         </div>
       )}
+
+      {/* Active AskUserQuestion cards always visible outside the collapsed section */}
+      {activeAskQuestions.map(({ content, toolUseId }) => (
+        <AskUserQuestionCard
+          key={toolUseId}
+          messageContent={content}
+          onAnswer={onAskUserQuestionAnswer ? (answers) => onAskUserQuestionAnswer(toolUseId, answers) : undefined}
+        />
+      ))}
     </div>
   );
 }

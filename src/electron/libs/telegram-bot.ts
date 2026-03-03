@@ -1029,7 +1029,7 @@ class TelegramConnection {
 
       // Ack reaction + typing indicator
       await this.setReaction(chatId, userMsgId, "👀");
-      await ctx.replyWithChatAction("typing").catch(() => {});
+      await ctx.replyWithChatAction("typing").catch((e) => console.warn("[Telegram] Failed to send typing action:", e));
 
       // Generate and deliver reply
       const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
@@ -1218,7 +1218,7 @@ class TelegramConnection {
     const replyText = result.text;
     history.push({ role: "assistant", content: replyText });
     this.persistReply(sessionId, replyText, userText);
-    updateBotSessionTitle(sessionId, history, "[Telegram]").catch(() => {});
+    updateBotSessionTitle(sessionId, history, "[Telegram]").catch((e) => console.warn("[Telegram] Failed to update session title:", e));
 
     // Finalize: deliver the response
     await this.finalizeResponse(ctx, chatId, replyText, result.draftMessageId);
@@ -1250,7 +1250,11 @@ class TelegramConnection {
 
     // Delete the streaming draft — we'll send properly chunked messages
     if (draftMessageId) {
-      await this.bot?.api.deleteMessage(chatIdNum, draftMessageId).catch(() => {});
+      try {
+        await this.bot?.api.deleteMessage(chatIdNum, draftMessageId);
+      } catch (e) {
+        console.warn("[Telegram] Failed to delete draft message:", e);
+      }
     }
 
     for (const chunk of chunks) {
@@ -1325,7 +1329,7 @@ class TelegramConnection {
     const claudeCodePath = getClaudeCodePath();
 
     const typingInterval = setInterval(() => {
-      ctx.replyWithChatAction("typing").catch(() => {});
+      ctx.replyWithChatAction("typing").catch((e) => console.warn("[Telegram] Failed to send typing action:", e));
     }, 4000);
 
     let finalText = "";
@@ -1392,9 +1396,15 @@ class TelegramConnection {
         if (!text) return { content: [{ type: "text" as const, text: "消息内容为空" }] };
         const chunks = chunkMessage(text);
         for (const chunk of chunks) {
-          await ctx.reply(markdownToTelegramHtml(chunk), { parse_mode: "HTML" }).catch(() => {
-            ctx.reply(chunk).catch(() => {});
-          });
+          try {
+            await ctx.reply(markdownToTelegramHtml(chunk), { parse_mode: "HTML" });
+          } catch {
+            try {
+              await ctx.reply(chunk);
+            } catch (e) {
+              console.warn("[Telegram] Failed to send message:", e);
+            }
+          }
         }
         return { content: [{ type: "text" as const, text: "消息已发送" }] };
       },
@@ -1439,7 +1449,7 @@ class TelegramConnection {
     const fullPrompt = `${system}\n\n${historyLines}\n\nPlease reply to the latest user message above.`;
 
     const typingInterval = setInterval(() => {
-      ctx.replyWithChatAction("typing").catch(() => {});
+      ctx.replyWithChatAction("typing").catch((e) => console.warn("[Telegram] Failed to send typing action:", e));
     }, 4000);
 
     let draftMessageId: number | null = null;

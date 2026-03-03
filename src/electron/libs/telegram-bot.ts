@@ -30,6 +30,7 @@ import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { patchAssistantBotOwnerIds } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
@@ -382,6 +383,14 @@ export function stopTelegramBot(assistantId: string): void {
 
 export function getTelegramBotStatus(assistantId: string): TelegramBotStatus {
   return pool.get(assistantId)?.status ?? "disconnected";
+}
+
+/** Returns the first assistantId that has a connected Telegram bot, or null. */
+export function getAnyConnectedTelegramAssistantId(): string | null {
+  for (const [id, conn] of pool.entries()) {
+    if (conn.status === "connected") return id;
+  }
+  return null;
 }
 
 export function updateTelegramBotConfig(
@@ -867,6 +876,17 @@ class TelegramConnection {
     try {
       // Access control
       if (!isAllowed(ctx, this.opts)) return;
+
+      // Auto-populate ownerUserIds on first private message
+      if (!isGroup && !(this.opts.ownerUserIds?.length)) {
+        const senderId = String(msg.from?.id ?? "");
+        if (senderId) {
+          const updated = patchAssistantBotOwnerIds(this.opts.assistantId, "telegram", senderId);
+          if (updated) {
+            this.opts.ownerUserIds = [senderId];
+          }
+        }
+      }
 
       // Mention gating for groups
       if (isGroup && this.opts.requireMention !== false) {

@@ -112,6 +112,34 @@ export function getFeishuBotStatus(assistantId: string): FeishuBotStatus {
   return pool.get(assistantId)?.status ?? "disconnected";
 }
 
+/** Returns the first assistantId that has a connected Feishu bot, or null. */
+export function getAnyConnectedFeishuAssistantId(): string | null {
+  for (const [id, conn] of pool.entries()) {
+    if (conn.status === "connected") return id;
+  }
+  return null;
+}
+
+// ─── Proactive messaging ───────────────────────────────────────────────────────
+
+/** Records the most recently active chatId for proactive messaging fallback. */
+const lastSeenChatIds = new Map<string, string>(); // assistantId → chatId
+
+function recordLastSeenChat(assistantId: string, chatId: string): void {
+  if (chatId) lastSeenChatIds.set(assistantId, chatId);
+}
+
+export async function sendProactiveFeishuMessage(
+  assistantId: string,
+  text: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const conn = pool.get(assistantId);
+  if (!conn) return { ok: false, error: `飞书 Bot (${assistantId}) 未连接` };
+  const chatId = lastSeenChatIds.get(assistantId);
+  if (!chatId) return { ok: false, error: "飞书无活跃会话（尚未收到任何消息）" };
+  return conn.sendProactive(chatId, text);
+}
+
 // ─── Conversation history & session management ─────────────────────────────────
 
 const histories = new Map<string, ConvMessage[]>();
@@ -329,6 +357,9 @@ class FeishuConnection {
     // Skip bot's own messages
     const senderType = String(sender.sender_type ?? "");
     if (senderType === "app") return;
+
+    // Record last-seen chatId for proactive messaging
+    recordLastSeenChat(this.opts.assistantId, chatId);
 
     // Deduplication
     const dedupKey = messageId ? `feishu:${this.opts.assistantId}:${messageId}` : null;
@@ -704,6 +735,24 @@ class FeishuConnection {
       }
     } catch (err) {
       console.error("[Feishu] Send reply error:", err);
+    }
+  }
+
+  async sendProactive(chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await this.feishuClient.im.message.create({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: chatId,
+          content: JSON.stringify({ text }),
+          msg_type: "text",
+        },
+      });
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Feishu] Proactive send error:", msg);
+      return { ok: false, error: msg };
     }
   }
 

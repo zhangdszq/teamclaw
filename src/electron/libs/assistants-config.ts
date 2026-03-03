@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { EventEmitter } from "events";
 import { loadUserSettings } from "./user-settings.js";
+
+// Emits "bot-owner-ids-changed" with { assistantId, platform } when auto-populated
+export const assistantConfigEvents = new EventEmitter();
 
 export type AssistantConfig = {
   id: string;
@@ -92,9 +96,10 @@ export const DEFAULT_OPERATING_GUIDELINES = `- 直接给出结果，不要叙述
 - 截图/发文件类任务：工具执行完只需回复"已完成"或简短说明
 - 多步骤任务先做完再汇报，不要边做边播报进度`;
 
-export const DEFAULT_HEARTBEAT_RULES = `- 检查未处理的消息和待办事项
-- 重要/紧急事项立即汇报
-- 不重要的信息积累到日报
+export const DEFAULT_HEARTBEAT_RULES = `- 结合今日记忆，识别未完成的待办/任务/承诺事项
+- 发现可推进或逾期的任务时，使用 send_notification 工具主动推送给用户
+- 重要/紧急事项立即汇报并推送
+- 不重要的信息积累到日报，不主动推送
 - 没有值得汇报的事就输出 <no-action> 保持沉默
 - 晚 22 点至早 8 点只报紧急事项
 - 汇报时简明扼要，不重复已知信息`;
@@ -203,4 +208,34 @@ export function saveAssistantsConfig(config: AssistantsConfig): AssistantsConfig
   ensureDirectory();
   writeFileSync(ASSISTANTS_FILE, JSON.stringify(normalized, null, 2), "utf8");
   return normalized;
+}
+
+/**
+ * Auto-populate ownerUserIds (Telegram) or ownerStaffIds (DingTalk) for an assistant
+ * when the user sends the first message. Only adds the ID if not already present.
+ * Returns true if the config was updated.
+ */
+export function patchAssistantBotOwnerIds(
+  assistantId: string,
+  platform: "telegram" | "dingtalk",
+  userId: string,
+): boolean {
+  const config = loadAssistantsConfig();
+  const assistant = config.assistants.find((a) => a.id === assistantId);
+  if (!assistant || !userId) return false;
+
+  const bots = (assistant.bots ?? {}) as Record<string, Record<string, unknown>>;
+  const botCfg = bots[platform] as Record<string, unknown> | undefined;
+  if (!botCfg) return false;
+
+  const field = platform === "telegram" ? "ownerUserIds" : "ownerStaffIds";
+  const existing = (botCfg[field] as string[] | undefined) ?? [];
+  if (existing.includes(userId)) return false;
+
+  botCfg[field] = [...existing, userId];
+  assistant.bots = bots;
+  saveAssistantsConfig(config);
+  console.log(`[BotOwner] Auto-set ${field} for assistant "${assistantId}": added ${userId}`);
+  assistantConfigEvents.emit("bot-owner-ids-changed", { assistantId, platform });
+  return true;
 }

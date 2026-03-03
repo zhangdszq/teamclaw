@@ -22,6 +22,7 @@ import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { patchAssistantBotOwnerIds } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
@@ -713,6 +714,14 @@ export function stopDingtalkBot(assistantId: string): void {
 
 export function getDingtalkBotStatus(assistantId: string): DingtalkBotStatus {
   return pool.get(assistantId)?.status ?? "disconnected";
+}
+
+/** Returns the first assistantId that has a connected DingTalk bot, or null. */
+export function getAnyConnectedDingtalkAssistantId(): string | null {
+  for (const [id, conn] of pool.entries()) {
+    if (conn.status === "connected") return id;
+  }
+  return null;
 }
 
 /** Update runtime config of a running bot without restarting the connection. */
@@ -1441,6 +1450,17 @@ class DingtalkConnection {
     if (!isAllowed(msg, this.opts)) {
       if (dedupKey) this.inflight.delete(dedupKey);
       return;
+    }
+
+    // Auto-populate ownerStaffIds on first private message
+    if (!isGroup && !(this.opts.ownerStaffIds?.length)) {
+      const staffId = msg.senderStaffId ?? msg.senderId;
+      if (staffId) {
+        const updated = patchAssistantBotOwnerIds(this.opts.assistantId, "dingtalk", staffId);
+        if (updated) {
+          this.opts.ownerStaffIds = [staffId];
+        }
+      }
     }
 
     // ── sessionWebhook expiry check ────────────────────────────────────────────

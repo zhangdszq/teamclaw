@@ -34,7 +34,11 @@ import {
   updatePlanItem,
   type PlanItem,
 } from "./plan-store.js";
-import { sendProactiveDingtalkMessage } from "./dingtalk-bot.js";
+import { sendProactiveDingtalkMessage, getDingtalkBotStatus, getAnyConnectedDingtalkAssistantId } from "./dingtalk-bot.js";
+import { sendProactiveTelegramMessage, getTelegramBotStatus, getAnyConnectedTelegramAssistantId } from "./telegram-bot.js";
+import { sendProactiveFeishuMessage, getFeishuBotStatus, getAnyConnectedFeishuAssistantId } from "./feishu-bot.js";
+import { appendNotified } from "./notification-log.js";
+import { loadAssistantsConfig } from "./assistants-config.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1608,6 +1612,103 @@ function createListPlanItemsTool(assistantId?: string) {
   );
 }
 
+// ── Proactive notification tool (Telegram > Feishu > DingTalk) ───────────────
+
+/**
+ * Per-channel cooldown: key = "telegram:assistantId" | "feishu:assistantId" | "dingtalk:assistantId"
+ * Cooldown window matches the assistant's heartbeatInterval to prevent flooding between heartbeat ticks.
+ */
+const notificationCooldowns = new Map<string, number>();
+const DEFAULT_COOLDOWN_MINUTES = 30;
+
+function getCooldownMs(assistantId?: string): number {
+  const { assistants } = loadAssistantsConfig();
+  const a = assistants.find((x) => x.id === assistantId);
+  const minutes = a?.heartbeatInterval ?? DEFAULT_COOLDOWN_MINUTES;
+  return minutes * 60_000;
+}
+
+function isChannelOnCooldown(platform: string, targetId: string, cooldownMs: number): boolean {
+  const key = `${platform}:${targetId}`;
+  const last = notificationCooldowns.get(key) ?? 0;
+  return Date.now() - last < cooldownMs;
+}
+
+function markChannelUsed(platform: string, targetId: string): void {
+  notificationCooldowns.set(`${platform}:${targetId}`, Date.now());
+}
+
+function createSendNotificationTool(assistantId?: string) {
+  return tool(
+    "send_notification",
+    "向用户发送主动通知。自动按优先级选择已连接的渠道：Telegram > 飞书 > 钉钉，只发一个渠道。冷却时长与助理心跳间隔一致，防止多个助理心跳造成消息轰炸。",
+    {
+      text: z.string().describe("通知内容（支持 Markdown）"),
+      title: z.string().optional().describe("通知标题（可选，部分渠道会用到）"),
+      urgent: z.boolean().optional().describe("紧急通知：设为 true 可跳过冷却限制，立即发送"),
+    },
+    async (input) => {
+      const text = input.title ? `**${input.title}**\n\n${input.text}` : input.text;
+      const skipCooldown = input.urgent === true;
+      const cooldownMs = getCooldownMs(assistantId);
+
+      // Helper: resolve effective assistantId — prefer exact match, fallback to any connected bot
+      const resolveId = (
+        exactId: string | undefined,
+        getExactStatus: (id: string) => string,
+        getAnyId: () => string | null,
+      ): string | null => {
+        if (exactId && getExactStatus(exactId) === "connected") return exactId;
+        return getAnyId();
+      };
+
+      const channels: Array<{ name: string; id: string | null; send: (id: string) => Promise<{ ok: boolean; error?: string }> }> = [
+        {
+          name: "telegram",
+          id: resolveId(assistantId, getTelegramBotStatus, getAnyConnectedTelegramAssistantId),
+          send: (id) => sendProactiveTelegramMessage(id, text),
+        },
+        {
+          name: "feishu",
+          id: resolveId(assistantId, getFeishuBotStatus, getAnyConnectedFeishuAssistantId),
+          send: (id) => sendProactiveFeishuMessage(id, text),
+        },
+        {
+          name: "dingtalk",
+          id: resolveId(assistantId, getDingtalkBotStatus, getAnyConnectedDingtalkAssistantId),
+          send: (id) => sendProactiveDingtalkMessage(id, text),
+        },
+      ];
+
+      const channelNames: Record<string, string> = { telegram: "Telegram", feishu: "飞书", dingtalk: "钉钉" };
+      let allOnCooldown = true;
+      let minRemainMs = cooldownMs;
+
+      for (const ch of channels) {
+        if (!ch.id) continue;
+        if (!skipCooldown && isChannelOnCooldown(ch.name, ch.id, cooldownMs)) {
+          const remainMs = cooldownMs - (Date.now() - (notificationCooldowns.get(`${ch.name}:${ch.id}`) ?? 0));
+          minRemainMs = Math.min(minRemainMs, remainMs);
+          continue; // fall through to next channel
+        }
+        allOnCooldown = false;
+        const result = await ch.send(ch.id);
+        if (result.ok) {
+          markChannelUsed(ch.name, ch.id);
+          appendNotified({ summary: text.slice(0, 120), ts: Date.now(), assistantId: assistantId ?? "" });
+          return ok(`通知已通过 ${channelNames[ch.name]} 发送。`);
+        }
+      }
+
+      if (allOnCooldown) {
+        return ok(`通知已跳过：所有渠道均在冷却中（还剩约 ${Math.ceil(minRemainMs / 60000)} 分钟）。`);
+      }
+
+      return ok("无可用推送渠道（Telegram / 飞书 / 钉钉 均未连接或未配置接收者）。");
+    },
+  );
+}
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 /**
@@ -1661,6 +1762,8 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       createCompletePlanItemTool(assistantId),
       createFailPlanItemTool(assistantId),
       createListPlanItemsTool(assistantId),
+      // Proactive notification (Telegram > Feishu > DingTalk priority)
+      createSendNotificationTool(assistantId),
     ],
   });
 }

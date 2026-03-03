@@ -1,7 +1,49 @@
 {
   "version": "1.0",
   "updatedAt": "2026-03-03",
+  "categories": [
+    { "id": "teaching",           "label": "教研专用",       "icon": "graduation","color": "text-emerald-600 bg-emerald-500/10","order": 1  },
+    { "id": "picturebook",        "label": "绘本馆专用",     "icon": "book-open", "color": "text-rose-500 bg-rose-500/10",      "order": 2  },
+    { "id": "product-management", "label": "产品经理专用", "icon": "target",     "color": "text-violet-600 bg-violet-500/10",  "order": 3  },
+    { "id": "operations",         "label": "运营专用",     "icon": "trending",   "color": "text-orange-600 bg-orange-500/10",  "order": 4  },
+    { "id": "video",              "label": "视频处理",       "icon": "video",     "color": "text-red-500 bg-red-500/10",        "order": 4  },
+    { "id": "image",              "label": "图像生成",       "icon": "image",     "color": "text-orange-500 bg-orange-500/10",  "order": 5  },
+    { "id": "writing",            "label": "写作内容",       "icon": "pen",       "color": "text-purple-500 bg-purple-500/10",  "order": 6  },
+    { "id": "social",             "label": "社交媒体",       "icon": "share",     "color": "text-indigo-500 bg-indigo-500/10",  "order": 7  },
+    { "id": "document",           "label": "文档工具",       "icon": "file",      "color": "text-teal-500 bg-teal-500/10",      "order": 8  },
+    { "id": "infographic",        "label": "信息图表",       "icon": "layout",    "color": "text-amber-500 bg-amber-500/10",    "order": 9  },
+    { "id": "development",        "label": "开发工具",       "icon": "code",      "color": "text-blue-500 bg-blue-500/10",      "order": 10 },
+    { "id": "productivity",       "label": "效率工具",       "icon": "zap",       "color": "text-yellow-500 bg-yellow-500/10",  "order": 11 },
+    { "id": "analysis",           "label": "数据分析",       "icon": "chart",     "color": "text-green-500 bg-green-500/10",    "order": 12 },
+    { "id": "design",             "label": "设计创意",       "icon": "palette",   "color": "text-pink-500 bg-pink-500/10",      "order": 13 },
+    { "id": "research",           "label": "研究调查",       "icon": "search",    "color": "text-cyan-500 bg-cyan-500/10",      "order": 14 },
+    { "id": "other",              "label": "其他",           "icon": "box",       "color": "text-gray-500 bg-gray-500/10",      "order": 99 }
+  ],
   "skills": [
+    {
+      "name": "agent-reach",
+      "label": "Agent 平台接入配置",
+      "description": "一键安装并配置 12+ 平台的上游工具，包括 Twitter/X、Reddit、YouTube、GitHub、Bilibili、小红书、抖音、LinkedIn、Boss直聘、RSS 及任意网页。配置完成后可直接在对话中调用，无需中间层封装。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["agent", "platform", "integration", "twitter", "youtube", "reach"]
+    },
+    {
+      "name": "curriculum-outline-editor",
+      "label": "儿童英语课程大纲审校",
+      "description": "专为 4-6 岁中国儿童英语课程设计的大纲审校工具。基于 CEFR（Pre-A1/A1）、CCSS 和《3-6 岁儿童学习与发展指南》，修正不自然表达、强化词汇复现原则，输出修改后的 Excel 文件及中文改动说明。",
+      "category": "teaching",
+      "installPath": "",
+      "tags": ["teaching", "curriculum", "english", "children", "kindergarten"]
+    },
+    {
+      "name": "minimax",
+      "label": "MiniMax API 工具集",
+      "description": "通过 curl 直接调用 MiniMax API，支持 AI 对话补全、文字转语音和 AI 视频生成三大功能。凭据从 ~/.vk-cowork/.env 读取，无需额外配置，适合在终端快速测试和批量调用 MiniMax 能力。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["minimax", "tts", "video", "llm", "api", "curl"]
+    },
     {
       "name": "teaching-outline-writer",
       "label": "教学大纲编写",
@@ -45,7 +87,7 @@
     {
       "name": "baoyu-image-gen",
       "label": "AI 图像生成",
-      "description": "AI image generation with OpenAI, Google and DashScope APIs. Supports text-to-image, reference images, aspect ratios. Sequential by default; parallel generation available on request.",
+      "description": "基于 OpenAI、Google 和 DashScope API 的 AI 图像生成工具，支持文生图、参考图输入和自定义宽高比，默认按序生成，可按需切换为并行批量生成。",
       "category": "image",
       "installPath": "",
       "tags": ["image", "ai", "generation", "openai", "google"]
@@ -481,6 +523,374 @@
       "category": "productivity",
       "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/vipkid-ops",
       "tags": ["vipkid", "ops", "product", "ecommerce", "internal"]
+    },
+    {
+      "name": "pm-user-story",
+      "label": "用户故事编写",
+      "description": "用 Mike Cohn + Gherkin 格式编写规范的用户故事和验收标准。输出「作为…我希望…以便…」格式的故事，并附带 Given/When/Then 验收条件，确保需求描述清晰可测试。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story/SKILL.md",
+      "tags": ["pm", "user-story", "agile", "requirements", "acceptance-criteria"]
+    },
+    {
+      "name": "pm-user-story-mapping",
+      "label": "用户故事地图",
+      "description": "使用 Jeff Patton 框架按用户工作流组织故事，形成可发布的功能切片。将零散的用户故事整合成二维地图，横轴为用户活动主干，纵轴为优先级，清晰呈现 MVP 边界。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story-mapping/SKILL.md",
+      "tags": ["pm", "story-map", "agile", "planning", "jeff-patton"]
+    },
+    {
+      "name": "pm-user-story-splitting",
+      "label": "用户故事拆分",
+      "description": "使用 8 种已验证模式将大型用户故事拆分为可独立交付的小故事。避免「金刚石」式的巨型故事，用数据、工作流、操作、触发器等维度合理切割，确保每个故事都在一个迭代内可完成。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story-splitting/SKILL.md",
+      "tags": ["pm", "user-story", "splitting", "agile", "richard-lawrence"]
+    },
+    {
+      "name": "pm-problem-statement",
+      "label": "问题陈述框架",
+      "description": "在跳入解决方案之前，用证据驱动的方式框架化客户问题。明确「谁遇到了什么问题、在什么情境下发生、造成了什么影响」，防止团队在错误的问题上浪费精力。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/problem-statement/SKILL.md",
+      "tags": ["pm", "problem", "framing", "discovery", "customer"]
+    },
+    {
+      "name": "pm-positioning-statement",
+      "label": "产品定位陈述",
+      "description": "使用 Geoffrey Moore 框架明确目标用户、解决的问题和差异化优势。生成标准格式的定位陈述：「对于…（目标用户），…（产品名）是一款…（品类），它能…（核心价值），不同于…（竞品），我们…（关键差异）。」",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/positioning-statement/SKILL.md",
+      "tags": ["pm", "positioning", "marketing", "geoffrey-moore", "strategy"]
+    },
+    {
+      "name": "pm-press-release",
+      "label": "未来新闻稿",
+      "description": "用亚马逊逆向工作法撰写未来新闻稿，从用户视角清晰定义产品愿景。先写新闻稿再做产品，强迫团队站在发布日回望，确保功能真正值得做、真正解决用户问题。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/press-release/SKILL.md",
+      "tags": ["pm", "press-release", "amazon", "working-backwards", "vision"]
+    },
+    {
+      "name": "pm-proto-persona",
+      "label": "原型用户画像",
+      "description": "在完整用户研究前创建假设驱动的原型画像，快速对齐团队认知。轻量、低成本，适合产品早期探索阶段，后续可随研究数据迭代完善，避免团队各持一套「臆想的用户」。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/proto-persona/SKILL.md",
+      "tags": ["pm", "persona", "user-research", "hypothesis", "discovery"]
+    },
+    {
+      "name": "pm-customer-journey-map",
+      "label": "客户旅程地图",
+      "description": "使用 NNGroup 框架绘制客户在所有触点的完整体验地图。呈现用户的行为、思考、情绪和痛点，识别体验断层和改进机会，是产品优化和新功能立项的有力工具。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/customer-journey-map/SKILL.md",
+      "tags": ["pm", "customer-journey", "ux", "touchpoints", "nngroup"]
+    },
+    {
+      "name": "pm-jobs-to-be-done",
+      "label": "用户核心任务分析",
+      "description": "使用 JTBD（Jobs To Be Done）框架理解用户真正想要完成的目标，而非表面需求。发现用户「雇佣」产品的深层动机，指导产品创新方向，避免功能堆砌。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/jobs-to-be-done/SKILL.md",
+      "tags": ["pm", "jtbd", "jobs-to-be-done", "innovation", "customer-insight"]
+    },
+    {
+      "name": "pm-epic-hypothesis",
+      "label": "史诗级需求假设",
+      "description": "将模糊的产品想法转化为可测试的假设，附带明确的成功指标和验证条件。格式：「我们相信…（干预措施）将带来…（结果），当我们看到…（指标变化）时即可验证。」",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/epic-hypothesis/SKILL.md",
+      "tags": ["pm", "hypothesis", "epic", "validation", "metrics"]
+    },
+    {
+      "name": "pm-storyboard",
+      "label": "用户旅程故事板",
+      "description": "用 6 帧叙事故事板可视化用户操作流程，帮助团队对齐产品体验认知。比文字需求更直观，适合在立项、评审和用户测试前与团队、利益相关方快速沟通产品意图。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/storyboard/SKILL.md",
+      "tags": ["pm", "storyboard", "ux", "visualization", "storytelling"]
+    },
+    {
+      "name": "pm-pol-probe",
+      "label": "轻量验证实验设计",
+      "description": "在正式开发前定义轻量级、可废弃的验证实验（Proof of Learning）。以最小成本测试关键假设，包含实验目的、假设条件、验证方法、成功标准和学习记录，避免为不确定的想法投入大量工程资源。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/pol-probe/SKILL.md",
+      "tags": ["pm", "validation", "experiment", "hypothesis", "lean"]
+    },
+    {
+      "name": "pm-recommendation-canvas",
+      "label": "AI 推荐引擎设计画布",
+      "description": "规范化 AI 驱动产品推荐功能的设计文档，包含推荐目标、用户信号、算法逻辑、评估指标和伦理考量，适合电商、内容、教育等场景的个性化推荐功能立项。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/recommendation-canvas/SKILL.md",
+      "tags": ["pm", "recommendation", "ai", "personalization", "product-design"]
+    },
+    {
+      "name": "pm-eol-message",
+      "label": "产品下线通知撰写",
+      "description": "优雅地传达产品/功能废弃信息，降低用户反感，提供清晰的迁移路径和时间线。包含「为什么」「影响范围」「替代方案」「下线日程」四个关键要素，减少用户流失和负面舆情。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/eol-message/SKILL.md",
+      "tags": ["pm", "eol", "deprecation", "communication", "product-lifecycle"]
+    },
+    {
+      "name": "pm-pestel-analysis",
+      "label": "PESTEL 环境分析",
+      "description": "从六个维度系统分析影响产品的外部环境因素：政治（Policy）、经济（Economy）、社会（Society）、技术（Technology）、环境（Environment）、法律（Legal）。适合新市场进入、战略规划和风险评估。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/pestel-analysis/SKILL.md",
+      "tags": ["pm", "pestel", "strategy", "market-analysis", "risk"]
+    },
+    {
+      "name": "pm-company-research",
+      "label": "竞品公司深度调研",
+      "description": "深度分析竞争对手或目标公司，覆盖商业模式、产品策略、市场定位、团队结构和财务健康度。生成结构化竞品报告，为产品差异化决策提供情报支撑。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/company-research/SKILL.md",
+      "tags": ["pm", "competitive-analysis", "research", "company", "strategy"]
+    },
+    {
+      "name": "pm-finance-metrics-quickref",
+      "label": "SaaS 财务指标速查",
+      "description": "32+ 个 SaaS 财务指标快速参考手册，包含公式、行业基准和使用场景。涵盖 ARR/MRR、CAC、LTV、NRR、Churn、Rule of 40、Magic Number 等 PM 必懂的财务指标，帮助 PM 在数据驱动决策中更有底气。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/finance-metrics-quickref/SKILL.md",
+      "tags": ["pm", "saas", "metrics", "finance", "kpi"]
+    },
+    {
+      "name": "pm-saas-revenue-growth-metrics",
+      "label": "SaaS 营收增长指标",
+      "description": "计算和解读营收、留存和增长指标，包括 MRR/ARR、ARPU、用户流失率、NRR 和扩张收入。帮助 PM 读懂增长仪表盘，发现增长杠杆和留存风险，支撑定价与产品策略决策。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/saas-revenue-growth-metrics/SKILL.md",
+      "tags": ["pm", "saas", "revenue", "growth", "retention", "metrics"]
+    },
+    {
+      "name": "pm-saas-economics-efficiency-metrics",
+      "label": "SaaS 效率经济指标",
+      "description": "评估单位经济效益和资本效率，涵盖 CAC、LTV、回本周期、毛利率、燃烧率和 Rule of 40。量化「烧钱是否烧得值」，为融资决策、定价调整和渠道优化提供财务依据。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/saas-economics-efficiency-metrics/SKILL.md",
+      "tags": ["pm", "saas", "unit-economics", "cac", "ltv", "efficiency"]
+    },
+    {
+      "name": "pm-altitude-horizon-framework",
+      "label": "高度视野框架（PM→总监）",
+      "description": "理解 PM 晋升总监的核心思维转变：工作范围（高度）与时间视野（视野）的双轴模型、四个过渡区域、常见失败模式和级联上下文地图。基于《产品玄关》播客第 42 期总结，适合准备晋升的高级 PM。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/altitude-horizon-framework/SKILL.md",
+      "tags": ["pm", "leadership", "career", "director", "promotion"]
+    },
+    {
+      "name": "pm-prioritization-advisor",
+      "label": "优先级框架顾问",
+      "description": "根据你的产品阶段、团队规模和数据成熟度，推荐最合适的优先级框架（RICE、ICE、Kano、MoSCoW 等）。通过 3-5 个问题了解你的情境，给出带理由的框架推荐和实施建议，告别「拍脑袋排优先级」。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/prioritization-advisor/SKILL.md",
+      "tags": ["pm", "prioritization", "rice", "ice", "kano", "roadmap"]
+    },
+    {
+      "name": "pm-opportunity-solution-tree",
+      "label": "机会方案树",
+      "description": "基于 Teresa Torres 的连续发现方法，生成机会和解决方案树，推荐最优概念验证方向。从目标出发，逐层展开机会空间和解决方案，帮助团队在正确的问题上投入研发资源。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/opportunity-solution-tree/SKILL.md",
+      "tags": ["pm", "ost", "opportunity", "discovery", "teresa-torres"]
+    },
+    {
+      "name": "pm-lean-ux-canvas",
+      "label": "精益 UX 画布",
+      "description": "基于 Jeff Gothelf 的 Lean UX Canvas v2，建立假设驱动的产品规划体系。梳理业务问题、用户、产品假设、成功指标和实验设计，让团队在开始开发前先对齐「我们在测试什么」。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/lean-ux-canvas/SKILL.md",
+      "tags": ["pm", "lean-ux", "hypothesis", "canvas", "jeff-gothelf"]
+    },
+    {
+      "name": "pm-discovery-interview-prep",
+      "label": "客户访谈准备",
+      "description": "基于 Mom Test 原则规划客户访谈问题，避免引导性提问和「妈妈式赞美」陷阱。根据你的研究目标生成访谈指南，包含开场白、核心问题序列、追问策略和结束语，让每次访谈都产出真实洞察。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/discovery-interview-prep/SKILL.md",
+      "tags": ["pm", "user-research", "interview", "mom-test", "discovery"]
+    },
+    {
+      "name": "pm-epic-breakdown-advisor",
+      "label": "史诗需求拆解顾问",
+      "description": "使用 Richard Lawrence 的 9 种拆分模式将史诗级需求分解为可实施的用户故事。交互式引导：描述你的 Epic → AI 分析并推荐最优拆分策略 → 生成带验收标准的故事清单，解决「Epic 太大不知如何下手」的常见困境。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/epic-breakdown-advisor/SKILL.md",
+      "tags": ["pm", "epic", "splitting", "agile", "richard-lawrence"]
+    },
+    {
+      "name": "pm-feature-investment-advisor",
+      "label": "功能投资决策顾问",
+      "description": "从营收影响、成本结构、ROI 和战略价值多维度评估功能投资，给出「构建/不构建/推迟」决策建议。量化每个功能的预期回报，帮助 PM 向高管清晰呈现投资理由，避免「感觉这个功能很重要」式的决策。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/feature-investment-advisor/SKILL.md",
+      "tags": ["pm", "feature", "roi", "investment", "decision"]
+    },
+    {
+      "name": "pm-finance-based-pricing-advisor",
+      "label": "财务驱动定价顾问",
+      "description": "用财务影响分析评估定价变更方案，量化 ARPU 变化、转化率影响、流失风险、NRR 和回本周期。在涨价或调整定价模型前，先用数据模拟方案收益，避免定价决策「凭直觉拍板」。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/finance-based-pricing-advisor/SKILL.md",
+      "tags": ["pm", "pricing", "finance", "arpu", "saas"]
+    },
+    {
+      "name": "pm-acquisition-channel-advisor",
+      "label": "获客渠道评估顾问",
+      "description": "使用单位经济、用户质量和可扩展性三维度评估每个获客渠道，给出「扩张/继续测试/关闭」的行动建议。比较不同渠道的 CAC、LTV 和转化效率，帮助增长团队将资源集中在真正有效的渠道上。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/acquisition-channel-advisor/SKILL.md",
+      "tags": ["pm", "growth", "acquisition", "channel", "unit-economics"]
+    },
+    {
+      "name": "pm-business-health-diagnostic",
+      "label": "SaaS 业务健康度诊断",
+      "description": "用关键指标综合诊断 SaaS 业务健康状况，识别红旗风险信号，优先处理增长、留存、效率和资本健康问题。生成业务健康报告并给出优先行动清单，适合季度复盘和融资前准备。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/business-health-diagnostic/SKILL.md",
+      "tags": ["pm", "saas", "business-health", "diagnostic", "metrics"]
+    },
+    {
+      "name": "pm-tam-sam-som-calculator",
+      "label": "市场规模测算",
+      "description": "用真实数据和可信来源测算 TAM/SAM/SOM 市场规模，支持自上而下和自下而上两种方法。生成带数据引用的市场规模分析报告，为融资 Pitch、新市场进入决策和产品战略提供扎实的市场数据支撑。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/tam-sam-som-calculator/SKILL.md",
+      "tags": ["pm", "market-sizing", "tam", "sam", "som", "strategy"]
+    },
+    {
+      "name": "pm-problem-framing-canvas",
+      "label": "MITRE 问题框架画布",
+      "description": "使用 MITRE 问题框架法从三个角度重新审视问题：向内看（当前解法的假设）、向外看（更广泛的系统影响）、重构（转换问题视角）。打破「在错误的问题上寻找正确答案」的思维定势。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/problem-framing-canvas/SKILL.md",
+      "tags": ["pm", "problem-framing", "mitre", "systems-thinking", "strategy"]
+    },
+    {
+      "name": "pm-context-engineering-advisor",
+      "label": "上下文工程顾问",
+      "description": "诊断并改善你与 AI 协作的方式：区分「上下文堆砌」（大量输入无意图）和「上下文工程」（有结构地引导注意力）。指导记忆架构、检索策略设计，以及研究→规划→重置→实施的工作循环。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/context-engineering-advisor/SKILL.md",
+      "tags": ["pm", "ai", "context-engineering", "llm", "workflow"]
+    },
+    {
+      "name": "pm-ai-shaped-readiness-advisor",
+      "label": "AI 重塑就绪度评估",
+      "description": "评估你是否已从「用 AI 做事」进化为「用 AI 重塑工作方式」。评估五项核心能力：上下文设计、智能体编排、成果加速、团队-AI 协作、战略差异化，并推荐优先提升方向。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/ai-shaped-readiness-advisor/SKILL.md",
+      "tags": ["pm", "ai", "readiness", "digital-transformation", "leadership"]
+    },
+    {
+      "name": "pm-pol-probe-advisor",
+      "label": "验证原型类型顾问",
+      "description": "根据你的假设类型和风险等级，推荐 5 种原型中的最优选择：可行性原型、任务聚焦原型、叙事原型、合成数据原型或氛围编码原型。在正式开发前以最低成本验证最关键的假设。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/pol-probe-advisor/SKILL.md",
+      "tags": ["pm", "prototype", "validation", "experiment", "lean"]
+    },
+    {
+      "name": "pm-positioning-workshop",
+      "label": "产品定位工作坊引导",
+      "description": "通过自适应问题序列引导团队完成产品定位，从竞争环境分析到价值主张提炼，最终形成清晰的定位陈述。适合新产品立项、品牌重塑和进入新市场前的定位对齐工作坊。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/positioning-workshop/SKILL.md",
+      "tags": ["pm", "positioning", "workshop", "brand", "strategy"]
+    },
+    {
+      "name": "pm-customer-journey-mapping-workshop",
+      "label": "旅程地图工作坊引导",
+      "description": "引导团队系统化地绘制客户旅程地图，识别每个触点的痛点，形成优先改善机会清单。交互式多轮引导，适合跨职能产品团队开展用户体验对齐工作坊。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/customer-journey-mapping-workshop/SKILL.md",
+      "tags": ["pm", "workshop", "customer-journey", "ux", "facilitation"]
+    },
+    {
+      "name": "pm-user-story-mapping-workshop",
+      "label": "故事地图工作坊引导",
+      "description": "引导团队创建完整的用户故事地图，包含主干活动（Backbone）和发布切片（Slices）。帮助团队从用户旅程视角规划产品路线图，清晰定义每个迭代的交付边界。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story-mapping-workshop/SKILL.md",
+      "tags": ["pm", "workshop", "story-mapping", "agile", "facilitation"]
+    },
+    {
+      "name": "pm-director-readiness-advisor",
+      "label": "总监晋升就绪度教练",
+      "description": "针对四种情境为 PM 和新任总监提供过渡期专业指导：备战晋升期、面试准备期、新上任磨合期、上任后重新校准期。基于《产品玄关》播客第 42 期，聚焦工作范围提升和影响力扩展的实战建议。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/director-readiness-advisor/SKILL.md",
+      "tags": ["pm", "career", "director", "leadership", "coaching"]
+    },
+    {
+      "name": "pm-vp-cpo-readiness-advisor",
+      "label": "VP/CPO 晋升就绪度教练",
+      "description": "为资深总监和高管提供晋升 VP/CPO 的过渡期指导，包含评估新角色前的 CEO 访谈框架，帮助避免「接了一个错误的 VP 职位」的职业风险。基于《产品玄关》播客第 43 期。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/vp-cpo-readiness-advisor/SKILL.md",
+      "tags": ["pm", "career", "vp", "cpo", "executive", "coaching"]
+    },
+    {
+      "name": "pm-workshop-facilitation",
+      "label": "工作坊引导协议",
+      "description": "为各类产品工作坊提供标准化的逐步引导协议，包含带编号的推荐选项、进度标签、中断处理和上下文转储快捷方式。确保工作坊节奏清晰、参与者不迷失，是所有交互式 PM 技能的引导底层协议。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/workshop-facilitation/SKILL.md",
+      "tags": ["pm", "facilitation", "workshop", "process", "collaboration"]
+    },
+    {
+      "name": "pm-discovery-process",
+      "label": "产品发现完整流程",
+      "description": "端到端的产品发现流程，历时 3-4 周：①问题框架化 → ②用户研究与访谈 → ③综合洞察 → ④验证解决方案。帮助团队在开发前确认「值得做」，减少构建错误功能的浪费。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/discovery-process/SKILL.md",
+      "tags": ["pm", "discovery", "workflow", "user-research", "validation"]
+    },
+    {
+      "name": "pm-prd-development",
+      "label": "产品需求文档（PRD）",
+      "description": "结构化 PRD 开发工作流，历时 2-4 天：问题陈述 → 用户画像 → 解决方案设计 → 成功指标 → 用户故事清单。生成高质量 PRD，让工程、设计和业务团队在开发前完全对齐。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/prd-development/SKILL.md",
+      "tags": ["pm", "prd", "requirements", "workflow", "documentation"]
+    },
+    {
+      "name": "pm-product-strategy-session",
+      "label": "产品战略制定工作坊",
+      "description": "完整的产品战略制定流程，历时 2-4 周：定位陈述 → 问题框架 → 解决方案探索 → 产品路线图。引导团队从市场分析到战略共识，形成可执行的产品战略文档。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/product-strategy-session/SKILL.md",
+      "tags": ["pm", "strategy", "workflow", "roadmap", "positioning"]
+    },
+    {
+      "name": "pm-roadmap-planning",
+      "label": "产品路线图规划",
+      "description": "战略路线图制定完整流程，历时 1-2 周：收集输入 → 定义史诗需求 → 排优先级 → 制定执行顺序 → 向利益相关方沟通。生成清晰的季度/年度路线图，平衡短期交付与长期战略。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/roadmap-planning/SKILL.md",
+      "tags": ["pm", "roadmap", "planning", "workflow", "strategy"]
+    },
+    {
+      "name": "pm-executive-onboarding-playbook",
+      "label": "高管入职诊断手册",
+      "description": "VP/CPO 过渡期 30-60-90 天行动手册：先诊断后行动、挖掘隐性战略意图、评估人才梯队、以证据驱动决策。帮助新上任产品高管避开「入职即大改」的陷阱，基于《产品玄关》播客第 43 期。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/executive-onboarding-playbook/SKILL.md",
+      "tags": ["pm", "executive", "onboarding", "leadership", "cpo"]
+    },
+    {
+      "name": "pm-skill-authoring-workflow",
+      "label": "PM 技能创作工作流",
+      "description": "为 AI 智能体创建产品管理技能文件的元工作流：选择添加/构建路径 → 验证合规性 → 更新文档索引 → 打包发布。适合希望将团队 PM 方法论沉淀为可复用 AI 技能的产品团队。",
+      "category": "product-management",
+      "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/skill-authoring-workflow/SKILL.md",
+      "tags": ["pm", "skill-creation", "meta", "workflow", "ai-agent"]
     }
   ]
 }

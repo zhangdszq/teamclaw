@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, type CSSProperties } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import {
   ReactFlow,
   Background,
@@ -31,9 +31,11 @@ interface SopItem {
   assistant: string;
   workflowCount: number;
   icon: string;
+  stages?: HandStage[];
 }
 
-const SOP_LIST: SopItem[] = [
+// Fallback list shown before HAND.toml files are loaded
+const FALLBACK_SOP_LIST: SopItem[] = [
   {
     id: "vvip-educare",
     name: "VVIP EduCare",
@@ -42,42 +44,6 @@ const SOP_LIST: SopItem[] = [
     assistant: "教务助理",
     workflowCount: 2,
     icon: "🎓",
-  },
-  {
-    id: "client-followup",
-    name: "客户跟进",
-    description: "潜客跟进 & 转化提醒",
-    status: "active",
-    assistant: "销售助理",
-    workflowCount: 3,
-    icon: "📞",
-  },
-  {
-    id: "content-publish",
-    name: "内容发布",
-    description: "小红书 / 抖音定期推文",
-    status: "draft",
-    assistant: "运营助理",
-    workflowCount: 1,
-    icon: "✍️",
-  },
-  {
-    id: "hr-onboarding",
-    name: "员工入职",
-    description: "新员工入职流程自动化",
-    status: "paused",
-    assistant: "HR 助理",
-    workflowCount: 4,
-    icon: "👤",
-  },
-  {
-    id: "finance-report",
-    name: "财务报表",
-    description: "月末自动汇总与发送",
-    status: "draft",
-    assistant: "财务助理",
-    workflowCount: 2,
-    icon: "📊",
   },
 ];
 
@@ -199,6 +165,35 @@ const nodeTypes: NodeTypes = {
 const EDGE_STYLE: CSSProperties = { strokeWidth: 1.5 };
 const EDGE_MARKER: EdgeMarker = { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#9B9B96" };
 
+const STAGE_COLORS = [
+  { color: "#6366F1", bgColor: "#EEF2FF" },
+  { color: "#3B82F6", bgColor: "#EFF6FF" },
+  { color: "#0D9488", bgColor: "#F0FDFA" },
+  { color: "#2C5F2F", bgColor: "#F0FDF4" },
+  { color: "#D97706", bgColor: "#FFFBEB" },
+];
+
+function buildHandWorkflow(stages: HandStage[]): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = stages.map((stage, i) => {
+    const { color, bgColor } = STAGE_COLORS[i % STAGE_COLORS.length];
+    const items = stage.goal ? [stage.goal, ...stage.items] : stage.items;
+    return {
+      id: stage.id,
+      type: "step",
+      position: { x: 270 * i, y: 80 },
+      data: { label: stage.label, items: items.slice(0, 4), tools: [], color, bgColor },
+    };
+  });
+  const edges: Edge[] = stages.slice(1).map((stage, i) => ({
+    id: `hand-e${i}`,
+    source: stages[i].id,
+    target: stage.id,
+    style: EDGE_STYLE,
+    markerEnd: EDGE_MARKER,
+  }));
+  return { nodes, edges };
+}
+
 // ═══ Flow Data Builders ═══
 
 function buildLessonCycleData(): { nodes: Node[]; edges: Edge[] } {
@@ -306,12 +301,47 @@ const STATUS_CONFIG = {
 export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPageProps) {
   const [activeWorkflowTab, setActiveWorkflowTab] = useState<WorkflowTab>("lesson_cycle");
   const [selectedSopId, setSelectedSopId] = useState<string>("vvip-educare");
+  const [sopList, setSopList] = useState<SopItem[]>(FALLBACK_SOP_LIST);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const loadedRef = useRef(false);
 
-  const selectedSop = SOP_LIST.find((s) => s.id === selectedSopId) ?? SOP_LIST[0];
+  // Load SOP list from HAND.toml files
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+    window.electron.sopList().then((results) => {
+      if (results.length === 0) return;
+      setSopList(results.map((r) => ({
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        status: "active" as const,
+        assistant: "默认助理",
+        workflowCount: r.workflowCount,
+        icon: r.icon,
+        stages: r.stages,
+      })));
+      // If current selection no longer exists, switch to first
+      if (!results.find((r) => r.id === selectedSopId)) {
+        setSelectedSopId(results[0].id);
+      }
+    }).catch(() => { /* keep fallback list */ });
+  }, [selectedSopId]);
+
+  const selectedSop = sopList.find((s) => s.id === selectedSopId) ?? sopList[0];
 
   const lessonData = useMemo(() => buildLessonCycleData(), []);
   const monthlyData = useMemo(() => buildMonthlySettlementData(), []);
-  const flowData = activeWorkflowTab === "lesson_cycle" ? lessonData : monthlyData;
+
+  // Use HAND.toml stages if available, otherwise use hardcoded tab data
+  const flowData = useMemo(() => {
+    if (selectedSop?.stages && selectedSop.stages.length > 0) {
+      return buildHandWorkflow(selectedSop.stages);
+    }
+    return activeWorkflowTab === "lesson_cycle" ? lessonData : monthlyData;
+  }, [selectedSop, activeWorkflowTab, lessonData, monthlyData]);
+
+  const hasHandStages = Boolean(selectedSop?.stages && selectedSop.stages.length > 0);
 
   const onNodesChange = useCallback(() => {}, []);
 
@@ -342,24 +372,6 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
             </svg>
             返回
           </button>
-          <div className="h-5 w-px bg-ink-900/10" />
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm font-semibold text-ink-800 tracking-tight">SOP</span>
-            <span className="text-xs text-muted">Automation</span>
-          </div>
-        </div>
-
-        <div
-          className="flex items-center gap-3"
-          style={titleBarHeight === 0 ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties : undefined}
-        >
-          <div className="flex items-center gap-2.5 rounded-xl bg-surface px-4 py-2 border border-ink-900/8 shadow-soft">
-            <span className="text-[11px] text-muted">当前 SOP</span>
-            <span className="text-sm font-semibold text-ink-800">{selectedSop.name}</span>
-            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_CONFIG[selectedSop.status].bg} ${STATUS_CONFIG[selectedSop.status].color}`}>
-              {STATUS_CONFIG[selectedSop.status].label}
-            </span>
-          </div>
         </div>
 
         <div
@@ -378,18 +390,6 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
             </svg>
             计划表
           </button>
-          <button className="flex items-center gap-1.5 rounded-xl border border-ink-900/8 bg-surface px-3 py-2 text-xs font-medium text-ink-700 shadow-soft hover:bg-surface-secondary transition-colors">
-            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            新建工作流
-          </button>
-          <button className="flex items-center gap-1.5 rounded-xl bg-accent text-white px-3 py-2 text-xs font-medium shadow-soft hover:bg-accent-hover transition-colors">
-            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            新建 SOP
-          </button>
         </div>
       </header>
 
@@ -401,7 +401,7 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
           {/* List Header */}
           <div className="flex items-center justify-between px-3.5 pt-3 pb-2.5 border-b border-ink-900/5 shrink-0">
             <span className="text-[11px] font-semibold text-ink-600 tracking-wide uppercase">SOP 列表</span>
-            <span className="text-[10px] text-muted bg-ink-900/5 rounded-full px-1.5 py-0.5">{SOP_LIST.length}</span>
+            <span className="text-[10px] text-muted bg-ink-900/5 rounded-full px-1.5 py-0.5">{sopList.length}</span>
           </div>
 
           {/* SOP Items */}
@@ -409,7 +409,7 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
             className="flex-1 overflow-y-auto py-1.5"
             style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.15) transparent" }}
           >
-            {SOP_LIST.map((sop) => {
+            {sopList.map((sop) => {
               const isSelected = sop.id === selectedSopId;
               const statusCfg = STATUS_CONFIG[sop.status];
               return (
@@ -451,7 +451,10 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
 
           {/* Add SOP button at bottom */}
           <div className="px-2 py-2 border-t border-ink-900/5 shrink-0">
-            <button className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-ink-900/15 py-2 text-[11px] text-muted hover:text-accent hover:border-accent/30 hover:bg-accent/5 transition-all">
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-ink-900/15 py-2 text-[11px] text-muted hover:text-accent hover:border-accent/30 hover:bg-accent/5 transition-all"
+            >
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 5v14M5 12h14" />
               </svg>
@@ -465,26 +468,34 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
           {/* Toolbar */}
           <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-ink-900/5 shrink-0">
             <div className="flex gap-1">
-              <button
-                onClick={() => setActiveWorkflowTab("lesson_cycle")}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all border ${
-                  activeWorkflowTab === "lesson_cycle"
-                    ? "bg-accent/8 text-accent border-accent/20"
-                    : "text-muted border-transparent hover:bg-surface-secondary"
-                }`}
-              >
-                课程周期流
-              </button>
-              <button
-                onClick={() => setActiveWorkflowTab("monthly_settlement")}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all border ${
-                  activeWorkflowTab === "monthly_settlement"
-                    ? "bg-accent/8 text-accent border-accent/20"
-                    : "text-muted border-transparent hover:bg-surface-secondary"
-                }`}
-              >
-                月度结算流
-              </button>
+              {hasHandStages ? (
+                <span className="rounded-lg px-3 py-1.5 text-xs font-medium bg-accent/8 text-accent border border-accent/20">
+                  {selectedSop?.name ?? "SOP"} 工作流
+                </span>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setActiveWorkflowTab("lesson_cycle")}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all border ${
+                      activeWorkflowTab === "lesson_cycle"
+                        ? "bg-accent/8 text-accent border-accent/20"
+                        : "text-muted border-transparent hover:bg-surface-secondary"
+                    }`}
+                  >
+                    课程周期流
+                  </button>
+                  <button
+                    onClick={() => setActiveWorkflowTab("monthly_settlement")}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all border ${
+                      activeWorkflowTab === "monthly_settlement"
+                        ? "bg-accent/8 text-accent border-accent/20"
+                        : "text-muted border-transparent hover:bg-surface-secondary"
+                    }`}
+                  >
+                    月度结算流
+                  </button>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-3 text-[10px] text-muted">
               {LEGEND_ITEMS.map((item) => (
@@ -499,7 +510,7 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
           {/* React Flow Canvas */}
           <div className="flex-1" style={{ minHeight: 0 }}>
             <ReactFlow
-              key={activeWorkflowTab}
+              key={`${selectedSopId}-${hasHandStages ? "hand" : activeWorkflowTab}`}
               nodes={flowData.nodes}
               edges={flowData.edges}
               nodeTypes={nodeTypes}
@@ -537,6 +548,143 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
       </div>
       {/* End Main Content */}
 
+      {/* ═══ Create SOP Modal ═══ */}
+      {showCreateModal && (
+        <CreateSopModal
+          onClose={() => setShowCreateModal(false)}
+          onCreate={(result) => {
+            const newItem: SopItem = {
+              id: result.id,
+              name: result.name,
+              description: result.description,
+              status: "draft",
+              assistant: "默认助理",
+              workflowCount: result.workflowCount,
+              icon: result.icon,
+              stages: result.stages,
+            };
+            setSopList((prev) => {
+              const filtered = prev.filter((s) => s.id !== result.id);
+              return [...filtered, newItem];
+            });
+            setSelectedSopId(result.id);
+            setShowCreateModal(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ═══ Create SOP Modal ═══
+
+function CreateSopModal({
+  onClose,
+  onCreate,
+}: {
+  onClose: () => void;
+  onCreate: (result: HandSopResult) => void;
+}) {
+  const [desc, setDesc] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleGenerate = async () => {
+    const trimmed = desc.trim();
+    if (!trimmed) return;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await window.electron.sopGenerate(trimmed);
+      onCreate(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "生成失败，请重试");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: "rgba(0,0,0,0.4)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-[520px] rounded-2xl bg-surface shadow-xl border border-ink-900/8 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-ink-900/5">
+          <div>
+            <h2 className="text-sm font-semibold text-ink-800">新建 SOP</h2>
+            <p className="text-[11px] text-muted mt-0.5">用自然语言描述你的标准操作流程，AI 将自动生成 SOP 流程图和计划</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-muted hover:text-ink-700 transition-colors p-1 rounded-lg hover:bg-ink-900/5"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 py-4">
+          <textarea
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            disabled={loading}
+            placeholder={"例如：每周 VIP 客户跟进流程 — 周一发送学习资料和上课提醒，周三确认作业完成情况，周五整理老师反馈并归档，月底生成学习进度报告发给家长"}
+            className="w-full h-32 rounded-xl border border-ink-900/10 bg-surface-secondary px-3.5 py-3 text-sm text-ink-800 placeholder:text-muted/60 resize-none focus:outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20 transition-all"
+            style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.15) transparent" }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleGenerate();
+            }}
+          />
+
+          {error && (
+            <div className="mt-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-[11px] text-red-600">
+              {error}
+            </div>
+          )}
+
+          <p className="mt-2 text-[10px] text-muted/60">
+            描述越详细，生成质量越高 · {navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+Enter 快速生成
+          </p>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-ink-900/5 bg-surface-secondary/30">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="rounded-xl px-4 py-2 text-xs font-medium text-muted hover:text-ink-700 hover:bg-ink-900/5 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            onClick={handleGenerate}
+            disabled={loading || !desc.trim()}
+            className="flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2 text-xs font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? (
+              <>
+                <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                AI 生成中…
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                生成 SOP
+              </>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

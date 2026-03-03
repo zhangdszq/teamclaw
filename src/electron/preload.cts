@@ -251,6 +251,11 @@ electron.contextBridge.exposeInMainWorld("electron", {
         electron.ipcRenderer.on("goal-completed", cb);
         return () => electron.ipcRenderer.off("goal-completed", cb);
     },
+    // SOP Hands
+    sopList: () =>
+        ipcInvoke("sop.list"),
+    sopGenerate: (description: string) =>
+        ipcInvoke("sop.generate", description),
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

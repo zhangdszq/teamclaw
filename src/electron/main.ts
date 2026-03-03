@@ -86,6 +86,8 @@ import { loadPlanItems, updatePlanItem } from "./libs/plan-store.js";
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import Anthropic from "@anthropic-ai/sdk";
+import { parse as parseToml } from "smol-toml";
 
 // ─── Memory janitor: run on startup + every 24 h ─────────────
 function startMemoryJanitor(): void {
@@ -1476,6 +1478,182 @@ app.on("ready", async () => {
         for (const win of windows) {
             win.webContents.send("goal-completed");
         }
+    });
+
+    // ─── SOP Hands IPC handlers ──────────────────────────────────────────────
+
+    // All hands live in the user config directory — writable, syncable, user-owned
+    const HANDS_DIR = join(homedir(), ".vk-cowork", "hands");
+
+    // On first run, seed built-in hands from the project's hands/ directory
+    function seedBuiltinHands() {
+        const builtinDir = join(app.getAppPath(), "hands");
+        if (!existsSync(builtinDir)) return;
+        if (!existsSync(HANDS_DIR)) mkdirSync(HANDS_DIR, { recursive: true });
+        for (const entry of readdirSync(builtinDir)) {
+            const src = join(builtinDir, entry, "HAND.toml");
+            const dst = join(HANDS_DIR, entry, "HAND.toml");
+            if (!existsSync(src)) continue;
+            // Only copy if destination doesn't exist yet (don't overwrite user edits)
+            if (!existsSync(dst)) {
+                mkdirSync(join(HANDS_DIR, entry), { recursive: true });
+                writeFileSync(dst, readFileSync(src, "utf8"), "utf8");
+                console.log(`[hands] Seeded built-in hand: ${entry}`);
+            }
+        }
+    }
+
+    seedBuiltinHands();
+
+    interface HandStage {
+        id: string;
+        label: string;
+        goal: string;
+        items: string[];
+    }
+
+    interface HandSopResult {
+        id: string;
+        name: string;
+        description: string;
+        icon: string;
+        stages: HandStage[];
+        workflowCount: number;
+    }
+
+    function parseHandTomlFile(tomlPath: string): HandSopResult | null {
+        try {
+            const raw = readFileSync(tomlPath, "utf8");
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const data = parseToml(raw) as Record<string, any>;
+
+            const id = String(data.id ?? "");
+            const name = String(data.name ?? id);
+            const description = String(data.description ?? "");
+            const icon = String(data.icon ?? "📋");
+
+            const systemPrompt: string = String(data.agent?.system_prompt ?? "");
+            const stages = extractHandStages(systemPrompt);
+
+            return { id, name, description, icon, stages, workflowCount: stages.length };
+        } catch (err) {
+            console.error("[sop.list] Failed to parse HAND.toml:", tomlPath, err);
+            return null;
+        }
+    }
+
+    function extractHandStages(systemPrompt: string): HandStage[] {
+        const stageRegex = /═══\s*(第\d+阶段[^═]*?)\s*═══([\s\S]*?)(?=═══|$)/g;
+        const stages: HandStage[] = [];
+        let match: RegExpExecArray | null;
+
+        while ((match = stageRegex.exec(systemPrompt)) !== null) {
+            const label = match[1].trim();
+            const body = match[2].trim();
+
+            const goalMatch = body.match(/^目标[：:]\s*(.+)/m);
+            const goal = goalMatch ? goalMatch[1].trim() : "";
+
+            // Extract up to 4 numbered action items
+            const itemMatches = [...body.matchAll(/^\d+\.\s+(.+)/mg)];
+            const items = itemMatches.slice(0, 4).map((m) => m[1].trim());
+
+            stages.push({
+                id: `stage_${stages.length + 1}`,
+                label,
+                goal,
+                items,
+            });
+        }
+        return stages;
+    }
+
+    function loadHandsFromDir(dir: string): HandSopResult[] {
+        if (!existsSync(dir)) return [];
+        const results: HandSopResult[] = [];
+        for (const entry of readdirSync(dir)) {
+            const tomlPath = join(dir, entry, "HAND.toml");
+            if (!existsSync(tomlPath)) continue;
+            const parsed = parseHandTomlFile(tomlPath);
+            if (parsed) results.push(parsed);
+        }
+        return results;
+    }
+
+    ipcMainHandle("sop.list", () => {
+        return loadHandsFromDir(HANDS_DIR);
+    });
+
+    ipcMainHandle("sop.generate", async (_: any, description: string) => {
+        const settings = loadUserSettings();
+        const apiKey =
+            settings.anthropicAuthToken ||
+            process.env.ANTHROPIC_API_KEY ||
+            process.env.ANTHROPIC_AUTH_TOKEN ||
+            "";
+        if (!apiKey) throw new Error("未配置 Anthropic API Key，请在设置中填写。");
+
+        const client = new Anthropic({
+            apiKey,
+            baseURL: settings.anthropicBaseUrl || undefined,
+        });
+
+        // Use vvip-educare as a few-shot reference (trimmed to keep prompt short)
+        const examplePath = join(HANDS_DIR, "vvip-educare", "HAND.toml");
+        const exampleSnippet = existsSync(examplePath)
+            ? readFileSync(examplePath, "utf8").slice(0, 2500)
+            : "";
+
+        const prompt = `你是一个专业的 SOP（标准操作流程）设计师。
+请根据用户描述，生成一份 HAND.toml 格式的 SOP 定义文件。
+
+HAND.toml 格式参考（截取自真实示例）：
+\`\`\`toml
+${exampleSnippet}
+\`\`\`
+
+要求：
+1. 生成完整的 HAND.toml，包含 id、name、description、icon、tools、[agent] 及 system_prompt
+2. system_prompt 必须按 ═══ 第X阶段：阶段名称 ═══ 格式划分 3-6 个阶段
+3. 每个阶段以"目标：xxx"开头，后跟编号步骤（1. 2. 3. ...）
+4. id 使用小写英文加连字符，如 "client-followup"
+5. 只输出 HAND.toml 内容，用 <hand_toml> 标签包裹
+
+用户描述：${description}`;
+
+        const resp = await client.messages.create({
+            model: "claude-opus-4-5",
+            max_tokens: 8192,
+            messages: [{ role: "user", content: prompt }],
+        });
+
+        const text = resp.content[0].type === "text" ? resp.content[0].text : "";
+        const tomlMatch = text.match(/<hand_toml>([\s\S]*?)<\/hand_toml>/);
+        if (!tomlMatch) throw new Error("LLM 返回内容中未找到有效的 HAND.toml");
+
+        const tomlContent = tomlMatch[1].trim();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = parseToml(tomlContent) as Record<string, any>;
+        const id = String(data.id ?? `sop-${Date.now()}`);
+
+        // Save to hands config directory
+        const sopDir = join(HANDS_DIR, id);
+        if (!existsSync(sopDir)) mkdirSync(sopDir, { recursive: true });
+        writeFileSync(join(sopDir, "HAND.toml"), tomlContent, "utf8");
+
+        // Return parsed result
+        const systemPrompt = String(data.agent?.system_prompt ?? "");
+        const stages = extractHandStages(systemPrompt);
+
+        return {
+            id,
+            name: String(data.name ?? id),
+            description: String(data.description ?? ""),
+            icon: String(data.icon ?? "📋"),
+            stages,
+            workflowCount: stages.length,
+        } satisfies HandSopResult;
     });
 
     // Read directory contents (one level deep)

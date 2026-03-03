@@ -589,6 +589,25 @@ type EventPayloadMapping = {
     "goals-update": LongTermGoal | null;
     "goals-delete": boolean;
     "goals-run-now": void;
+    // SOP Hands
+    "sop.list": HandSopResult[];
+    "sop.generate": HandSopResult;
+}
+
+interface HandStage {
+    id: string;
+    label: string;
+    goal: string;
+    items: string[];
+}
+
+interface HandSopResult {
+    id: string;
+    name: string;
+    description: string;
+    icon: string;
+    stages: HandStage[];
+    workflowCount: number;
 }
 
 interface Window {
@@ -704,5 +723,8 @@ interface Window {
         goalsDelete: (id: string) => Promise<boolean>;
         goalsRunNow: (id: string) => Promise<void>;
         onGoalCompleted: (callback: () => void) => UnsubscribeFunction;
+        // SOP Hands
+        sopList: () => Promise<HandSopResult[]>;
+        sopGenerate: (description: string) => Promise<HandSopResult>;
     }
 }

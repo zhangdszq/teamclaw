@@ -2,7 +2,7 @@
   "name": "vk-cowork",
   "productName": "AI Team",
   "private": true,
-  "version": "0.0.50",
+  "version": "0.0.51",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -55,6 +55,7 @@
     "rehype-highlight": "^7.0.2",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
+    "smol-toml": "^1.6.0",
     "tailwindcss": "^4.1.18",
     "undici": "^7.22.0",
     "vite-tsconfig-paths": "^6.0.3",

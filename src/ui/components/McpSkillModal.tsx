@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 
+// Category metadata from remote catalog JSON
+interface CatalogCategory {
+  id: string;
+  label: string;
+  icon: string;
+  color: string;
+  order?: number;
+}
+
 // Skill from remote catalog JSON
 interface CatalogSkill {
   name: string;
@@ -23,27 +32,46 @@ interface ViewSkill {
   fullPath?: string;
 }
 
-// Skill categories with icons and colors
-const SKILL_CATEGORIES: Record<string, { icon: string; color: string; label: string }> = {
-  "teaching":    { icon: "graduation", color: "text-emerald-600 bg-emerald-500/10", label: "教研专用" },
-  "picturebook": { icon: "book-open",  color: "text-rose-500 bg-rose-500/10",       label: "绘本馆专用" },
-  "video":       { icon: "video",    color: "text-red-500 bg-red-500/10",     label: "视频处理" },
-  "image":       { icon: "image",    color: "text-orange-500 bg-orange-500/10", label: "图像生成" },
-  "writing":     { icon: "pen",      color: "text-purple-500 bg-purple-500/10", label: "写作内容" },
-  "social":      { icon: "share",    color: "text-indigo-500 bg-indigo-500/10", label: "社交媒体" },
-  "document":    { icon: "file",     color: "text-teal-500 bg-teal-500/10",   label: "文档工具" },
-  "infographic": { icon: "layout",   color: "text-amber-500 bg-amber-500/10", label: "信息图表" },
-  "development": { icon: "code",     color: "text-blue-500 bg-blue-500/10",   label: "开发工具" },
-  "productivity":{ icon: "zap",      color: "text-yellow-500 bg-yellow-500/10", label: "效率工具" },
-  "analysis":    { icon: "chart",    color: "text-green-500 bg-green-500/10", label: "数据分析" },
-  "design":      { icon: "palette",  color: "text-pink-500 bg-pink-500/10",   label: "设计创意" },
-  "research":    { icon: "search",   color: "text-cyan-500 bg-cyan-500/10",   label: "研究调查" },
-  "other":       { icon: "box",      color: "text-gray-500 bg-gray-500/10",   label: "其他" },
-};
+// Fallback colors for auto-generated categories (cycles through palette)
+const AUTO_COLORS = [
+  "text-sky-600 bg-sky-500/10",
+  "text-fuchsia-600 bg-fuchsia-500/10",
+  "text-lime-600 bg-lime-500/10",
+  "text-amber-600 bg-amber-500/10",
+  "text-rose-600 bg-rose-500/10",
+  "text-teal-600 bg-teal-500/10",
+];
+
+// Built-in category definitions — used as fallback when CDN catalog lacks a `categories` field.
+// New categories should be added to skills-catalog.json; this list only covers well-known ones.
+const BUILTIN_CATEGORIES: CatalogCategory[] = [
+  { id: "teaching",           label: "教研专用",     icon: "graduation", color: "text-emerald-600 bg-emerald-500/10", order: 1  },
+  { id: "picturebook",        label: "绘本馆专用",   icon: "book-open",  color: "text-rose-500 bg-rose-500/10",      order: 2  },
+  { id: "product-management", label: "产品经理专用", icon: "target",     color: "text-violet-600 bg-violet-500/10",  order: 3  },
+  { id: "operations",         label: "运营专用",     icon: "trending",   color: "text-orange-600 bg-orange-500/10",  order: 4  },
+  { id: "video",              label: "视频处理",     icon: "video",      color: "text-red-500 bg-red-500/10",        order: 4  },
+  { id: "image",              label: "图像生成",     icon: "image",      color: "text-orange-500 bg-orange-500/10",  order: 5  },
+  { id: "writing",            label: "写作内容",     icon: "pen",        color: "text-purple-500 bg-purple-500/10",  order: 6  },
+  { id: "social",             label: "社交媒体",     icon: "share",      color: "text-indigo-500 bg-indigo-500/10",  order: 7  },
+  { id: "document",           label: "文档工具",     icon: "file",       color: "text-teal-500 bg-teal-500/10",      order: 8  },
+  { id: "infographic",        label: "信息图表",     icon: "layout",     color: "text-amber-500 bg-amber-500/10",    order: 9  },
+  { id: "development",        label: "开发工具",     icon: "code",       color: "text-blue-500 bg-blue-500/10",      order: 10 },
+  { id: "productivity",       label: "效率工具",     icon: "zap",        color: "text-yellow-500 bg-yellow-500/10",  order: 11 },
+  { id: "analysis",           label: "数据分析",     icon: "chart",      color: "text-green-500 bg-green-500/10",    order: 12 },
+  { id: "design",             label: "设计创意",     icon: "palette",    color: "text-pink-500 bg-pink-500/10",      order: 13 },
+  { id: "research",           label: "研究调查",     icon: "search",     color: "text-cyan-500 bg-cyan-500/10",      order: 14 },
+  { id: "other",              label: "其他",         icon: "box",        color: "text-gray-500 bg-gray-500/10",      order: 99 },
+];
+
+// Convert kebab-case id to a readable label (e.g. "my-category" → "My Category")
+function categoryIdToLabel(id: string): string {
+  return id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
 
 // Fallback category detection for locally installed skills not in the catalog
 function getSkillCategoryFromText(name: string, desc: string): string {
   const text = (name + " " + desc).toLowerCase();
+  if (text.includes("product-management") || text.includes("产品经理") || text.includes("prd") || text.includes("roadmap") || text.includes("user-story") || text.includes("jtbd") || text.includes("prioritization")) return "product-management";
   if (text.includes("video") || text.includes("视频") || text.includes("youtube") || text.includes("ffmpeg")) return "video";
   if (text.includes("image") || text.includes("图像") || text.includes("图片") || text.includes("photo") || text.includes("gif")) return "image";
   if (text.includes("social") || text.includes("wechat") || text.includes("twitter") || text.includes("微信") || text.includes("小红书")) return "social";
@@ -56,6 +84,39 @@ function getSkillCategoryFromText(name: string, desc: string): string {
   if (text.includes("效率") || text.includes("productivity") || text.includes("automat") || text.includes("自动") || text.includes("feishu") || text.includes("飞书")) return "productivity";
   if (text.includes("research") || text.includes("调研") || text.includes("搜索") || text.includes("search")) return "research";
   return "other";
+}
+
+// Build a category config lookup: CDN catalog > built-in fallback > auto-generated
+function buildCategoryConfig(
+  catalogCategories: CatalogCategory[],
+  allCategoryIds: string[]
+): Record<string, { icon: string; color: string; label: string; order: number }> {
+  const result: Record<string, { icon: string; color: string; label: string; order: number }> = {};
+
+  // 1. Seed with built-in fallback (always available)
+  BUILTIN_CATEGORIES.forEach(c => {
+    result[c.id] = { icon: c.icon, color: c.color, label: c.label, order: c.order ?? 50 };
+  });
+
+  // 2. CDN catalog categories override builtins (CDN is authoritative when available)
+  catalogCategories.forEach(c => {
+    result[c.id] = { icon: c.icon, color: c.color, label: c.label, order: c.order ?? 50 };
+  });
+
+  // 3. Auto-generate config for any category not covered by either source
+  let autoIndex = 0;
+  for (const id of allCategoryIds) {
+    if (!result[id]) {
+      result[id] = {
+        icon: "box",
+        color: AUTO_COLORS[autoIndex % AUTO_COLORS.length],
+        label: categoryIdToLabel(id),
+        order: 50 + autoIndex,
+      };
+      autoIndex++;
+    }
+  }
+  return result;
 }
 
 // Category icon component
@@ -165,6 +226,21 @@ function CategoryIcon({ type, className = "" }: { type: string; className?: stri
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
       );
+    case "target":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="10" />
+          <circle cx="12" cy="12" r="6" />
+          <circle cx="12" cy="12" r="2" />
+        </svg>
+      );
+    case "trending":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+          <polyline points="17 6 23 6 23 12" />
+        </svg>
+      );
     default:
       return (
         <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
@@ -194,6 +270,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
   // Catalog state
   const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
+  const [catalogCategories, setCatalogCategories] = useState<CatalogCategory[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
 
   // Install skill state
@@ -224,9 +301,11 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setCatalog(Array.isArray(data.skills) ? data.skills : []);
+      setCatalogCategories(Array.isArray(data.categories) ? data.categories : []);
     } catch (err) {
       console.warn("Failed to fetch skill catalog:", err);
       setCatalog([]);
+      setCatalogCategories([]);
     } finally {
       setCatalogLoading(false);
     }
@@ -391,12 +470,13 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     });
 
     // Then: locally installed skills NOT in catalog — marked with isLocalOnly
+    // Description comes from catalog JSON only; SKILL.md content is not displayed
     for (const s of skills) {
       if (!catalogNames.has(s.name) && !s.name.startsWith(".")) {
         result.push({
           name: s.name,
           label: s.name,
-          description: s.description,
+          description: undefined,
           category: getSkillCategoryFromText(s.name, s.description || ""),
           isInstalled: true,
           isLocalOnly: true,
@@ -418,20 +498,21 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     return grouped;
   }, [mergedSkills]);
 
-  // Available categories sorted
+  // Build dynamic category config from catalog data + auto-fallback for unknowns
+  const categoryConfig = useMemo(() => {
+    const allIds = Object.keys(skillsByCategory);
+    return buildCategoryConfig(catalogCategories, allIds);
+  }, [catalogCategories, skillsByCategory]);
+
+  // Available categories sorted by catalog-defined order, unknowns last
   const availableCategories = useMemo(() => {
     return Object.keys(skillsByCategory).sort((a, b) => {
-      if (a === "other") return 1;
-      if (b === "other") return -1;
-      const order = ["teaching","picturebook","video","image","writing","social","document","infographic","development","productivity","analysis","design","research"];
-      const ai = order.indexOf(a);
-      const bi = order.indexOf(b);
-      if (ai !== -1 && bi !== -1) return ai - bi;
-      if (ai !== -1) return -1;
-      if (bi !== -1) return 1;
-      return (SKILL_CATEGORIES[a]?.label || a).localeCompare(SKILL_CATEGORIES[b]?.label || b);
+      const ao = categoryConfig[a]?.order ?? 50;
+      const bo = categoryConfig[b]?.order ?? 50;
+      if (ao !== bo) return ao - bo;
+      return (categoryConfig[a]?.label || a).localeCompare(categoryConfig[b]?.label || b);
     });
-  }, [skillsByCategory]);
+  }, [skillsByCategory, categoryConfig]);
 
   // Filter merged skills
   const filteredSkills = useMemo(() => {
@@ -684,7 +765,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                       <span className="ml-auto text-xs opacity-70 flex-shrink-0">{mergedSkills.length}</span>
                     </button>
                     {availableCategories.map(category => {
-                      const config = SKILL_CATEGORIES[category] || SKILL_CATEGORIES.other;
+                      const config = categoryConfig[category];
                       const catSkills = skillsByCategory[category] || [];
                       const installedInCat = catSkills.filter(s => s.isInstalled).length;
                       return (
@@ -734,7 +815,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                   ) : (
                     <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                       {filteredSkills.map((skill) => {
-                        const config = SKILL_CATEGORIES[skill.category] || SKILL_CATEGORIES.other;
+                        const config = categoryConfig[skill.category] ?? categoryConfig["other"];
                         const isInstalling = installingNames.has(skill.name);
                         return (
                           <div
@@ -837,10 +918,10 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                               </div>
                             </div>
 
-                            {/* Description */}
+                            {/* Description — from catalog JSON only */}
                             <div className="mt-3 p-3 bg-surface rounded-xl border border-ink-900/5">
                               <p className="text-sm text-ink-700 leading-relaxed line-clamp-3">
-                                {skill.description || "暂无描述信息。"}
+                                {skill.description || (skill.isLocalOnly ? "本地已安装，暂无目录描述。" : "暂无描述信息。")}
                               </p>
                             </div>
 

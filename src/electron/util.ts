@@ -1,6 +1,7 @@
 import { ipcMain, WebContents, WebFrameMain } from "electron";
 import { getUIPath } from "./pathResolver.js";
 import { pathToFileURL } from "url";
+import path from "path";
 export const DEV_PORT = 5173;
 
 // Checks if you are in development mode
@@ -24,7 +25,29 @@ export function ipcWebContentsSend<Key extends keyof EventPayloadMapping>(key: K
 export function validateEventFrame(frame: WebFrameMain) {
     if (isDev() && new URL(frame.url).host === `localhost:${DEV_PORT}`) return;
 
-    const frameOrigin = new URL(frame.url).origin + new URL(frame.url).pathname;
-    const expectedOrigin = pathToFileURL(getUIPath()).toString();
-    if (frameOrigin !== expectedOrigin) throw new Error("Malicious event");
+    // Production renderer must come from local dist-react/index.html.
+    // Allow query/hash differences (e.g. ?mode=quick) and tolerate trailing slash variance.
+    const expectedUrl = pathToFileURL(getUIPath());
+    const expectedPath = path.normalize(decodeURIComponent(expectedUrl.pathname)).replace(/\/+$/, "");
+
+    let actualUrl: URL;
+    try {
+        actualUrl = new URL(frame.url);
+    } catch {
+        throw new Error("Malicious event");
+    }
+
+    if (actualUrl.protocol !== "file:") {
+        console.warn("[IPC] Blocked non-file sender frame:", actualUrl.toString());
+        throw new Error("Malicious event");
+    }
+
+    const actualPath = path.normalize(decodeURIComponent(actualUrl.pathname)).replace(/\/+$/, "");
+    if (actualPath !== expectedPath) {
+        console.warn("[IPC] Blocked unexpected sender frame:", {
+            actual: actualUrl.toString(),
+            expected: expectedUrl.toString(),
+        });
+        throw new Error("Malicious event");
+    }
 }

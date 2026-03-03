@@ -1,0 +1,103 @@
+---
+description: AI 调用规范：使用 Agent SDK（Claude 或 Codex），优先使用 app 内配置的 API Key
+globs: src/electron/**/*.ts
+alwaysApply: false
+---
+
+# AI 调用规范
+
+## 两种 Agent SDK
+
+| Provider | SDK | 导入 |
+|---|---|---|
+| Claude | `@anthropic-ai/claude-agent-sdk` | `import { query as agentQuery } from "@anthropic-ai/claude-agent-sdk"` |
+| Codex / OpenAI | `@openai/codex-sdk` | `import { Codex } from "@openai/codex-sdk"` |
+
+**禁止**直接使用 `new Anthropic()` / `client.messages.create()` 或 `new OpenAI()` 原始 API。
+
+---
+
+## 优先使用 app 内配置的 API Key
+
+若用户在 app 设置中配置了 API Key，**必须优先使用**，不能依赖外部文件（`~/.claude/settings.json` / `~/.codex/auth.json`）。
+
+```typescript
+import { loadUserSettings } from "./libs/user-settings.js";
+import { getSettingSources } from "./libs/claude-settings.js";
+
+const settings = loadUserSettings();
+
+// 优先用 app 内 key，传入 env 覆盖 SDK 默认配置
+const envOverride: Record<string, string> = {};
+if (settings.anthropicAuthToken) {
+    envOverride.ANTHROPIC_API_KEY = settings.anthropicAuthToken;
+}
+if (settings.anthropicBaseUrl) {
+    envOverride.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
+}
+
+const q = agentQuery({
+    prompt,
+    options: {
+        cwd: targetDir,
+        abortController,
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        maxTurns: 15,
+        settingSources: getSettingSources(),
+        env: { ...process.env, ...envOverride },  // app key 覆盖
+    },
+});
+```
+
+---
+
+## Claude Agent SDK 完整用法
+
+```typescript
+import { query as agentQuery } from "@anthropic-ai/claude-agent-sdk";
+import { getSettingSources } from "./libs/claude-settings.js";
+import { loadUserSettings } from "./libs/user-settings.js";
+
+// 让 Agent 直接写文件 — 不要解析文本输出
+const prompt = `根据描述生成内容，直接用 Write 工具写入 ${targetPath}`;
+
+for await (const msg of agentQuery({ prompt, options: { ... } })) {
+    if (msg.type === "result") console.log("[agent] done:", msg.subtype);
+}
+```
+
+## Codex Agent SDK 完整用法
+
+```typescript
+import { Codex } from "@openai/codex-sdk";
+import { getCodexBinaryPath } from "./libs/codex-runner.js";
+
+const codex = new Codex({ codexPathOverride: getCodexBinaryPath() });
+const thread = codex.startThread({
+    model: "gpt-5.3-codex",
+    workingDirectory: cwd,
+    sandboxMode: "danger-full-access",
+    approvalPolicy: "never",
+});
+const { events } = await thread.runStreamed(prompt, { signal });
+for await (const event of events) { /* handle */ }
+```
+
+---
+
+## ❌ 禁止做法
+
+```typescript
+// ❌ 原始 Anthropic SDK
+import Anthropic from "@anthropic-ai/sdk";
+const resp = await new Anthropic({ apiKey }).messages.create({ ... });
+
+// ❌ 原始 OpenAI SDK  
+import OpenAI from "openai";
+const resp = await new OpenAI({ apiKey }).chat.completions.create({ ... });
+
+// ❌ 解析 LLM 文本再手动写文件
+const match = text.match(/<output>([\s\S]*?)<\/output>/);
+writeFileSync(path, match[1]);
+```

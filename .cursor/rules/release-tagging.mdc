@@ -1,0 +1,29 @@
+---
+description: 发版打 tag 的正确顺序，防止 package.json 版本号与 git tag 不一致
+alwaysApply: true
+---
+
+# 发版流程
+
+每次发新版本必须按以下顺序操作：
+
+```bash
+# 1. 更新 package.json 版本号
+sed -i '' 's/"version": "x.x.x"/"version": "x.x.y"/' package.json
+
+# 2. 提交版本号变更
+git add package.json
+git commit -m "chore: bump version to x.x.y"
+
+# 3. 打 tag
+git tag vx.x.y
+
+# 4. 推送
+git push origin main && git push origin vx.x.y
+```
+
+## ❌ 禁止
+
+- 不能先打 tag 再改版本号
+- 不能 force push 已有 tag（GitHub Actions 可能不重新触发）
+- 不能跳过 package.json 更新（应用内显示版本来自 package.json，不是 git tag）

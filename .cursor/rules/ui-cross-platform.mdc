@@ -1,0 +1,63 @@
+---
+description: 
+globs: **/*.tsx, **/*.ts, **/*.css, **/*.scss
+alwaysApply: false
+---
+
+# UI 跨平台兼容（Windows & macOS）
+
+修改任何 UI 界面时，必须同时考虑 Windows 和 macOS 的差异。
+
+## 字体
+
+```css
+/* ❌ BAD */
+font-family: -apple-system, BlinkMacSystemFont;
+
+/* ✅ GOOD */
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+```
+
+## 滚动条
+
+```css
+/* macOS 默认隐藏，Windows 始终显示，需统一样式 */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 3px; }
+```
+
+## 窗口标题栏 / 拖拽区域
+
+- macOS 交通灯按钮在左，Windows 关闭按钮在右
+- 使用 `-webkit-app-region: drag` 时，确保 Windows 下点击区域不遮挡交互元素
+- Electron 中通过 `process.platform` 判断平台，分别渲染自定义标题栏
+
+```tsx
+const isMac = process.platform === 'darwin';
+// macOS 不需要自定义最小化/最大化/关闭按钮
+{!isMac && <WindowControls />}
+```
+
+## 间距与字号
+
+- Windows 系统 DPI 缩放（125%、150%）可能导致布局错位，避免使用奇数像素值
+- 关键布局使用 `rem` 或 `flex`，而非固定 `px`
+
+## 快捷键文案
+
+```tsx
+/* ❌ BAD */
+<span>⌘K</span>
+
+/* ✅ GOOD */
+const isMac = process.platform === 'darwin';
+<span>{isMac ? '⌘K' : 'Ctrl+K'}</span>
+```
+
+## 检查清单
+
+- [ ] 字体 fallback 包含 Segoe UI（Windows）
+- [ ] 滚动条样式在两个平台均可见
+- [ ] 标题栏/拖拽区域在 Windows 和 macOS 下布局正确
+- [ ] 快捷键文案根据平台动态显示
+- [ ] 在 125%/150% DPI 下验证布局不错位

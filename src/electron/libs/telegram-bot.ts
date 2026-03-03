@@ -365,8 +365,27 @@ export function setTelegramSessionStore(store: SessionStore): void {
 
 const pool = new Map<string, TelegramConnection>();
 
+function findAssistantByToken(token: string, excludeAssistantId?: string): string | null {
+  for (const [assistantId, conn] of pool.entries()) {
+    if (assistantId === excludeAssistantId) continue;
+    if (conn.opts.token === token) return assistantId;
+  }
+  return null;
+}
+
 export async function startTelegramBot(opts: TelegramBotOptions): Promise<void> {
   stopTelegramBot(opts.assistantId);
+
+  // Telegram long polling allows only one consumer per bot token.
+  // If another assistant is using the same token, stop it first to avoid 409 conflicts.
+  const duplicateAssistantId = findAssistantByToken(opts.token, opts.assistantId);
+  if (duplicateAssistantId) {
+    console.warn(
+      `[Telegram] Duplicate token detected: stopping assistant=${duplicateAssistantId} before starting assistant=${opts.assistantId}`,
+    );
+    stopTelegramBot(duplicateAssistantId);
+  }
+
   const conn = new TelegramConnection(opts);
   pool.set(opts.assistantId, conn);
   await conn.start();
@@ -675,6 +694,26 @@ class TelegramConnection {
           emitStatus(this.opts.assistantId, "connected");
           console.log(`[Telegram] Connected: assistant=${this.opts.assistantId} bot=@${this.botUsername}`);
         },
+      }).catch((err) => {
+        // bot.start() rejects when the polling loop exits abnormally.
+        // 409 means another instance is still holding the long-poll connection;
+        // wait longer than Telegram's 30s poll timeout before retrying.
+        if (this.stopped) return;
+        const is409 = err instanceof GrammyError && err.error_code === 409;
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(`[Telegram] Polling stopped (${is409 ? "409 conflict" : "error"}): ${detail}`);
+        this.status = "error";
+        emitStatus(this.opts.assistantId, "error", detail);
+        if (is409) {
+          // Telegram's default getUpdates timeout is 30s; wait 35s for the old connection to expire.
+          console.log("[Telegram] Waiting 35s for previous long-poll to expire before reconnecting...");
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            if (!this.stopped) this.scheduleReconnect();
+          }, 35_000);
+        } else {
+          this.scheduleReconnect();
+        }
       });
 
       this.status = "connected";
@@ -843,8 +882,14 @@ class TelegramConnection {
       const e = err.error;
       if (e instanceof GrammyError) {
         console.error("[Telegram] API error:", e.description);
+        const isConflict = e.error_code === 409 || e.description.includes("terminated by other getUpdates request");
+        if (isConflict && !this.stopped) {
+          console.warn(`[Telegram] Polling conflict (assistant=${this.opts.assistantId}), scheduling reconnect`);
+          this.scheduleReconnect();
+        }
       } else if (e instanceof HttpError) {
         console.error("[Telegram] Network error:", e);
+        if (!this.stopped) this.scheduleReconnect();
       } else {
         console.error("[Telegram] Unknown error:", e);
       }

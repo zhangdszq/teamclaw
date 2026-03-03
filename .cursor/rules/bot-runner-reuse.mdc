@@ -1,0 +1,99 @@
+---
+description: Bot/Runner 架构规范：业务逻辑不写死到具体 bot，最大化 runner 和 bot 复用
+globs: src/electron/libs/*bot*.ts,src/electron/api/services/runner.ts
+alwaysApply: false
+---
+
+# Bot / Runner 复用架构规范
+
+## 核心原则
+
+业务逻辑（AI 调用、persona 构建、历史上下文、消息持久化）**必须提取到共享层**，各 bot 只负责平台 I/O。
+
+共享层位置：`src/electron/libs/bot-base.ts`
+
+---
+
+## ❌ 禁止：在 bot 文件内重复实现
+
+以下函数在 telegram/dingtalk/feishu 三个 bot 里各有一份，**不要再复制**：
+
+```typescript
+// ❌ BAD — 每个 bot 各自有一份 buildQueryEnv
+function buildQueryEnv(): Record<string, string | undefined> {
+  const settings = loadUserSettings();
+  const apiKey = settings.anthropicAuthToken || process.env.ANTHROPIC_API_KEY || "";
+  // ... 三处完全相同
+}
+
+// ❌ BAD — runClaudeQuery 写死在 telegram-bot.ts 里
+async function runClaudeQuery(session, prompt, opts) {
+  const env = buildQueryEnv();  // 内嵌逻辑
+  // ... 50 行重复逻辑
+}
+```
+
+---
+
+## ✅ 正确：从 bot-base.ts 导入共享函数
+
+```typescript
+// bot-base.ts — 共享层
+export function buildQueryEnv(): Record<string, string | undefined>
+export function buildStructuredPersona(opts: BaseBotOptions, extras?: string[]): string
+export function buildHistoryContext(history: ConvMessage[], assistantId?: string): string
+export async function runClaudeQueryBase(
+  opts: BaseBotOptions,
+  userText: string,
+  sendReply: (text: string) => Promise<void>,  // 平台回调，由各 bot 传入
+  sendFile?: (path: string) => Promise<void>,
+): Promise<void>
+export async function persistReply(assistantId: string, role: string, content: string): Promise<void>
+
+// telegram-bot.ts — 只负责平台 I/O
+import { buildQueryEnv, buildStructuredPersona, runClaudeQueryBase } from "./bot-base.js";
+
+bot.on("message", async (ctx) => {
+  await runClaudeQueryBase(opts, ctx.message.text, (reply) => ctx.reply(reply));
+  //                                                 ↑ Telegram 专属的发送函数
+});
+```
+
+---
+
+## ✅ Runner 复用规范
+
+多个 assistant 共享同一 runner，**通过 `assistantId` 隔离会话**，不要为每个 assistant 新建独立 runner 实例：
+
+```typescript
+// ❌ BAD — 为每个 bot 硬编码 session 前缀
+const sessionId = `tg-${chatId}`;   // telegram-bot.ts
+const sessionId = `dt-${senderStaffId}`;  // dingtalk-bot.ts
+
+// ✅ GOOD — 统一格式，由 bot-base 生成
+export function buildSessionId(platform: BotPlatformType, assistantId: string, userId: string) {
+  return `${platform}:${assistantId}:${userId}`;
+}
+```
+
+---
+
+## ✅ MCP 服务器名称不能写死
+
+```typescript
+// ❌ BAD — session MCP 名称写死在各 bot 内
+mcpServers: [{ name: "tg-session" }]   // telegram
+mcpServers: [{ name: "dt-session" }]   // dingtalk
+
+// ✅ GOOD — 传参
+mcpServers: [{ name: `${platform}-session` }]
+```
+
+---
+
+## 修改检查清单
+
+- [ ] 新增业务逻辑优先放 `bot-base.ts`，bot 文件只做平台适配
+- [ ] 不在 bot 文件内 import `api/services/runner.ts`（跨层依赖）
+- [ ] `buildStructuredPersona` / `buildQueryEnv` / `persistReply` 改一处即全部生效
+- [ ] session ID 用 `buildSessionId()` 统一生成

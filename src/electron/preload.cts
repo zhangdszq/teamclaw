@@ -146,6 +146,13 @@ electron.contextBridge.exposeInMainWorld("electron", {
         electron.ipcRenderer.on("dingtalk-bot-status", handler);
         return () => electron.ipcRenderer.off("dingtalk-bot-status", handler);
     },
+    onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => {
+        const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; platform: string }) => {
+            cb(payload.assistantId, payload.platform);
+        };
+        electron.ipcRenderer.on("assistant-bot-owner-ids-changed", handler);
+        return () => electron.ipcRenderer.off("assistant-bot-owner-ids-changed", handler);
+    },
     // OpenAI Codex OAuth
     openaiLogin: () => 
         ipcInvoke("openai-login"),

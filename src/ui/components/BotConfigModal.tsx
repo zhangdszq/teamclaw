@@ -362,10 +362,36 @@ export function BotConfigModal({
     });
     unsubFeishuRef.current = unsubFs;
 
+    // Subscribe to auto-populated ownerUserIds/ownerStaffIds changes
+    const unsubOwner = window.electron.onAssistantBotOwnerIdsChanged((id, platform) => {
+      if (id !== assistantId) return;
+      // Re-fetch the latest assistant config from main process and update the form
+      window.electron.getAssistantsConfig().then((cfg: any) => {
+        const assistant = cfg?.assistants?.find((a: any) => a.id === assistantId);
+        if (!assistant?.bots) return;
+        const updatedBots = assistant.bots as Partial<Record<BotPlatformType, BotPlatformConfig>>;
+        setBots(updatedBots);
+        setForm((prev) => {
+          const updated = botsToForm(updatedBots);
+          // Only patch the changed platform field, keep user's other edits intact
+          if (platform === "telegram") {
+            return { ...prev, telegram: { ...prev.telegram, ownerUserIds: updated.telegram.ownerUserIds } };
+          }
+          if (platform === "dingtalk") {
+            return { ...prev, dingtalk: { ...prev.dingtalk, ownerStaffIds: updated.dingtalk.ownerStaffIds } };
+          }
+          return prev;
+        });
+        // Auto-expand advanced section for DingTalk if ownerStaffIds just got set
+        if (platform === "dingtalk") setDingtalkAdvanced(true);
+      });
+    });
+
     return () => {
       unsubTg();
       unsubDt();
       unsubFs();
+      unsubOwner();
       unsubTelegramRef.current = null;
       unsubRef.current = null;
       unsubFeishuRef.current = null;
@@ -604,10 +630,12 @@ export function BotConfigModal({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-900/20 backdrop-blur-sm" />
         <Dialog.Content
-          aria-describedby={undefined}
           className="fixed left-1/2 top-1/2 z-50 w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/5 bg-surface shadow-elevated flex flex-col overflow-hidden"
           style={{ height: "580px" }}
         >
+          <Dialog.Description className="sr-only">
+            配置并管理当前助手在各个 IM 平台的机器人连接参数与状态。
+          </Dialog.Description>
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-ink-900/6 flex-shrink-0">
             <div className="flex items-center gap-2.5">

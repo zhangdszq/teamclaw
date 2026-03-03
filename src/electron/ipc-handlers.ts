@@ -20,6 +20,7 @@ import { existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { loadScheduledTasks, runHookTasks } from './libs/scheduler.js';
 import { loadAssistantsConfig } from './libs/assistants-config.js';
+import { onHeartbeatResult } from './libs/heartbeat.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -107,7 +108,13 @@ function emit(event: ServerEvent) {
             ?.map((c: any) => String(c.text))
             ?.join('') ?? '';
 
-          if (text.length < 80 || text.includes('<no-action>')) {
+          const isNoAction = text.includes('<no-action>');
+          // Update adaptive interval streak counter
+          if (session?.assistantId) {
+            onHeartbeatResult(session.assistantId, isNoAction);
+          }
+
+          if (isNoAction) {
             sessions.updateSession(sessionId, { hidden: true });
             // Notify frontend to remove this session from its list
             broadcast({ type: 'session.deleted', payload: { sessionId } });

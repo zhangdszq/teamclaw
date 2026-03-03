@@ -55,16 +55,60 @@ const LEGEND_ITEMS = [
   { color: "#D97706", label: "Branch/Event" },
 ];
 
+const TOOL_OPTIONS: { value: string; group: string }[] = [
+  { value: "file_read",               group: "文件" },
+  { value: "file_write",              group: "文件" },
+  { value: "file_list",               group: "文件" },
+  { value: "web_fetch",               group: "网络" },
+  { value: "web_search",              group: "网络" },
+  { value: "shell_exec",              group: "命令行" },
+  { value: "memory_store",            group: "记忆" },
+  { value: "memory_recall",           group: "记忆" },
+  { value: "schedule_create",         group: "调度" },
+  { value: "schedule_list",           group: "调度" },
+  { value: "schedule_delete",         group: "调度" },
+  { value: "knowledge_add_entity",    group: "知识图谱" },
+  { value: "knowledge_add_relation",  group: "知识图谱" },
+  { value: "knowledge_query",         group: "知识图谱" },
+  { value: "event_publish",           group: "事件" },
+];
+
+const MCP_OPTIONS: { value: string; group: string }[] = [
+  { value: "dingtalk-ai-table",  group: "钉钉" },
+  { value: "dingtalk-contacts",  group: "钉钉" },
+  { value: "dingtalk-message",   group: "钉钉" },
+  { value: "feishu-doc",         group: "飞书" },
+  { value: "feishu-sheet",       group: "飞书" },
+  { value: "feishu-message",     group: "飞书" },
+  { value: "feishu-calendar",    group: "飞书" },
+  { value: "exa",                group: "搜索" },
+  { value: "github",             group: "开发" },
+  { value: "slack",              group: "协作" },
+  { value: "notion",             group: "协作" },
+  { value: "airtable",           group: "数据" },
+  { value: "google-calendar",    group: "Google" },
+  { value: "google-sheets",      group: "Google" },
+  { value: "google-docs",        group: "Google" },
+  { value: "jira",               group: "项目管理" },
+  { value: "linear",             group: "项目管理" },
+  { value: "asana",              group: "项目管理" },
+];
+
 // ═══ Custom Node Components ═══
 
-function StepNode({ data }: { data: { label: string; items: string[]; tools: string[]; color: string; bgColor: string } }) {
+function StepNode({ data, selected }: { data: { label: string; items: string[]; tools: string[]; mcp: string[]; color: string; bgColor: string }; selected?: boolean }) {
+  const hasSkills = data.tools.length > 0;
+  const hasMcp = data.mcp.length > 0;
+  const hasBadges = hasSkills || hasMcp;
   return (
     <div
-      className="rounded-xl px-4 py-3 min-w-[170px] max-w-[200px]"
+      className="rounded-xl px-4 py-3 min-w-[170px] max-w-[210px] cursor-pointer transition-shadow"
       style={{
-        border: `1.5px solid ${data.color}30`,
+        border: selected ? `2px solid ${data.color}` : `1.5px solid ${data.color}30`,
         backgroundColor: data.bgColor,
-        boxShadow: `0 2px 8px ${data.color}12`,
+        boxShadow: selected
+          ? `0 0 0 3px ${data.color}22, 0 4px 12px ${data.color}20`
+          : `0 2px 8px ${data.color}12`,
       }}
     >
       <Handle type="target" position={Position.Left} className="!bg-transparent !border-0 !w-3 !h-3" style={{ left: -6 }} />
@@ -72,25 +116,62 @@ function StepNode({ data }: { data: { label: string; items: string[]; tools: str
         <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: data.color }} />
         <span className="text-[12px] font-semibold" style={{ color: data.color }}>{data.label}</span>
       </div>
-      <div className="flex flex-col gap-1.5 mb-2.5">
+      <div className="flex flex-col gap-1.5" style={{ marginBottom: hasBadges ? "10px" : 0 }}>
         {data.items.map((item: string) => (
           <div key={item} className="flex items-center gap-1.5 text-[11px]" style={{ color: "#4A4A45" }}>
-            <span className="inline-block h-[3px] w-[3px] rounded-full" style={{ backgroundColor: `${data.color}80` }} />
+            <span className="inline-block h-[3px] w-[3px] rounded-full flex-shrink-0" style={{ backgroundColor: `${data.color}80` }} />
             {item}
           </div>
         ))}
       </div>
-      <div className="flex flex-wrap gap-1">
-        {data.tools.map((tool: string) => (
-          <span
-            key={tool}
-            className="rounded-md px-1.5 py-[2px] text-[9px] font-mono"
-            style={{ backgroundColor: `${data.color}15`, color: data.color }}
-          >
-            {tool}
-          </span>
-        ))}
-      </div>
+      {hasBadges && (
+        <div className="flex flex-col gap-1.5 pt-2" style={{ borderTop: `1px solid ${data.color}18` }}>
+          {hasSkills && (
+            <div>
+              <div className="flex items-center gap-1 mb-1">
+                <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: data.color }}>
+                  <path d="M9.5 2.5a2 2 0 0 0-3 1.7v.3L3 8a1 1 0 1 0 1.4 1.4L8 5.5h.3a2 2 0 0 0 1.7-3l-1.2 1.2-.8-.8 1.5-1.4z" />
+                </svg>
+                <span className="text-[8px] font-semibold tracking-wider uppercase" style={{ color: `${data.color}AA` }}>Skills</span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {data.tools.map((tool: string) => (
+                  <span
+                    key={tool}
+                    className="rounded-md px-1.5 py-[2px] text-[9px] font-mono"
+                    style={{ backgroundColor: `${data.color}15`, color: data.color }}
+                  >
+                    {tool}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {hasMcp && (
+            <div>
+              <div className="flex items-center gap-1 mb-1">
+                <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 flex-shrink-0 text-teal-600" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <circle cx="6" cy="6" r="2" />
+                  <path d="M6 1v2M6 9v2M1 6h2M9 6h2" />
+                  <path d="M2.9 2.9l1.4 1.4M7.7 7.7l1.4 1.4M7.7 4.3 9.1 2.9M2.9 9.1l1.4-1.4" />
+                </svg>
+                <span className="text-[8px] font-semibold tracking-wider uppercase text-teal-600">MCP</span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {data.mcp.map((m: string) => (
+                  <span
+                    key={m}
+                    className="rounded-md px-1.5 py-[2px] text-[9px] font-mono"
+                    style={{ backgroundColor: "#CCFBF180", color: "#0F766E" }}
+                  >
+                    {m}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       <Handle type="source" position={Position.Right} className="!bg-transparent !border-0 !w-3 !h-3" style={{ right: -6 }} />
     </div>
   );
@@ -181,7 +262,7 @@ function buildHandWorkflow(stages: HandStage[]): { nodes: Node[]; edges: Edge[] 
       id: stage.id,
       type: "step",
       position: { x: 270 * i, y: 80 },
-      data: { label: stage.label, items: items.slice(0, 4), tools: [], color, bgColor },
+      data: { label: stage.label, items: items.slice(0, 4), tools: stage.tools ?? [], mcp: stage.mcp ?? [], color, bgColor },
     };
   });
   const edges: Edge[] = stages.slice(1).map((stage, i) => ({
@@ -200,15 +281,15 @@ function buildLessonCycleData(): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [
     {
       id: "t-1", type: "step", position: { x: 0, y: 80 },
-      data: { label: "T-1 课前准备", items: ["发送课前资料", "飞书归档"], tools: ["web_fetch"], color: "#6366F1", bgColor: "#EEF2FF" },
+      data: { label: "T-1 课前准备", items: ["发送课前资料", "飞书归档"], tools: ["web_fetch", "file_write"], mcp: ["feishu-doc"], color: "#6366F1", bgColor: "#EEF2FF" },
     },
     {
       id: "t-0", type: "step", position: { x: 280, y: 80 },
-      data: { label: "T-0 上课提醒", items: ["群内提醒", "Zoom确认"], tools: ["schedule_create"], color: "#3B82F6", bgColor: "#EFF6FF" },
+      data: { label: "T-0 上课提醒", items: ["群内提醒", "Zoom确认"], tools: ["schedule_create"], mcp: [], color: "#3B82F6", bgColor: "#EFF6FF" },
     },
     {
       id: "t+0", type: "step", position: { x: 560, y: 80 },
-      data: { label: "T+0 课后触发", items: ["回放下载", "催收反馈"], tools: ["shell_exec"], color: "#0D9488", bgColor: "#F0FDFA" },
+      data: { label: "T+0 课后触发", items: ["回放下载", "催收反馈"], tools: ["shell_exec"], mcp: [], color: "#0D9488", bgColor: "#F0FDFA" },
     },
     {
       id: "decision", type: "decision", position: { x: 840, y: 82 },
@@ -220,7 +301,7 @@ function buildLessonCycleData(): { nodes: Node[]; edges: Edge[] } {
     },
     {
       id: "t+1", type: "step", position: { x: 1060, y: 240 },
-      data: { label: "T+1 反馈循环", items: ["反馈梳理发送", "视频双备份", "AI补位检查"], tools: ["memory_store", "web_search"], color: "#2C5F2F", bgColor: "#F0F7F0" },
+      data: { label: "T+1 反馈循环", items: ["反馈梳理发送", "视频双备份", "AI补位检查"], tools: ["memory_store", "web_search"], mcp: ["exa"], color: "#2C5F2F", bgColor: "#F0F7F0" },
     },
     {
       id: "end-skip", type: "end", position: { x: 1310, y: 62 },
@@ -264,19 +345,19 @@ function buildMonthlySettlementData(): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [
     {
       id: "stat", type: "step", position: { x: 0, y: 80 },
-      data: { label: "课时统计", items: ["查询当月授课记录", "统计外教/中教课时"], tools: ["knowledge_query"], color: "#6366F1", bgColor: "#EEF2FF" },
+      data: { label: "课时统计", items: ["查询当月授课记录", "统计外教/中教课时"], tools: ["knowledge_query"], mcp: [], color: "#6366F1", bgColor: "#EEF2FF" },
     },
     {
       id: "calc", type: "step", position: { x: 280, y: 80 },
-      data: { label: "费用核算", items: ["生成课时统计表", "写入钉钉多维表"], tools: ["dingtalk-ai-table"], color: "#3B82F6", bgColor: "#EFF6FF" },
+      data: { label: "费用核算", items: ["生成课时统计表", "写入钉钉多维表"], tools: [], mcp: ["dingtalk-ai-table"], color: "#3B82F6", bgColor: "#EFF6FF" },
     },
     {
       id: "report", type: "step", position: { x: 560, y: 80 },
-      data: { label: "月度报告", items: ["汇总反馈记录", "生成学习报告", "归档飞书文档"], tools: ["memory_recall", "file_write"], color: "#2C5F2F", bgColor: "#F0F7F0" },
+      data: { label: "月度报告", items: ["汇总反馈记录", "生成学习报告", "归档飞书文档"], tools: ["memory_recall", "file_write"], mcp: ["feishu-doc"], color: "#2C5F2F", bgColor: "#F0F7F0" },
     },
     {
       id: "notify", type: "step", position: { x: 860, y: 80 },
-      data: { label: "通知发送", items: ["通知教师管理团队", "发送家校报告"], tools: ["event_publish"], color: "#D97706", bgColor: "#FFFBEB" },
+      data: { label: "通知发送", items: ["通知教师管理团队", "发送家校报告"], tools: ["event_publish"], mcp: ["dingtalk-contacts"], color: "#D97706", bgColor: "#FFFBEB" },
     },
   ];
 
@@ -303,7 +384,10 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
   const [selectedSopId, setSelectedSopId] = useState<string>("vvip-educare");
   const [sopList, setSopList] = useState<SopItem[]>(FALLBACK_SOP_LIST);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [nodeOverrides, setNodeOverrides] = useState<Record<string, { tools: string[]; mcp: string[] }>>({});
   const loadedRef = useRef(false);
+  const sopButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   // Load SOP list from HAND.toml files
   useEffect(() => {
@@ -342,6 +426,47 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
   }, [selectedSop, activeWorkflowTab, lessonData, monthlyData]);
 
   const hasHandStages = Boolean(selectedSop?.stages && selectedSop.stages.length > 0);
+
+  // Clear overrides and selection when switching SOP or tab
+  useEffect(() => {
+    setSelectedNodeId(null);
+    setNodeOverrides({});
+    // Scroll the newly selected item into view
+    sopButtonRefs.current[selectedSopId]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [selectedSopId, activeWorkflowTab]);
+
+  const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    if (node.type === "step") {
+      setSelectedNodeId((prev) => (prev === node.id ? null : node.id));
+    }
+  }, []);
+
+  const handlePaneClick = useCallback(() => {
+    setSelectedNodeId(null);
+  }, []);
+
+  const handleNodeEdit = useCallback(
+    (nodeId: string, tools: string[], mcp: string[]) => {
+      setNodeOverrides((prev) => ({ ...prev, [nodeId]: { tools, mcp } }));
+    },
+    [],
+  );
+
+  // Merge overrides into flow nodes
+  const flowNodes = useMemo(
+    () =>
+      flowData.nodes.map((node) => {
+        const ov = nodeOverrides[node.id];
+        if (!ov) return node;
+        return { ...node, data: { ...node.data, ...ov } };
+      }),
+    [flowData.nodes, nodeOverrides],
+  );
+
+  const selectedNode = selectedNodeId ? flowNodes.find((n) => n.id === selectedNodeId) : null;
+  const selectedNodeData = selectedNode?.data as
+    | { label: string; items: string[]; tools: string[]; mcp: string[]; color: string; bgColor: string }
+    | undefined;
 
   const onNodesChange = useCallback(() => {}, []);
 
@@ -415,6 +540,7 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
               return (
                 <button
                   key={sop.id}
+                  ref={(el) => { sopButtonRefs.current[sop.id] = el; }}
                   onClick={() => setSelectedSopId(sop.id)}
                   className={`w-full text-left px-3 py-2.5 mx-1 rounded-xl transition-all mb-0.5 group ${
                     isSelected
@@ -508,13 +634,15 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
           </div>
 
           {/* React Flow Canvas */}
-          <div className="flex-1" style={{ minHeight: 0 }}>
+          <div className="flex-1 relative" style={{ minHeight: 0 }}>
             <ReactFlow
               key={`${selectedSopId}-${hasHandStages ? "hand" : activeWorkflowTab}`}
-              nodes={flowData.nodes}
+              nodes={flowNodes}
               edges={flowData.edges}
               nodeTypes={nodeTypes}
               onNodesChange={onNodesChange}
+              onNodeClick={handleNodeClick}
+              onPaneClick={handlePaneClick}
               fitView
               fitViewOptions={{ padding: 0.3 }}
               proOptions={{ hideAttribution: true }}
@@ -527,7 +655,7 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
               maxZoom={2}
               nodesDraggable={false}
               nodesConnectable={false}
-              elementsSelectable={false}
+              elementsSelectable
             >
               <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#D1D1CC" />
               <MiniMap
@@ -541,6 +669,19 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
                 style={{ border: "1px solid #E5E4DF", borderRadius: 8, background: "#FFFFFF", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}
               />
             </ReactFlow>
+
+            {/* Node edit side panel */}
+            {selectedNodeId && selectedNodeData && (
+              <NodeEditPanel
+                label={selectedNodeData.label}
+                color={selectedNodeData.color}
+                tools={selectedNodeData.tools}
+                mcp={selectedNodeData.mcp}
+                onClose={() => setSelectedNodeId(null)}
+                onChangeTools={(tools) => handleNodeEdit(selectedNodeId, tools, selectedNodeData.mcp)}
+                onChangeMcp={(mcp) => handleNodeEdit(selectedNodeId, selectedNodeData.tools, mcp)}
+              />
+            )}
           </div>
         </div>
         {/* End Right Canvas */}
@@ -557,21 +698,252 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
               id: result.id,
               name: result.name,
               description: result.description,
-              status: "draft",
+              status: "active",
               assistant: "默认助理",
               workflowCount: result.workflowCount,
               icon: result.icon,
               stages: result.stages,
             };
-            setSopList((prev) => {
-              const filtered = prev.filter((s) => s.id !== result.id);
-              return [...filtered, newItem];
-            });
+            // Prepend so the new SOP appears at the top of the list
+            setSopList((prev) => [newItem, ...prev.filter((s) => s.id !== result.id)]);
             setSelectedSopId(result.id);
             setShowCreateModal(false);
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ═══ Tag Editor (reusable picker for Skills / MCP) ═══
+
+function TagEditor({
+  label,
+  icon,
+  items,
+  options,
+  badgeStyle,
+  onChange,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  items: string[];
+  options: { value: string; group: string }[];
+  badgeStyle: { backgroundColor: string; color: string };
+  onChange: (items: string[]) => void;
+}) {
+  const [showPicker, setShowPicker] = useState(false);
+  const [customInput, setCustomInput] = useState("");
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showPicker) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target;
+      if (!(target instanceof Node)) return;
+      if (pickerRef.current && !pickerRef.current.contains(target)) {
+        setShowPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showPicker]);
+
+  const available = options.filter((o) => !items.includes(o.value));
+  const groups = available.reduce<Record<string, string[]>>((acc, opt) => {
+    (acc[opt.group] ??= []).push(opt.value);
+    return acc;
+  }, {});
+
+  const addItem = (val: string) => {
+    if (!items.includes(val)) onChange([...items, val]);
+  };
+  const removeItem = (val: string) => onChange(items.filter((i) => i !== val));
+  const addCustom = () => {
+    const v = customInput.trim();
+    if (v) { addItem(v); setCustomInput(""); }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5">
+          {icon}
+          <span className="text-[11px] font-semibold text-ink-600">{label}</span>
+          <span className="text-[10px] text-muted bg-ink-900/5 rounded-full px-1.5 py-px">{items.length}</span>
+        </div>
+        <button
+          onClick={() => setShowPicker((v) => !v)}
+          className="flex items-center gap-1 text-[10px] text-accent hover:text-accent-hover px-2 py-0.5 rounded-lg hover:bg-accent/8 transition-colors"
+        >
+          <svg viewBox="0 0 14 14" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M7 2v10M2 7h10" />
+          </svg>
+          添加
+        </button>
+      </div>
+
+      {/* Current items */}
+      <div className="flex flex-wrap gap-1.5 min-h-[22px] mb-1.5">
+        {items.map((item) => (
+          <span
+            key={item}
+            className="group flex items-center gap-1 rounded-md pl-2 pr-1 py-[3px] text-[9px] font-mono leading-none"
+            style={badgeStyle}
+          >
+            {item}
+            <button
+              onClick={() => removeItem(item)}
+              className="opacity-40 group-hover:opacity-100 rounded hover:bg-red-100 hover:text-red-600 p-px transition-all"
+            >
+              <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M2 2l6 6M8 2l-6 6" />
+              </svg>
+            </button>
+          </span>
+        ))}
+        {items.length === 0 && (
+          <span className="text-[10px] text-muted/60 italic">暂未配置</span>
+        )}
+      </div>
+
+      {/* Picker dropdown */}
+      {showPicker && (
+        <div
+          ref={pickerRef}
+          className="mt-1 rounded-xl border border-ink-900/10 bg-surface shadow-lg overflow-hidden"
+          style={{ maxHeight: 220, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.15) transparent" }}
+        >
+          {Object.entries(groups).map(([group, opts]) => (
+            <div key={group}>
+              <div className="px-3 py-1 text-[8px] font-semibold text-muted/70 bg-surface-secondary uppercase tracking-wider sticky top-0">
+                {group}
+              </div>
+              {opts.map((opt) => (
+                <button
+                  key={opt}
+                  onClick={() => { addItem(opt); setShowPicker(false); }}
+                  className="w-full text-left px-3 py-1.5 text-[10px] font-mono text-ink-700 hover:bg-surface-secondary transition-colors"
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          ))}
+          {available.length === 0 && (
+            <div className="px-3 py-2 text-[10px] text-muted italic">所有选项已添加</div>
+          )}
+          <div className="flex items-center gap-2 border-t border-ink-900/8 px-3 py-2 bg-surface sticky bottom-0">
+            <input
+              value={customInput}
+              onChange={(e) => setCustomInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { addCustom(); setShowPicker(false); } }}
+              placeholder="自定义名称…"
+              className="flex-1 text-[10px] font-mono bg-transparent outline-none text-ink-700 placeholder:text-muted/40"
+            />
+            <button
+              onClick={() => { addCustom(); setShowPicker(false); }}
+              disabled={!customInput.trim()}
+              className="text-[10px] text-accent hover:text-accent-hover disabled:opacity-30 transition-colors"
+            >
+              ↵
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══ Node Edit Panel ═══
+
+function NodeEditPanel({
+  label,
+  color,
+  tools,
+  mcp,
+  onClose,
+  onChangeTools,
+  onChangeMcp,
+}: {
+  label: string;
+  color: string;
+  tools: string[];
+  mcp: string[];
+  onClose: () => void;
+  onChangeTools: (tools: string[]) => void;
+  onChangeMcp: (mcp: string[]) => void;
+}) {
+  return (
+    <div
+      className="absolute right-0 top-0 bottom-0 w-[260px] flex flex-col bg-surface border-l border-ink-900/10 shadow-2xl z-10"
+      style={{ borderTopRightRadius: "1rem", borderBottomRightRadius: "1rem" }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-ink-900/8 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+          <span className="text-[13px] font-semibold text-ink-800 truncate">{label}</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-muted hover:text-ink-700 p-1 rounded-lg hover:bg-ink-900/5 transition-colors"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Hint */}
+      <div className="px-4 pt-3 pb-0">
+        <p className="text-[10px] text-muted/70 leading-relaxed">
+          点击「添加」从列表中选择，或输入自定义名称。改动实时更新节点显示。
+        </p>
+      </div>
+
+      {/* Body */}
+      <div
+        className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-5"
+        style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.12) transparent" }}
+      >
+        {/* Skills */}
+        <TagEditor
+          label="Skills"
+          icon={
+            <svg viewBox="0 0 14 14" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color }}>
+              <path d="M11 3a2.5 2.5 0 0 0-3.5 2.2v.3L3.5 9.5a1.2 1.2 0 1 0 1.7 1.7L9.5 7h.3A2.5 2.5 0 0 0 12 3.5l-1.5 1.5-1-1 1.5-1z" />
+            </svg>
+          }
+          items={tools}
+          options={TOOL_OPTIONS}
+          badgeStyle={{ backgroundColor: `${color}18`, color }}
+          onChange={onChangeTools}
+        />
+
+        <div className="border-t border-ink-900/6" />
+
+        {/* MCP */}
+        <TagEditor
+          label="MCP"
+          icon={
+            <svg viewBox="0 0 14 14" className="h-3.5 w-3.5 shrink-0 text-teal-600" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="7" cy="7" r="2.5" />
+              <path d="M7 1v2.5M7 10.5V13M1 7h2.5M10.5 7H13" />
+              <path d="M3.4 3.4l1.8 1.8M8.8 8.8l1.8 1.8M8.8 5.2l1.8-1.8M3.4 10.6l1.8-1.8" />
+            </svg>
+          }
+          items={mcp}
+          options={MCP_OPTIONS}
+          badgeStyle={{ backgroundColor: "#CCFBF180", color: "#0F766E" }}
+          onChange={onChangeMcp}
+        />
+      </div>
+
+      {/* Footer */}
+      <div className="px-4 py-2.5 border-t border-ink-900/6 shrink-0">
+        <p className="text-[9px] text-muted/50 text-center">更改实时生效 · 重新加载 SOP 后重置</p>
+      </div>
     </div>
   );
 }

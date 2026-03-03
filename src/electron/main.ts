@@ -12,7 +12,7 @@ setTelegramSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
-import { loadAssistantsConfig, saveAssistantsConfig, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
+import { loadAssistantsConfig, saveAssistantsConfig, assistantConfigEvents, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
 import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type TelegramBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
@@ -576,6 +576,16 @@ app.on("ready", async () => {
 
     // Auto-connect all bots that were previously connected
     autoConnectBots(mainWindow);
+
+    // Broadcast assistant config changes (e.g. auto-populated ownerUserIds/ownerStaffIds) to renderer
+    assistantConfigEvents.on("bot-owner-ids-changed", (payload: { assistantId: string; platform: string }) => {
+        const wins = BrowserWindow.getAllWindows();
+        for (const win of wins) {
+            if (!win.isDestroyed()) {
+                win.webContents.send("assistant-bot-owner-ids-changed", payload);
+            }
+        }
+    });
 
     ipcMainHandle("getStaticData", () => {
         return getStaticData();

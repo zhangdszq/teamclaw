@@ -680,6 +680,7 @@ interface Window {
         stopFeishuBot: (assistantId: string) => Promise<void>;
         getFeishuBotStatus: (assistantId: string) => Promise<FeishuBotStatusResult>;
         onFeishuBotStatus: (cb: (assistantId: string, status: FeishuBotStatus, detail?: string) => void) => UnsubscribeFunction;
+        onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => UnsubscribeFunction;
         // OpenAI Codex OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;

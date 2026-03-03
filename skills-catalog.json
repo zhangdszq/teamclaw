@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updatedAt": "2026-02-27",
+  "updatedAt": "2026-03-03",
   "skills": [
     {
       "name": "teaching-outline-writer",
@@ -457,6 +457,22 @@
       "category": "productivity",
       "installPath": "",
       "tags": ["chinese", "skills", "anthropic", "translation"]
+    },
+    {
+      "name": "hr-resume-screener",
+      "label": "HR 简历筛选评分",
+      "description": "HR 简历批量筛选与评分工具。读取一份或多份 PDF 简历，提取候选人核心信息，按 100 分制对工作背景/技术能力/项目成果/团队管理/岗位适配五个维度打分，并结合 JD 输出适配建议。",
+      "category": "productivity",
+      "installPath": "https://github.com/zhangdszq/vk-skills/blob/main/hr-resume-screener.skill",
+      "tags": ["hr", "resume", "screening", "pdf", "scoring", "recruiting"]
+    },
+    {
+      "name": "minimax-tts",
+      "label": "MiniMax 语音合成",
+      "description": "使用 MiniMax API 将文本转换为语音并自动播放。支持多种音色、语速调节、情绪控制，以及 speech-2.8 模型专属的语气词标签（笑声、叹气、换气等），生成后直接调用系统播放器播放。",
+      "category": "productivity",
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/minimax-tts",
+      "tags": ["tts", "speech", "audio", "minimax", "voice", "text-to-speech"]
     },
     {
       "name": "vipkid-ops",

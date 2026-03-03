@@ -6,6 +6,7 @@ import {
   Controls,
   type Node,
   type Edge,
+  type EdgeMarker,
   type NodeTypes,
   Handle,
   Position,
@@ -138,7 +139,7 @@ const nodeTypes: NodeTypes = {
 };
 
 const EDGE_STYLE: CSSProperties = { strokeWidth: 1.5 };
-const EDGE_MARKER: Edge["markerEnd"] = { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#9B9B96" };
+const EDGE_MARKER: EdgeMarker = { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#9B9B96" };
 
 // ═══ Flow Data Builders ═══
 

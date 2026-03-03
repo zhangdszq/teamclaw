@@ -7,7 +7,7 @@ interface SettingsModalProps {
   onShowSplash?: () => void;
 }
 
-type SectionId = "personalize" | "api" | "proxy" | "openai" | "google" | "memory" | "shortcut" | "debug";
+type SectionId = "personalize" | "api" | "proxy" | "openai" | "google" | "memory" | "shortcut" | "alert" | "debug";
 
 interface NavItem {
   id: SectionId;
@@ -87,6 +87,16 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    id: "alert",
+    label: "告警",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      </svg>
+    ),
+  },
+  {
     id: "debug",
     label: "调试",
     icon: (
@@ -141,6 +151,12 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
   const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
   const [shortcutSaved, setShortcutSaved] = useState(false);
 
+  // Alert settings
+  const [alertWebhook, setAlertWebhook] = useState("");
+  const [alertSecret, setAlertSecret] = useState("");
+  const [showAlertSecret, setShowAlertSecret] = useState(false);
+  const [alertTestResult, setAlertTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+
   // UI state
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -191,8 +207,11 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
         setModelName(settings.anthropicModel ?? "claude-opus-4-6-thinking");
         setProxyEnabled(settings.proxyEnabled ?? false);
         setProxyUrl(settings.proxyUrl ?? "");
+        setAlertWebhook(settings.alertDingtalkWebhook ?? "");
+        setAlertSecret(settings.alertDingtalkSecret ?? "");
         setSaved(false);
         setValidationError(null);
+        setAlertTestResult(null);
       });
       window.electron.getAssistantsConfig().then((config) => {
         setUserContext(config.userContext ?? "");
@@ -257,6 +276,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
           userName: userName.trim(),
           workDescription: workDescription.trim(),
           globalPrompt: globalPrompt.trim(),
+          alertDingtalkWebhook: alertWebhook.trim() || undefined,
+          alertDingtalkSecret: alertSecret.trim() || undefined,
         });
         if (activeSection === "personalize") {
           const assistantsConfig = await window.electron.getAssistantsConfig();
@@ -268,6 +289,19 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+
+      if (activeSection === "alert" && alertWebhook.trim()) {
+        setAlertTestResult(null);
+        try {
+          const result = await window.electron.testAlertWebhook(
+            alertWebhook.trim(),
+            alertSecret.trim() || undefined,
+          );
+          setAlertTestResult(result);
+        } catch {
+          setAlertTestResult({ ok: false, error: "测试请求发送失败" });
+        }
+      }
     } catch (error) {
       console.error("Failed to save settings:", error);
       setValidationError("保存设置失败");
@@ -288,7 +322,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
 
   const hasApiChanges = baseUrl.trim() !== "" || authToken.trim() !== "";
   const hasProxyChanges = proxyEnabled || proxyUrl.trim() !== "";
-  const showSaveButton = activeSection === "personalize" || activeSection === "api" || activeSection === "proxy" || activeSection === "shortcut";
+  const showSaveButton = activeSection === "personalize" || activeSection === "api" || activeSection === "proxy" || activeSection === "shortcut" || activeSection === "alert";
 
   const currentNavItem = NAV_ITEMS.find((item) => item.id === activeSection);
 
@@ -973,6 +1007,106 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                       修改后请点击"保存配置"生效。
                     </p>
                   </div>
+                </div>
+              )}
+
+              {/* Alert Settings */}
+              {activeSection === "alert" && (
+                <div className="grid gap-4">
+                  <p className="text-[13px] text-muted">配置崩溃告警，严重错误发生时自动发送到钉钉群</p>
+
+                  <label className="grid gap-1.5">
+                    <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">Webhook 地址</span>
+                    <input
+                      type="url"
+                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                      placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
+                      value={alertWebhook}
+                      onChange={(e) => setAlertWebhook(e.target.value)}
+                    />
+                    <span className="text-[11px] text-muted-light">
+                      钉钉群 → 群设置 → 机器人 → 添加自定义机器人 → 复制 Webhook 地址
+                    </span>
+                  </label>
+
+                  <label className="grid gap-1.5">
+                    <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">
+                      签名密钥 <span className="normal-case text-muted-light font-normal">（可选）</span>
+                    </span>
+                    <div className="relative">
+                      <input
+                        type={showAlertSecret ? "text" : "password"}
+                        className="w-full rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 pr-12 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
+                        onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                        onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                        placeholder="SEC..."
+                        value={alertSecret}
+                        onChange={(e) => setAlertSecret(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowAlertSecret(!showAlertSecret)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1 text-muted hover:text-ink-700 transition-colors"
+                        aria-label={showAlertSecret ? "Hide secret" : "Show secret"}
+                      >
+                        {showAlertSecret ? (
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                            <line x1="1" y1="1" x2="23" y2="23" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                    <span className="text-[11px] text-muted-light">
+                      若机器人开启了「加签」安全设置，填入 SEC 开头的密钥；否则留空
+                    </span>
+                  </label>
+
+                  {alertWebhook.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => { setAlertWebhook(""); setAlertSecret(""); }}
+                      className="text-left text-xs text-muted hover:text-error transition-colors"
+                    >
+                      清除告警配置
+                    </button>
+                  )}
+
+                  <div className="rounded-xl border border-info/20 bg-info/5 p-3">
+                    <p className="text-xs text-info leading-relaxed">
+                      <strong>说明：</strong>配置后，应用崩溃（uncaughtException / unhandledRejection）时会自动向该钉钉群发送 Markdown 告警消息，包含错误类型、时间、用户信息和堆栈。告警为异步操作，不影响应用运行。保存配置时会自动发送一条测试消息验证连通性。
+                    </p>
+                  </div>
+
+                  {alertTestResult && (
+                    <div className={`rounded-xl border p-3 ${alertTestResult.ok ? "border-success/20 bg-success/5" : "border-error/20 bg-error/5"}`}>
+                      <p className={`text-xs flex items-start gap-2 ${alertTestResult.ok ? "text-success" : "text-error"}`}>
+                        {alertTestResult.ok ? (
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M5 12l4 4L19 6" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="15" y1="9" x2="9" y2="15" />
+                            <line x1="9" y1="9" x2="15" y2="15" />
+                          </svg>
+                        )}
+                        <span>
+                          {alertTestResult.ok
+                            ? "测试消息发送成功，请检查钉钉群"
+                            : `测试发送失败：${alertTestResult.error}`}
+                        </span>
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 

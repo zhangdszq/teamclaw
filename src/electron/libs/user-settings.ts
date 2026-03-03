@@ -44,6 +44,10 @@ export interface UserSettings {
   googleUser?: GoogleUser;
   // Whether the splash screen has been seen (set true after first launch)
   splashSeen?: boolean;
+  // DingTalk group alert webhook (custom robot)
+  alertDingtalkWebhook?: string;
+  // Optional signing secret for the DingTalk custom robot
+  alertDingtalkSecret?: string;
 }
 
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");

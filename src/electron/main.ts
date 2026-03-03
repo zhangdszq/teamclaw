@@ -1,3 +1,4 @@
+import { sendTestDingtalkAlert } from "./libs/app-logger.js";
 import { app, BrowserWindow, ipcMain, dialog, shell, protocol, globalShortcut, screen, Tray, Menu, nativeImage } from "electron"
 import fs from "fs"
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
@@ -323,12 +324,18 @@ app.on("ready", async () => {
     let mainWindow = createMainWindow();
 
     // ─── System tray ─────────────────────────────────────────────────
-    // 88x44px @2x = 44x22pt on Retina; not template — preserves white pill background
     try {
-        const trayIcon = nativeImage.createFromBuffer(
-            fs.readFileSync(getTrayIconPath()),
-            { scaleFactor: 2.0 }
-        );
+        let trayIcon: Electron.NativeImage;
+        if (process.platform === "win32") {
+            // Windows tray needs a square icon (16x16 logical); resize app-icon @2x = 32x32 raw
+            trayIcon = nativeImage.createFromPath(getIconPath()).resize({ width: 32, height: 32 });
+        } else {
+            // macOS: pill-shaped template icon, 120x44 raw = 60x22pt @2x Retina
+            trayIcon = nativeImage.createFromBuffer(
+                fs.readFileSync(getTrayIconPath()),
+                { scaleFactor: 2.0 }
+            );
+        }
         const tray = new Tray(trayIcon);
         tray.setToolTip("VK Cowork");
         tray.on("click", () => {
@@ -654,6 +661,21 @@ app.on("ready", async () => {
         saveUserSettings(merged);
         reloadClaudeSettings();
         return true;
+    });
+
+    ipcMainHandle("test-alert-webhook", async (_: any, input: { webhookUrl: string; secret?: string }) => {
+        try {
+            const settings = loadUserSettings();
+            return await sendTestDingtalkAlert(input.webhookUrl, input.secret, {
+                userName: settings.userName,
+                workDescription: settings.workDescription,
+                email: settings.googleUser?.email,
+            });
+        } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            console.error("[test-alert-webhook] unexpected error:", error);
+            return { ok: false, error };
+        }
     });
 
     ipcMainHandle("get-assistants-config", () => {
@@ -1517,6 +1539,8 @@ app.on("ready", async () => {
         label: string;
         goal: string;
         items: string[];
+        tools: string[];
+        mcp: string[];
     }
 
     interface HandSopResult {
@@ -1528,9 +1552,20 @@ app.on("ready", async () => {
         workflowCount: number;
     }
 
+    /**
+     * Auto-fix common LLM TOML mistakes before parsing:
+     * - [settings] → [[settings]]  (LLM forgets double brackets for array-of-tables)
+     * - [requires] → [[requires]]
+     */
+    function fixTomlArrayTables(raw: string): string {
+        return raw
+            .replace(/^\[settings\]$/gm, "[[settings]]")
+            .replace(/^\[requires\]$/gm, "[[requires]]");
+    }
+
     function parseHandTomlFile(tomlPath: string): HandSopResult | null {
         try {
-            const raw = readFileSync(tomlPath, "utf8");
+            const raw = fixTomlArrayTables(readFileSync(tomlPath, "utf8"));
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const data = parseToml(raw) as Record<string, any>;
 
@@ -1540,7 +1575,10 @@ app.on("ready", async () => {
             const icon = String(data.icon ?? "📋");
 
             const systemPrompt: string = String(data.agent?.system_prompt ?? "");
-            const stages = extractHandStages(systemPrompt);
+            const globalMcps: string[] = Array.isArray(data.mcp_servers)
+                ? data.mcp_servers.map(String)
+                : [];
+            const stages = extractHandStages(systemPrompt, globalMcps);
 
             return { id, name, description, icon, stages, workflowCount: stages.length };
         } catch (err) {
@@ -1549,8 +1587,46 @@ app.on("ready", async () => {
         }
     }
 
-    function extractHandStages(systemPrompt: string): HandStage[] {
-        const stageRegex = /═══\s*(第\d+阶段[^═]*?)\s*═══([\s\S]*?)(?=═══|$)/g;
+    // All known tool names that can appear in system_prompt
+    const KNOWN_TOOLS = [
+        "file_read", "file_write", "file_list",
+        "web_fetch", "web_search",
+        "shell_exec",
+        "memory_store", "memory_recall",
+        "schedule_create", "schedule_list", "schedule_delete",
+        "knowledge_add_entity", "knowledge_add_relation", "knowledge_query",
+        "event_publish",
+    ];
+
+    // Common MCP server names
+    const KNOWN_MCPS = [
+        "dingtalk-ai-table", "dingtalk-contacts", "dingtalk-message",
+        "feishu-doc", "feishu-sheet", "feishu-message", "feishu-calendar",
+        "exa", "github", "slack", "notion", "airtable",
+        "google-calendar", "google-sheets", "google-docs",
+        "jira", "confluence", "linear", "asana",
+        "stripe", "twilio", "sendgrid",
+    ];
+
+    function extractTaggedItems(body: string, annotationKey: string, knownList: string[]): string[] {
+        const found = new Set<string>();
+        const annotationMatch = body.match(new RegExp(`【${annotationKey}】([^\\n]+)`));
+        if (annotationMatch) {
+            const line = annotationMatch[1];
+            for (const item of knownList) {
+                if (line.includes(item)) found.add(item);
+            }
+            if (found.size > 0) return [...found].slice(0, 4);
+        }
+        // Fallback: scan body text for known names
+        for (const item of knownList) {
+            if (body.includes(item)) found.add(item);
+        }
+        return [...found].slice(0, 3);
+    }
+
+    function extractHandStages(systemPrompt: string, globalMcps: string[] = []): HandStage[] {
+        const stageRegex = /═══\s*(第[^═]*?阶段[^═]*?)\s*═══([\s\S]*?)(?=═══|$)/g;
         const stages: HandStage[] = [];
         let match: RegExpExecArray | null;
 
@@ -1561,17 +1637,31 @@ app.on("ready", async () => {
             const goalMatch = body.match(/^目标[：:]\s*(.+)/m);
             const goal = goalMatch ? goalMatch[1].trim() : "";
 
-            // Extract up to 4 numbered action items
             const itemMatches = [...body.matchAll(/^\d+\.\s+(.+)/mg)];
             const items = itemMatches.slice(0, 4).map((m) => m[1].trim());
+
+            const tools = extractTaggedItems(body, "本阶段工具", KNOWN_TOOLS);
+            const mcp = extractTaggedItems(body, "本阶段MCP", KNOWN_MCPS);
 
             stages.push({
                 id: `stage_${stages.length + 1}`,
                 label,
                 goal,
                 items,
+                tools,
+                mcp,
             });
         }
+
+        // If no stage had any MCP annotations, distribute globalMcps evenly
+        const anyMcp = stages.some((s) => s.mcp.length > 0);
+        if (!anyMcp && globalMcps.length > 0 && stages.length > 0) {
+            stages.forEach((stage, i) => {
+                // Round-robin: assign each global MCP to the most relevant stage index
+                stage.mcp = globalMcps.filter((_, idx) => idx % stages.length === i).slice(0, 3);
+            });
+        }
+
         return stages;
     }
 
@@ -1598,28 +1688,118 @@ app.on("ready", async () => {
         mkdirSync(tmpDir, { recursive: true });
         const targetPath = join(tmpDir, "HAND.toml");
 
-        // Use vvip-educare as a few-shot reference (trimmed to keep prompt short)
+        // Use full vvip-educare as few-shot reference
         const examplePath = join(HANDS_DIR, "vvip-educare", "HAND.toml");
-        const exampleSnippet = existsSync(examplePath)
-            ? readFileSync(examplePath, "utf8").slice(0, 3000)
+        const exampleFull = existsSync(examplePath)
+            ? readFileSync(examplePath, "utf8")
             : "";
 
         const prompt = `你是一个专业的 SOP（标准操作流程）设计师。
-请根据下面的用户描述，生成一份完整的 HAND.toml 文件，并直接写入路径：${targetPath}
+请根据用户描述，生成一份和参考示例结构完全一致的 HAND.toml 文件，写入路径：${targetPath}
 
-HAND.toml 格式参考（截取自真实示例）：
+━━━ 参考示例（完整文件，请完全对照此格式）━━━
 \`\`\`toml
-${exampleSnippet}
+${exampleFull}
+\`\`\`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 必须包含的章节（缺一不可）
+
+### 1. 顶部元数据
+\`\`\`
+id = "xxx-yyy"           # 小写英文 + 连字符
+name = "..."             # 完整名称
+description = "..."      # 一句话描述
+category = "..."         # communication / finance / hr / operations / content
+icon = "..."             # emoji
 \`\`\`
 
-生成要求：
-1. 必须包含 id、name、description、icon、tools、[agent] 及 system_prompt 字段
-2. system_prompt 按 ═══ 第X阶段：阶段名称 ═══ 格式划分 3-6 个阶段
-3. 每个阶段以"目标：xxx"开头，后跟编号步骤（1. 2. 3. ...）
-4. id 使用小写英文加连字符，如 "client-followup"
-5. 完成后使用 Write 工具将文件内容写入 ${targetPath}，不要输出到终端
+### 2. tools 数组
+根据 SOP 实际需要，从以下工具中选择合适的：
+- 文件操作：file_read, file_write, file_list
+- 网络：web_fetch, web_search
+- 命令行：shell_exec（适用于需要运行脚本、调用 API 的场景）
+- 记忆：memory_store, memory_recall
+- 调度：schedule_create, schedule_list, schedule_delete
+- 知识图谱：knowledge_add_entity, knowledge_add_relation, knowledge_query
+- 事件：event_publish
 
-用户描述：${description}`;
+### 3. mcp_servers 数组
+根据业务需要选择相关 MCP 服务，如 dingtalk-ai-table、feishu-doc、exa 等。
+若不需要外部 MCP 则写 mcp_servers = []
+
+### 4. [[requires]] 前置依赖
+列出所有需要的 API Key / 账号凭证。每个依赖包含：
+- key、label、requirement_type、check_value、description
+- [requires.install] 子节：signup_url、docs_url、env_example、estimated_time、steps
+
+⚠️ TOML 格式：[[requires]] 必须用双方括号，[requires] 单方括号会报错
+
+### 5. [[settings]] 用户配置项
+列出所有运行时可配置的参数，如负责人姓名、频率、通知渠道等。
+每个 setting 包含：key、label、description、setting_type（text/select/number/boolean）、default
+select 类型需有 [[settings.options]] 子节
+
+⚠️ TOML 格式严格要求：
+- 所有 settings 条目必须使用 [[settings]]（双方括号，数组表）
+- 绝对不能用 [settings]（单方括号），否则 TOML 解析会报错
+- 正确示例：
+  [[settings]]
+  key = "owner_name"
+  label = "负责人姓名"
+  [[settings]]
+  key = "notify_channel"
+  [[settings.options]]
+  value = "dingtalk"
+
+### 6. [agent] 配置
+\`\`\`toml
+[agent]
+name = "..."
+description = "..."
+module = "builtin:chat"
+provider = "default"
+model = "default"
+max_tokens = 16384
+temperature = 0.4
+max_iterations = 60
+system_prompt = """
+（多行 SOP 操作手册，必须包含以下结构）
+
+═══ 第一阶段：阶段名称 ═══
+目标：本阶段目标描述
+
+1. 步骤一（调用 tool_name 完成…）
+2. 步骤二（使用 memory_store 记录…）
+...
+【本阶段工具】file_read、memory_store（从 tools 数组中选取本阶段实际用到的，英文原始名）
+【本阶段MCP】feishu-doc、dingtalk-ai-table（从 mcp_servers 数组中选取本阶段用到的，不用可省略）
+
+═══ 第二阶段：阶段名称 ═══
+目标：...
+1. ...
+【本阶段工具】web_search、event_publish
+【本阶段MCP】exa
+...（共 3-6 个阶段，每个阶段末尾必须有【本阶段工具】，如有用到 MCP 也加【本阶段MCP】）
+
+═══ 异常处理 ═══
+| 异常场景 | 自动响应 |
+|---       |---       |
+| ...      | ...      |
+
+═══ 安全约束 ═══
+1. ...
+"""
+\`\`\`
+
+### 7. [dashboard] + [[dashboard.metrics]]
+列出 4-8 个关键监控指标，每个包含：label、memory_key（snake_case）、format（number/percentage/text）
+
+## 写入指令
+使用 Write 工具将完整 HAND.toml 写入：${targetPath}
+
+## 用户描述
+${description}`;
 
         const abortController = new AbortController();
         // App-configured key takes precedence over ~/.claude/settings.json
@@ -1653,6 +1833,14 @@ ${exampleSnippet}
             // Clean up empty temp dir
             try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
             throw new Error("Agent 未生成 HAND.toml，请检查 Claude 配置后重试");
+        }
+
+        // Auto-fix common LLM TOML mistakes and overwrite the file
+        const rawContent = readFileSync(targetPath, "utf8");
+        const fixedContent = fixTomlArrayTables(rawContent);
+        if (fixedContent !== rawContent) {
+            writeFileSync(targetPath, fixedContent, "utf8");
+            console.log("[sop.generate] Applied TOML auto-fix (single→double brackets)");
         }
 
         // Parse the written file

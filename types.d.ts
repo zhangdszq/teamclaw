@@ -519,6 +519,7 @@ type EventPayloadMapping = {
     "select-directory": string | null;
     "get-user-settings": UserSettings;
     "save-user-settings": boolean;
+    "test-alert-webhook": { ok: boolean; error?: string };
     "check-environment": EnvironmentCheckResult;
     "validate-api-config": ValidateApiResult;
     "request-folder-access": FolderAccessResult;
@@ -599,6 +600,8 @@ interface HandStage {
     label: string;
     goal: string;
     items: string[];
+    tools: string[];
+    mcp: string[];
 }
 
 interface HandSopResult {
@@ -622,6 +625,7 @@ interface Window {
         selectDirectory: () => Promise<string | null>;
         getUserSettings: () => Promise<UserSettings>;
         saveUserSettings: (settings: UserSettings) => Promise<boolean>;
+        testAlertWebhook: (webhookUrl: string, secret?: string) => Promise<{ ok: boolean; error?: string }>;
         checkEnvironment: () => Promise<EnvironmentCheckResult>;
         validateApiConfig: (baseUrl?: string, authToken?: string, model?: string) => Promise<ValidateApiResult>;
         requestFolderAccess: (folderPath?: string) => Promise<FolderAccessResult>;

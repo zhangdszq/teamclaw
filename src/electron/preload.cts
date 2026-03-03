@@ -33,6 +33,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("get-user-settings"),
     saveUserSettings: (settings: any) => 
         ipcInvoke("save-user-settings", settings),
+    testAlertWebhook: (webhookUrl: string, secret?: string) =>
+        ipcInvoke("test-alert-webhook", { webhookUrl, secret }),
     checkEnvironment: () => 
         ipcInvoke("check-environment"),
     validateApiConfig: (baseUrl?: string, authToken?: string, model?: string) => 

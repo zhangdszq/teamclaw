@@ -88,6 +88,9 @@ import { join } from "path";
 import { homedir } from "os";
 import Anthropic from "@anthropic-ai/sdk";
 import { parse as parseToml } from "smol-toml";
+import { query as agentQuery } from "@anthropic-ai/claude-agent-sdk";
+import { rmSync } from "fs";
+import { getSettingSources } from "./libs/claude-settings.js";
 
 // ─── Memory janitor: run on startup + every 24 h ─────────────
 function startMemoryJanitor(): void {
@@ -321,25 +324,29 @@ app.on("ready", async () => {
 
     // ─── System tray ─────────────────────────────────────────────────
     // 88x44px @2x = 44x22pt on Retina; not template — preserves white pill background
-    const trayIcon = nativeImage.createFromBuffer(
-        fs.readFileSync(getTrayIconPath()),
-        { scaleFactor: 2.0 }
-    );
-    const tray = new Tray(trayIcon);
-    tray.setToolTip("VK Cowork");
-    tray.on("click", () => {
-        if (mainWindow.isDestroyed()) {
-            mainWindow = createMainWindow();
-        }
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        if (!mainWindow.isVisible()) mainWindow.show();
-        mainWindow.focus();
-    });
-    tray.setContextMenu(Menu.buildFromTemplate([
-        { label: "打开主窗口", click: () => tray.emit("click") },
-        { type: "separator" },
-        { label: "退出", click: () => app.quit() },
-    ]));
+    try {
+        const trayIcon = nativeImage.createFromBuffer(
+            fs.readFileSync(getTrayIconPath()),
+            { scaleFactor: 2.0 }
+        );
+        const tray = new Tray(trayIcon);
+        tray.setToolTip("VK Cowork");
+        tray.on("click", () => {
+            if (mainWindow.isDestroyed()) {
+                mainWindow = createMainWindow();
+            }
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            if (!mainWindow.isVisible()) mainWindow.show();
+            mainWindow.focus();
+        });
+        tray.setContextMenu(Menu.buildFromTemplate([
+            { label: "打开主窗口", click: () => tray.emit("click") },
+            { type: "separator" },
+            { label: "退出", click: () => app.quit() },
+        ]));
+    } catch (e) {
+        console.warn("[main] Failed to create system tray:", e);
+    }
 
     // ─── Window controls (for custom frameless title bar on Windows) ─
     ipcMain.on("window-minimize", () => mainWindow?.minimize());
@@ -1585,75 +1592,90 @@ app.on("ready", async () => {
     });
 
     ipcMainHandle("sop.generate", async (_: any, description: string) => {
-        const settings = loadUserSettings();
-        const apiKey =
-            settings.anthropicAuthToken ||
-            process.env.ANTHROPIC_API_KEY ||
-            process.env.ANTHROPIC_AUTH_TOKEN ||
-            "";
-        if (!apiKey) throw new Error("未配置 Anthropic API Key，请在设置中填写。");
-
-        const client = new Anthropic({
-            apiKey,
-            baseURL: settings.anthropicBaseUrl || undefined,
-        });
+        // Prepare a temporary output dir so the agent has a concrete write target
+        const tmpId = `sop-${Date.now()}`;
+        const tmpDir = join(HANDS_DIR, tmpId);
+        mkdirSync(tmpDir, { recursive: true });
+        const targetPath = join(tmpDir, "HAND.toml");
 
         // Use vvip-educare as a few-shot reference (trimmed to keep prompt short)
         const examplePath = join(HANDS_DIR, "vvip-educare", "HAND.toml");
         const exampleSnippet = existsSync(examplePath)
-            ? readFileSync(examplePath, "utf8").slice(0, 2500)
+            ? readFileSync(examplePath, "utf8").slice(0, 3000)
             : "";
 
         const prompt = `你是一个专业的 SOP（标准操作流程）设计师。
-请根据用户描述，生成一份 HAND.toml 格式的 SOP 定义文件。
+请根据下面的用户描述，生成一份完整的 HAND.toml 文件，并直接写入路径：${targetPath}
 
 HAND.toml 格式参考（截取自真实示例）：
 \`\`\`toml
 ${exampleSnippet}
 \`\`\`
 
-要求：
-1. 生成完整的 HAND.toml，包含 id、name、description、icon、tools、[agent] 及 system_prompt
-2. system_prompt 必须按 ═══ 第X阶段：阶段名称 ═══ 格式划分 3-6 个阶段
+生成要求：
+1. 必须包含 id、name、description、icon、tools、[agent] 及 system_prompt 字段
+2. system_prompt 按 ═══ 第X阶段：阶段名称 ═══ 格式划分 3-6 个阶段
 3. 每个阶段以"目标：xxx"开头，后跟编号步骤（1. 2. 3. ...）
 4. id 使用小写英文加连字符，如 "client-followup"
-5. 只输出 HAND.toml 内容，用 <hand_toml> 标签包裹
+5. 完成后使用 Write 工具将文件内容写入 ${targetPath}，不要输出到终端
 
 用户描述：${description}`;
 
-        const resp = await client.messages.create({
-            model: "claude-opus-4-5",
-            max_tokens: 8192,
-            messages: [{ role: "user", content: prompt }],
+        const abortController = new AbortController();
+        // App-configured key takes precedence over ~/.claude/settings.json
+        const settings = loadUserSettings();
+        const envOverride: Record<string, string> = {};
+        if (settings.anthropicAuthToken) envOverride.ANTHROPIC_API_KEY = settings.anthropicAuthToken;
+        if (settings.anthropicBaseUrl)   envOverride.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
+
+        const q = agentQuery({
+            prompt,
+            options: {
+                cwd: HANDS_DIR,
+                abortController,
+                permissionMode: "bypassPermissions",
+                allowDangerouslySkipPermissions: true,
+                maxTurns: 15,
+                settingSources: getSettingSources(),
+                env: { ...process.env, ...envOverride },
+            },
         });
 
-        const text = resp.content[0].type === "text" ? resp.content[0].text : "";
-        const tomlMatch = text.match(/<hand_toml>([\s\S]*?)<\/hand_toml>/);
-        if (!tomlMatch) throw new Error("LLM 返回内容中未找到有效的 HAND.toml");
+        // Drain the agent stream
+        for await (const msg of q) {
+            if (msg.type === "result") {
+                console.log("[sop.generate] Agent finished, result type:", msg.subtype);
+            }
+        }
 
-        const tomlContent = tomlMatch[1].trim();
+        // Verify file was written
+        if (!existsSync(targetPath)) {
+            // Clean up empty temp dir
+            try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
+            throw new Error("Agent 未生成 HAND.toml，请检查 Claude 配置后重试");
+        }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = parseToml(tomlContent) as Record<string, any>;
-        const id = String(data.id ?? `sop-${Date.now()}`);
+        // Parse the written file
+        const parsed = parseHandTomlFile(targetPath);
+        if (!parsed) {
+            try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
+            throw new Error("生成的 HAND.toml 格式解析失败，请重试");
+        }
 
-        // Save to hands config directory
-        const sopDir = join(HANDS_DIR, id);
-        if (!existsSync(sopDir)) mkdirSync(sopDir, { recursive: true });
-        writeFileSync(join(sopDir, "HAND.toml"), tomlContent, "utf8");
+        // Rename temp dir to actual id if different
+        const actualId = parsed.id;
+        if (actualId !== tmpId) {
+            const actualDir = join(HANDS_DIR, actualId);
+            if (!existsSync(actualDir)) {
+                mkdirSync(actualDir, { recursive: true });
+                writeFileSync(join(actualDir, "HAND.toml"), readFileSync(targetPath, "utf8"), "utf8");
+            }
+            try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
+            parsed.id = actualId;
+        }
 
-        // Return parsed result
-        const systemPrompt = String(data.agent?.system_prompt ?? "");
-        const stages = extractHandStages(systemPrompt);
-
-        return {
-            id,
-            name: String(data.name ?? id),
-            description: String(data.description ?? ""),
-            icon: String(data.icon ?? "📋"),
-            stages,
-            workflowCount: stages.length,
-        } satisfies HandSopResult;
+        console.log(`[sop.generate] Created SOP: ${parsed.id} (${parsed.stages.length} stages)`);
+        return parsed satisfies HandSopResult;
     });
 
     // Read directory contents (one level deep)

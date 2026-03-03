@@ -13,6 +13,7 @@ module.exports = {
   extraResources: [
     'dist-electron/preload.cjs',
     'app-icon.png',
+    'trayIconTemplate.png',
     { from: 'config', to: 'config' },
   ],
   asarUnpack: [

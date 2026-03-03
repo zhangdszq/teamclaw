@@ -248,7 +248,6 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     sessions.updateSession(session.id, {
-      status: 'running',
       lastPrompt: event.payload.prompt,
     });
 
@@ -388,7 +387,6 @@ export async function handleClientEvent(event: ClientEvent) {
     }
 
     sessions.updateSession(session.id, {
-      status: 'running',
       lastPrompt: event.payload.prompt,
     });
 

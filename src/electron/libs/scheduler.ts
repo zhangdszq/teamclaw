@@ -230,13 +230,12 @@ export function calculateNextRun(task: ScheduledTask): string | undefined {
 
 // ─── Run a single scheduled task via sessionRunner ───────────
 function runScheduledTask(task: ScheduledTask): void {
-  // Update last run time
-  updateScheduledTask(task.id, { lastRun: new Date().toISOString() });
-  
-  // For "once" tasks, disable after running
+  // Combine updates into a single atomic operation
+  const updates: Partial<ScheduledTask> = { lastRun: new Date().toISOString() };
   if (task.scheduleType === "once") {
-    updateScheduledTask(task.id, { enabled: false });
+    updates.enabled = false;
   }
+  updateScheduledTask(task.id, updates);
 
   if (!sessionRunner) {
     console.warn(`[Scheduler] sessionRunner not set, cannot run task: ${task.name}`);

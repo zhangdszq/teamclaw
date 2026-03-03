@@ -366,8 +366,16 @@ app.on("ready", async () => {
     });
     ipcMain.on("window-close", () => mainWindow?.close());
     ipcMain.handle("window-is-maximized", () => mainWindow?.isMaximized() ?? false);
-    mainWindow.on("maximize", () => mainWindow?.webContents.send("window-maximized-change", true));
-    mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window-maximized-change", false));
+    mainWindow.on("maximize", () => {
+      if (!mainWindow?.isDestroyed()) {
+        mainWindow.webContents.send("window-maximized-change", true);
+      }
+    });
+    mainWindow.on("unmaximize", () => {
+      if (!mainWindow?.isDestroyed()) {
+        mainWindow.webContents.send("window-maximized-change", false);
+      }
+    });
 
     // ─── Quick Window ────────────────────────────────────────────────
     const DEFAULT_QUICK_SHORTCUT = "Alt+Space";

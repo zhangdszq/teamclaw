@@ -52,8 +52,16 @@ export type SessionHistory = {
 function parseSkillNames(raw: unknown): string[] {
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(String(raw)) as unknown;
-    return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+    // Handle string input
+    if (typeof raw === 'string') {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    }
+    // Handle array input
+    if (Array.isArray(raw)) {
+      return raw.filter((item): item is string => typeof item === 'string');
+    }
+    return [];
   } catch {
     return [];
   }

@@ -123,12 +123,18 @@ export async function startSession(
 
   const url = `${getApiBaseUrl()}/agent/start`;
   const abortController = new AbortController();
-  
+  const REQUEST_TIMEOUT_MS = 120000; // 2 minutes timeout
+
   // Track this stream if we have an external ID
   if (options.externalSessionId) {
     activeStreams.set(options.externalSessionId, abortController);
   }
-  
+
+  // Set up timeout
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, REQUEST_TIMEOUT_MS);
+
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -146,7 +152,13 @@ export async function startSession(
 
     // Handle SSE stream
     await handleSSEStream(response, onEvent, abortController.signal);
+  } catch (error) {
+    if ((error as Error)?.name === 'AbortError') {
+      throw new Error('Request timeout - the server took too long to respond');
+    }
+    throw error;
   } finally {
+    clearTimeout(timeoutId);
     if (options.externalSessionId) {
       activeStreams.delete(options.externalSessionId);
     }

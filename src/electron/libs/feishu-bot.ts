@@ -439,7 +439,7 @@ class FeishuConnection {
     );
 
     sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
-    updateBotSessionTitle(sessionId, userText).catch(() => {});
+    updateBotSessionTitle(sessionId, userText).catch((e) => console.warn("[Feishu] Failed to update session title:", e));
 
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
@@ -520,7 +520,7 @@ class FeishuConnection {
       async (input) => {
         const text = String(input.text ?? "").trim();
         if (!text) return { content: [{ type: "text" as const, text: "消息内容为空" }] };
-        await self.sendReply(messageId, chatId, text).catch(() => {});
+        await self.sendReply(messageId, chatId, text).catch((e) => console.warn("[Feishu] Failed to send reply:", e));
         return { content: [{ type: "text" as const, text: "消息已发送" }] };
       },
     );

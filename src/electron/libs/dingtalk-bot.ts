@@ -1507,7 +1507,7 @@ class DingtalkConnection {
         "",
         "复制上方 ID 填入 Bot 配置 → 高级设置 → 我的 StaffId，即可接收主动推送。",
       ].filter((l) => l !== undefined && !(isGroup === false && l.includes("群"))).join("\n");
-      await this.sendMarkdown(msg.sessionWebhook, reply).catch(() => {});
+      await this.sendMarkdown(msg.sessionWebhook, reply).catch((e) => console.warn("[DingTalk] Failed to send markdown:", e));
       return;
     }
 
@@ -1525,7 +1525,7 @@ class DingtalkConnection {
         await this.sendMarkdown(
           msg.sessionWebhook,
           "抱歉，处理您的消息时遇到了问题，请稍后再试。",
-        ).catch(() => {});
+        ).catch((e) => console.warn("[DingTalk] Failed to send error message:", e));
       }
     } finally {
       if (dedupKey) this.inflight.delete(dedupKey);
@@ -1603,7 +1603,7 @@ class DingtalkConnection {
     history.push({ role: "assistant", content: replyText });
     this.persistReply(sessionId, replyText, userText);
 
-    updateBotSessionTitle(sessionId, history, `[钉钉]`).catch(() => {});
+    updateBotSessionTitle(sessionId, history, `[钉钉]`).catch((e) => console.warn("[DingTalk] Failed to update session title:", e));
 
     await this.sendMarkdown(msg.sessionWebhook, replyText);
   }
@@ -1663,7 +1663,7 @@ class DingtalkConnection {
       async (input) => {
         const text = String(input.text ?? "").trim();
         if (!text) return { content: [{ type: "text" as const, text: "消息内容为空" }] };
-        await self.sendMarkdown(msg.sessionWebhook, text).catch(() => {});
+        await self.sendMarkdown(msg.sessionWebhook, text).catch((e) => console.warn("[DingTalk] Failed to send markdown:", e));
         return { content: [{ type: "text" as const, text: "消息已发送" }] };
       },
     );
@@ -1728,17 +1728,17 @@ class DingtalkConnection {
           const now = Date.now();
           if (now - lastUpdate >= THROTTLE_MS) {
             lastUpdate = now;
-            await streamAICard(card, accessToken, accum, false).catch(() => {});
+            await streamAICard(card, accessToken, accum, false).catch((e) => console.warn("[DingTalk] Failed to stream AI card:", e));
           }
         }
       }
 
       const finalText = accum.trim() || "抱歉，无法生成回复。";
-      await streamAICard(card, accessToken, finalText, true).catch(() => {});
+      await streamAICard(card, accessToken, finalText, true).catch((e) => console.warn("[DingTalk] Failed to stream final AI card:", e));
 
       history.push({ role: "assistant", content: finalText });
       this.persistReply(sessionId, finalText, userText);
-      updateBotSessionTitle(sessionId, history, `[钉钉]`).catch(() => {});
+      updateBotSessionTitle(sessionId, history, `[钉钉]`).catch((e) => console.warn("[DingTalk] Failed to update session title:", e));
 
       return "__CARD_DELIVERED__";
     } catch (err) {

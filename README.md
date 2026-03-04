@@ -68,7 +68,7 @@ Create multiple AI assistants, each with its own identity:
 
 ### IM Bot Integration
 
-<p align="center"><img src="assets/splash-2.jpg" width="600" /></p>
+![IM Bot Integration](assets/splash-2.jpg)
 
 Connect any assistant to your team's messaging platform:
 
@@ -103,7 +103,7 @@ Multi-layer structured memory:
 
 ### Scheduler & Automation
 
-<p align="center"><img src="assets/splash-5.jpg" width="600" /></p>
+![Scheduler & Automation](assets/splash-5.jpg)
 
 | Type | Description |
 |------|-------------|

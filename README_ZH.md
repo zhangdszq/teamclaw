@@ -68,7 +68,7 @@ bun run dist:linux    # Linux (x64)
 
 ### IM 机器人集成
 
-<p align="center"><img src="assets/splash-2.jpg" width="600" /></p>
+![IM 机器人集成](assets/splash-2.jpg)
 
 将任意助理接入团队通讯平台：
 
@@ -103,7 +103,7 @@ bun run dist:linux    # Linux (x64)
 
 ### 调度与自动化
 
-<p align="center"><img src="assets/splash-5.jpg" width="600" /></p>
+![调度与自动化](assets/splash-5.jpg)
 
 | 类型 | 说明 |
 |------|------|

@@ -10,7 +10,7 @@
 
 [简体中文](README_ZH.md)
 
-![Teamclaw](screenshots/ai-team-test-02-new-task.png)
+![Teamclaw](screenshots/02-main-page.png)
 
 </div>
 

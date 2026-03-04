@@ -26,6 +26,7 @@ import splash1 from "../../assets/splash-1.jpg";
 
 const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
+const LIKED_MESSAGE_KEYS = "vk-cowork-liked-message-keys";
 
 function ThinkingDots() {
   return (
@@ -815,6 +816,44 @@ function App() {
     });
   }, [activeSessionId, sendEvent]);
   
+  const [likedMessageKeys, setLikedMessageKeys] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(LIKED_MESSAGE_KEYS);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? new Set(parsed) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const persistLikedKeys = useCallback((next: Set<string>) => {
+    localStorage.setItem(LIKED_MESSAGE_KEYS, JSON.stringify([...next]));
+  }, []);
+
+  const handleLikeMessage = useCallback((likeKey: string, text: string) => {
+    if (!activeSessionId) return;
+    setLikedMessageKeys((prev) => {
+      const next = new Set(prev);
+      next.add(likeKey);
+      persistLikedKeys(next);
+      return next;
+    });
+    window.electron.createKnowledgeCandidateFromLike(activeSessionId, text).then((result) => {
+      if (!result) {
+        console.warn("[App] createKnowledgeCandidateFromLike returned null");
+      }
+    }).catch((err) => {
+      console.warn("[App] Failed to create knowledge candidate from like:", err);
+      setLikedMessageKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(likeKey);
+        persistLikedKeys(next);
+        return next;
+      });
+    });
+  }, [activeSessionId, persistLikedKeys]);
+
   // 判断是否正在加载历史消息
   const isLoadingHistory = activeSession && !activeSession.hydrated;
   
@@ -1198,6 +1237,9 @@ function App() {
                       isRunning={isRunning}
                       showSystemInfo={false}
                       onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
+                      onLikeMessage={handleLikeMessage}
+                      likeScopeId={activeSessionId || "no-session"}
+                      likedMessageKeys={likedMessageKeys}
                       assistantName={activeAssistantName}
                       userName={userName}
                     />
@@ -1211,6 +1253,9 @@ function App() {
                     isRunning={isRunning}
                     showSystemInfo={showSystemInfo}
                     onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
+                    onLikeMessage={handleLikeMessage}
+                    likeScopeId={activeSessionId || "no-session"}
+                    likedMessageKeys={likedMessageKeys}
                     assistantName={activeAssistantName}
                     userName={userName}
                   />
@@ -1344,6 +1389,10 @@ function App() {
         <KnowledgePage
           onClose={() => setShowKnowledgePage(false)}
           titleBarHeight={titleBarH}
+          onNavigateToSession={(sessionId) => {
+            setShowKnowledgePage(false);
+            useAppStore.getState().setActiveSessionId(sessionId);
+          }}
         />
       )}
 

@@ -41,6 +41,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("delete-knowledge-candidate", id),
     refineKnowledgeCandidate: (id: string) =>
         ipcInvoke("refine-knowledge-candidate", id),
+    createKnowledgeCandidateFromLike: (sessionId: string, text: string) =>
+        ipcInvoke("create-knowledge-candidate-from-like", sessionId, text),
     getKnowledgeDocs: () =>
         ipcInvoke("get-knowledge-docs"),
     createKnowledgeDoc: (title: string, content: string) =>

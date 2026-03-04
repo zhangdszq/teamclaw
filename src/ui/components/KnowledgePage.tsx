@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 interface KnowledgePageProps {
   onClose: () => void;
   titleBarHeight?: number;
+  onNavigateToSession?: (sessionId: string) => void;
 }
 
 type TabKey = "memory" | "candidates" | "docs";
@@ -37,7 +38,7 @@ function CollapsibleSection({ label, badge, children }: { label: string; badge?:
   );
 }
 
-export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProps) {
+export function KnowledgePage({ onClose, titleBarHeight = 0, onNavigateToSession }: KnowledgePageProps) {
   const [tab, setTab] = useState<TabKey>("candidates");
   const [candidates, setCandidates] = useState<KnowledgeCandidate[]>([]);
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
@@ -260,6 +261,16 @@ export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProp
                       >
                         {refiningId === item.id ? "提炼中..." : "AI 提炼"}
                       </button>
+                      {onNavigateToSession && item.sourceSessionId && (
+                        <button
+                          onClick={() => {
+                            onNavigateToSession(item.sourceSessionId);
+                          }}
+                          className="rounded-md bg-ink-900/6 px-2.5 py-1 text-xs font-medium text-ink-600 hover:bg-ink-900/10 hover:text-ink-800 transition-colors"
+                        >
+                          查看上下文
+                        </button>
+                      )}
                       {item.reviewStatus === "draft" && (
                         <>
                           <button

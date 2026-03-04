@@ -575,6 +575,7 @@ type EventPayloadMapping = {
     "update-knowledge-candidate-status": KnowledgeCandidate | null;
     "delete-knowledge-candidate": boolean;
     "refine-knowledge-candidate": KnowledgeCandidate | null;
+    "create-knowledge-candidate-from-like": KnowledgeCandidate | null;
     "get-knowledge-docs": KnowledgeDoc[];
     "create-knowledge-doc": KnowledgeDoc;
     "update-knowledge-doc": KnowledgeDoc | null;
@@ -693,6 +694,7 @@ interface Window {
         updateKnowledgeCandidateStatus: (id: string, status: KnowledgeReviewStatus) => Promise<KnowledgeCandidate | null>;
         deleteKnowledgeCandidate: (id: string) => Promise<boolean>;
         refineKnowledgeCandidate: (id: string) => Promise<KnowledgeCandidate | null>;
+        createKnowledgeCandidateFromLike: (sessionId: string, text: string) => Promise<KnowledgeCandidate | null>;
         getKnowledgeDocs: () => Promise<KnowledgeDoc[]>;
         createKnowledgeDoc: (title: string, content: string) => Promise<KnowledgeDoc>;
         updateKnowledgeDoc: (id: string, title: string, content: string) => Promise<KnowledgeDoc | null>;

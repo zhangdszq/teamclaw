@@ -287,11 +287,15 @@ const AssistantBlockCard = ({
   text,
   showIndicator = false,
   copyable = false,
+  onLike,
+  liked = false,
 }: {
   title: string;
   text: string;
   showIndicator?: boolean;
   copyable?: boolean;
+  onLike?: () => void;
+  liked?: boolean;
 }) => {
   const [copied, setCopied] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -313,6 +317,11 @@ const AssistantBlockCard = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleLike = () => {
+    if (liked) return;
+    onLike?.();
+  };
+
   return (
     <div className="flex flex-col mt-4">
       <div className="text-[13px] font-semibold text-accent flex items-center gap-2">
@@ -323,7 +332,22 @@ const AssistantBlockCard = ({
         <MDContent text={text} />
       </div>
       {copyable && (
-        <div className="mt-2 flex justify-end">
+        <div className="mt-2 flex justify-end gap-1">
+          {onLike && (
+            <button
+              onClick={handleLike}
+              title={liked ? "已提炼为经验" : "提炼为经验"}
+              className={`rounded-lg p-1.5 transition-colors ${
+                liked
+                  ? "text-accent"
+                  : "text-muted hover:text-ink-700 hover:bg-surface-tertiary"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill={liked ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
+                <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={handleCopy}
             title="复制为富文本"
@@ -582,6 +606,9 @@ export const MessageCard = memo(function MessageCard({
   isLast = false,
   isRunning = false,
   onAskUserQuestionAnswer,
+  onLikeMessage,
+  likeScopeId = "",
+  likedMessageKeys,
   assistantName,
   userName,
   excludeToolUseIds,
@@ -591,6 +618,9 @@ export const MessageCard = memo(function MessageCard({
   isRunning?: boolean;
   showSystemInfo?: boolean;
   onAskUserQuestionAnswer?: (toolUseId: string, answers: Record<string, string>) => void;
+  onLikeMessage?: (likeKey: string, text: string) => void;
+  likeScopeId?: string;
+  likedMessageKeys?: Set<string>;
   assistantName?: string;
   userName?: string;
   excludeToolUseIds?: Set<string>;
@@ -629,6 +659,18 @@ export const MessageCard = memo(function MessageCard({
 
   if (sdkMessage.type === "assistant") {
     const contents = sdkMessage.message.content;
+    const fallbackFingerprint = contents
+      .map((c) => {
+        if (c.type === "text") return `t:${c.text.slice(0, 80)}`;
+        if (c.type === "thinking") return `k:${c.thinking.slice(0, 40)}`;
+        if (c.type === "tool_use") return `u:${c.id}`;
+        return c.type;
+      })
+      .join("|");
+    const messageId =
+      "uuid" in message && message.uuid
+        ? String(message.uuid)
+        : `assistant-${fallbackFingerprint}`;
     
     return (
       <>
@@ -638,7 +680,18 @@ export const MessageCard = memo(function MessageCard({
             return <ThinkingBlock key={idx} text={content.thinking} />;
           }
           if (content.type === "text") {
-            return <AssistantBlockCard key={idx} title={assistantName || "Assistant"} text={content.text} showIndicator={isLastContent && showIndicator} copyable />;
+            const likeKey = `${likeScopeId}:${messageId}:${idx}`;
+            return (
+              <AssistantBlockCard
+                key={idx}
+                title={assistantName || "Assistant"}
+                text={content.text}
+                showIndicator={isLastContent && showIndicator}
+                copyable
+                onLike={onLikeMessage ? () => onLikeMessage(likeKey, content.text) : undefined}
+                liked={likedMessageKeys?.has(likeKey) ?? false}
+              />
+            );
           }
           if (content.type === "tool_use") {
             // Skip tool uses that are rendered outside the collapsed section
@@ -692,6 +745,9 @@ export function ProcessGroup({
   isRunning = false,
   showSystemInfo,
   onAskUserQuestionAnswer,
+  onLikeMessage,
+  likeScopeId = "",
+  likedMessageKeys,
   assistantName,
   userName,
 }: {
@@ -700,6 +756,9 @@ export function ProcessGroup({
   isRunning?: boolean;
   showSystemInfo: boolean;
   onAskUserQuestionAnswer?: (toolUseId: string, answers: Record<string, string>) => void;
+  onLikeMessage?: (likeKey: string, text: string) => void;
+  likeScopeId?: string;
+  likedMessageKeys?: Set<string>;
   assistantName?: string;
   userName?: string;
 }) {
@@ -786,6 +845,9 @@ export function ProcessGroup({
                 isRunning={isRunning}
                 showSystemInfo={showSystemInfo}
                 onAskUserQuestionAnswer={onAskUserQuestionAnswer}
+                onLikeMessage={onLikeMessage}
+                likeScopeId={likeScopeId}
+                likedMessageKeys={likedMessageKeys}
                 assistantName={assistantName}
                 userName={userName}
                 excludeToolUseIds={activeAskIds}

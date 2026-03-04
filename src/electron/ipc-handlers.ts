@@ -453,6 +453,16 @@ export async function handleClientEvent(event: ClientEvent) {
         });
       } finally {
         activeSessions.delete(session.id);
+        // Ensure session is never left stuck in "running" state if the SSE stream
+        // ended without the runner emitting a terminal status event.
+        const finalStatus = sessions.getSession(session.id)?.status;
+        if (finalStatus === 'running') {
+          sessions.updateSession(session.id, { status: 'idle' });
+          emit({
+            type: 'session.status',
+            payload: { sessionId: session.id, status: 'idle', title: session.title, cwd: session.cwd, assistantId: session.assistantId },
+          });
+        }
       }
     } else {
       // Fallback: direct SDK when sidecar is unavailable
@@ -579,6 +589,16 @@ export async function handleClientEvent(event: ClientEvent) {
         });
       } finally {
         activeSessions.delete(session.id);
+        // Ensure session is never left stuck in "running" state if the SSE stream
+        // ended without the runner emitting a terminal status event.
+        const continueStatus = sessions.getSession(session.id)?.status;
+        if (continueStatus === 'running') {
+          sessions.updateSession(session.id, { status: 'idle' });
+          emit({
+            type: 'session.status',
+            payload: { sessionId: session.id, status: 'idle', title: session.title, cwd: session.cwd, assistantId: session.assistantId },
+          });
+        }
       }
     } else {
       // Fallback: direct SDK when sidecar is unavailable

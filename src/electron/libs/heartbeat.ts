@@ -17,8 +17,14 @@ const lastCompletionOutcome = new Map<string, "no_action" | "action" | "error">(
 
 const DAILY_MEMORY_MAX_CHARS = 4000;
 const HEARTBEAT_RUN_TIMEOUT_MS = 10 * 60_000;
-const RETRY_AFTER_ERROR_MS = 10 * 60_000;
+const RETRY_BASE_ERROR_MS = 10 * 60_000;       // 10 min base for first retry
+const RETRY_MAX_ERROR_MS = 4 * 60 * 60_000;    // 4 h cap
 const FORCE_RUN_MAX_SILENCE_MS = 4 * 60 * 60_000;
+
+/** Exponential backoff delay for consecutive heartbeat errors: base * 2^(streak-1), capped at max. */
+function retryAfterErrorMs(streak: number): number {
+  return Math.min(RETRY_BASE_ERROR_MS * Math.pow(2, Math.max(0, streak - 1)), RETRY_MAX_ERROR_MS);
+}
 
 // ── Optimization A: memory mtime tracking (per assistant) ────────────────────
 const lastMemoryMtime = new Map<string, number>();
@@ -26,6 +32,9 @@ const lastAssistantMemoryMtime = new Map<string, number>();
 
 // ── Optimization B: adaptive interval (consecutive no-action streak) ─────────
 const noActionStreak = new Map<string, number>();
+
+// ── Optimization D: consecutive error streak (exponential backoff) ───────────
+const errorStreak = new Map<string, number>();
 
 // ── Optimization C: incremental memory offset (per assistant) ────────────────
 const lastMemoryOffset = new Map<string, number>();
@@ -217,15 +226,20 @@ export function onHeartbeatResult(
 
   if (status === "error") {
     noActionStreak.set(assistantId, 0);
+    const prevError = errorStreak.get(assistantId) ?? 0;
+    errorStreak.set(assistantId, prevError + 1);
     lastCompletionOutcome.set(assistantId, "error");
     recordHeartbeatMetric("completed", {
       assistantId,
       outcome: "error",
       durationMs,
+      streak: prevError + 1,
     });
+    console.log(`[Heartbeat] ${assistantId} error streak: ${prevError + 1}, next retry in ${Math.round(retryAfterErrorMs(prevError + 1) / 60_000)}min`);
     return;
   }
 
+  errorStreak.set(assistantId, 0);
   noActionStreak.set(assistantId, wasNoAction ? prev + 1 : 0);
   lastCompletionOutcome.set(assistantId, wasNoAction ? "no_action" : "action");
   if (wasNoAction) {
@@ -346,6 +360,7 @@ export function cleanupHeartbeatData(assistantId: string): void {
   lastMemoryMtime.delete(assistantId);
   lastAssistantMemoryMtime.delete(assistantId);
   noActionStreak.delete(assistantId);
+  errorStreak.delete(assistantId);
   lastMemoryOffset.delete(assistantId);
   lastAssistantMemoryOffset.delete(assistantId);
   runningByAssistant.delete(assistantId);

@@ -123,42 +123,34 @@ export async function startSession(
 
   const url = `${getApiBaseUrl()}/agent/start`;
   const abortController = new AbortController();
-  const REQUEST_TIMEOUT_MS = 120000; // 2 minutes timeout
 
   // Track this stream if we have an external ID
   if (options.externalSessionId) {
     activeStreams.set(options.externalSessionId, abortController);
   }
 
-  // Set up timeout
-  const timeoutId = setTimeout(() => {
-    abortController.abort();
-  }, REQUEST_TIMEOUT_MS);
-
   try {
-    const response = await fetch(url, {
+    const response = await sseFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(options),
-      signal: abortController.signal,
-    });
+    }, abortController.signal);
 
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Failed to start session');
     }
 
-    // Handle SSE stream
+    // Handle SSE stream — runs until the agent naturally completes (no hard timeout)
     await handleSSEStream(response, onEvent, abortController.signal);
   } catch (error) {
-    if ((error as Error)?.name === 'AbortError') {
-      throw new Error('Request timeout - the server took too long to respond');
+    if ((error as Error)?.name !== 'AbortError') {
+      throw error;
     }
-    throw error;
+    // AbortError means the user explicitly stopped the session — not an error
   } finally {
-    clearTimeout(timeoutId);
     if (options.externalSessionId) {
       activeStreams.delete(options.externalSessionId);
     }

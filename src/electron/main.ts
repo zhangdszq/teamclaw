@@ -100,6 +100,7 @@ import {
     deleteKnowledgeCandidate,
     getKnowledgeCandidateById,
     updateKnowledgeCandidate,
+    createKnowledgeCandidate,
     listKnowledgeDocs,
     createKnowledgeDoc,
     updateKnowledgeDoc,
@@ -721,6 +722,42 @@ app.on("ready", async () => {
         const aiResult = await extractExperienceViaAI(digest, candidate.title);
         if (!aiResult) return null;
         return updateKnowledgeCandidate(id, aiResult);
+    });
+
+    ipcMainHandle("create-knowledge-candidate-from-like", async (_: any, sessionId: string, text: string) => {
+        if (!sessionId || !text) return null;
+        console.log("[IPC] create-knowledge-candidate-from-like called, sessionId:", sessionId, "text length:", text.length);
+
+        const session = sessions.getSession(sessionId);
+        const title = session?.title || "普通会话";
+        const candidate = createKnowledgeCandidate({
+            title: `${title.slice(0, 100)} · 经验候选`,
+            scenario: title.slice(0, 120),
+            steps: "",
+            result: text.slice(0, 1200),
+            risk: "待人工审核",
+            sourceSessionId: sessionId,
+            assistantId: session?.assistantId,
+        });
+        console.log("[IPC] Created new candidate from like:", candidate.id);
+
+        setImmediate(async () => {
+            try {
+                const history = sessions.getSessionHistory(sessionId);
+                if (!history?.messages?.length) return;
+                const digest = buildConversationDigest(history.messages);
+                if (digest.length < 50) return;
+                const aiResult = await extractExperienceViaAI(digest, title);
+                if (aiResult) {
+                    updateKnowledgeCandidate(candidate.id, aiResult);
+                    console.log("[IPC] Liked candidate refined via AI:", candidate.id);
+                }
+            } catch (err) {
+                console.warn("[IPC] AI refinement for liked candidate failed:", err);
+            }
+        });
+
+        return candidate;
     });
 
     ipcMainHandle("get-knowledge-docs", () => {

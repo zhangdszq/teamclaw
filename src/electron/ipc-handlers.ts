@@ -24,8 +24,10 @@ import { onHeartbeatResult } from './libs/heartbeat.js';
 import {
   createKnowledgeCandidate,
   findKnowledgeCandidateBySession,
+  updateKnowledgeCandidate,
 } from './libs/knowledge-store.js';
 import { IMAGE_INLINE_RULE } from './libs/bot-base.js';
+import { buildConversationDigest, extractExperienceViaAI } from './libs/experience-extractor.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -81,6 +83,23 @@ const runnerHandles = new Map<string, RunnerHandle>();
 // Track active sessions
 const activeSessions = new Set<string>();
 
+function parseHeartbeatResult(text: string): { noAction: boolean; source: "json" | "legacy" } {
+  const marker = "HEARTBEAT_RESULT:";
+  const idx = text.lastIndexOf(marker);
+  if (idx >= 0) {
+    const jsonText = text.slice(idx + marker.length).trim();
+    try {
+      const parsed = JSON.parse(jsonText) as { noAction?: unknown };
+      if (typeof parsed.noAction === "boolean") {
+        return { noAction: parsed.noAction, source: "json" };
+      }
+    } catch {
+      // fall through to legacy marker
+    }
+  }
+  return { noAction: text.includes("<no-action>"), source: "legacy" };
+}
+
 function broadcast(event: ServerEvent) {
   const payload = JSON.stringify(event);
   const windows = BrowserWindow.getAllWindows();
@@ -117,17 +136,21 @@ function emit(event: ServerEvent) {
             ?.map((c: any) => String(c.text))
             ?.join('') ?? '';
 
-          const isNoAction = text.includes('<no-action>');
+          const parsed = parseHeartbeatResult(text);
+          const isNoAction = parsed.noAction;
           // Update adaptive interval streak counter
           if (session?.assistantId) {
-            onHeartbeatResult(session.assistantId, isNoAction);
+            onHeartbeatResult(session.assistantId, isNoAction, status === "error" ? "error" : "completed");
           }
 
-          if (isNoAction) {
+          if (status !== "error" && isNoAction) {
             sessions.updateSession(sessionId, { hidden: true });
             // Notify frontend to remove this session from its list
             broadcast({ type: 'session.deleted', payload: { sessionId } });
             return; // Skip the normal broadcast of session.status
+          }
+          if (parsed.source === "legacy") {
+            console.warn(`[IPC] Heartbeat result fell back to legacy <no-action> parser: ${sessionId}`);
           }
         } catch (e) {
           console.warn('[IPC] Heartbeat suppression check failed:', e);
@@ -161,31 +184,47 @@ function emit(event: ServerEvent) {
             if (findKnowledgeCandidateBySession(sessionId)) return;
 
             const history = sessions.getSessionHistory(sessionId);
-            const assistantMessages = (history?.messages ?? []).filter((m: any) => m.type === 'assistant');
+            const allMessages = history?.messages ?? [];
+            const assistantMessages = allMessages.filter((m: any) => m.type === 'assistant');
 
-            // For idle (manual stop), require at least 2 assistant messages to be meaningful
             if (status === 'idle' && assistantMessages.length < 2) return;
 
             const lastAssistant = assistantMessages[assistantMessages.length - 1] as any;
-            const text: string = lastAssistant?.message?.content
+            const lastText: string = lastAssistant?.message?.content
               ?.filter((c: any) => c.type === 'text')
               ?.map((c: any) => String(c.text))
               ?.join('\n')
               ?.trim() ?? '';
 
-            if (!text || text.length < 80) return;
-            const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-            const steps = lines.filter((line) => /^(\d+[\).、]|[-*])/.test(line)).slice(0, 12).join('\n');
+            if (!lastText || lastText.length < 80) return;
 
-            createKnowledgeCandidate({
+            // Regex fallback: create candidate immediately with basic extraction
+            const lines = lastText.split('\n').map((l) => l.trim()).filter(Boolean);
+            const regexSteps = lines.filter((line) => /^(\d+[\).、]|[-*])/.test(line)).slice(0, 12).join('\n');
+
+            const candidate = createKnowledgeCandidate({
               title: `${(session.title || '普通会话').slice(0, 100)} · 经验候选`,
               scenario: (session.title || '普通会话').slice(0, 120),
-              steps: steps || '（自动抽取未识别到明确步骤，建议人工补充）',
-              result: text.slice(0, 1200),
+              steps: regexSteps || '（自动抽取未识别到明确步骤，建议人工补充）',
+              result: lastText.slice(0, 1200),
               risk: '待人工审核',
               sourceSessionId: sessionId,
               assistantId: session.assistantId,
             });
+
+            // AI upgrade: asynchronously generate structured summary
+            try {
+              const conversationText = buildConversationDigest(allMessages);
+              if (conversationText.length >= 100) {
+                const aiResult = await extractExperienceViaAI(conversationText, session.title || '');
+                if (aiResult) {
+                  updateKnowledgeCandidate(candidate.id, aiResult);
+                  console.log('[IPC] Knowledge candidate upgraded via AI:', candidate.id);
+                }
+              }
+            } catch (aiErr) {
+              console.warn('[IPC] AI extraction failed, keeping regex fallback:', aiErr);
+            }
           } catch (err) {
             console.warn('[IPC] Knowledge candidate extraction failed:', err);
           }

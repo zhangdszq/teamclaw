@@ -382,10 +382,11 @@ class FeishuConnection {
     try {
       const extracted = this.extractText(message, msgType);
       if (!extracted) return;
+      const isFileOrImageRequest = msgType === "file" || msgType === "image";
 
       console.log(`[Feishu] Message (${msgType}): ${extracted.slice(0, 100)}`);
 
-      await this.generateAndDeliver(extracted, senderId, chatId, messageId);
+      await this.generateAndDeliver(extracted, senderId, chatId, messageId, isFileOrImageRequest);
     } finally {
       if (dedupKey) this.inflight.delete(dedupKey);
     }
@@ -433,6 +434,7 @@ class FeishuConnection {
     senderId: string,
     chatId: string,
     messageId: string,
+    isFileOrImageRequest = false,
   ): Promise<void> {
     const history = getHistory(this.opts.assistantId);
     const provider = this.opts.provider ?? "claude";
@@ -452,7 +454,7 @@ class FeishuConnection {
     while (history.length > MAX_TURNS * 2) history.shift();
 
     const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
-    const historySection = history.length > 1
+    const historySection = !isFileOrImageRequest && history.length > 1
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;
     const system = buildStructuredPersona(this.opts, memoryContext, historySection);
@@ -463,7 +465,7 @@ class FeishuConnection {
       if (provider === "codex") {
         replyText = await this.runCodexSession(system, history, userText);
       } else {
-        replyText = await this.runClaudeQuery(system, userText, messageId, chatId);
+        replyText = await this.runClaudeQuery(system, userText, messageId, chatId, isFileOrImageRequest);
       }
     } catch (err) {
       console.error("[Feishu] AI error:", err);
@@ -482,10 +484,11 @@ class FeishuConnection {
     userText: string,
     messageId: string,
     chatId: string,
+    isolateContext = false,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(messageId, chatId);
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
-    const claudeSessionId = getBotClaudeSessionId(this.opts.assistantId);
+    const claudeSessionId = isolateContext ? undefined : getBotClaudeSessionId(this.opts.assistantId);
     const claudeCodePath = getClaudeCodePath();
 
     let finalText = "";

@@ -572,6 +572,7 @@ type EventPayloadMapping = {
     "get-knowledge-candidates": KnowledgeCandidate[];
     "update-knowledge-candidate-status": KnowledgeCandidate | null;
     "delete-knowledge-candidate": boolean;
+    "refine-knowledge-candidate": KnowledgeCandidate | null;
     "get-knowledge-docs": KnowledgeDoc[];
     "create-knowledge-doc": KnowledgeDoc;
     "update-knowledge-doc": KnowledgeDoc | null;
@@ -689,6 +690,7 @@ interface Window {
         getKnowledgeCandidates: () => Promise<KnowledgeCandidate[]>;
         updateKnowledgeCandidateStatus: (id: string, status: KnowledgeReviewStatus) => Promise<KnowledgeCandidate | null>;
         deleteKnowledgeCandidate: (id: string) => Promise<boolean>;
+        refineKnowledgeCandidate: (id: string) => Promise<KnowledgeCandidate | null>;
         getKnowledgeDocs: () => Promise<KnowledgeDoc[]>;
         createKnowledgeDoc: (title: string, content: string) => Promise<KnowledgeDoc>;
         updateKnowledgeDoc: (id: string, title: string, content: string) => Promise<KnowledgeDoc | null>;
@@ -751,6 +753,7 @@ interface Window {
         getFeishuBotStatus: (assistantId: string) => Promise<FeishuBotStatusResult>;
         onFeishuBotStatus: (cb: (assistantId: string, status: FeishuBotStatus, detail?: string) => void) => UnsubscribeFunction;
         onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => UnsubscribeFunction;
+        onAssistantsConfigChanged: (cb: (config: AssistantsConfig) => void) => UnsubscribeFunction;
         // OpenAI Codex OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;

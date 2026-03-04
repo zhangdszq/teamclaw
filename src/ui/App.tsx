@@ -4,7 +4,7 @@ import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { useIPC } from "./hooks/useIPC";
 import { useAppStore } from "./store/useAppStore";
 import type { ServerEvent } from "./types";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, ASSISTANT_PANEL_WIDTH } from "./components/Sidebar";
 import { PromptInput, usePromptActions } from "./components/PromptInput";
 import { MessageCard, ProcessGroup } from "./components/EventCard";
 import { MessageSkeleton } from "./components/MessageSkeleton";
@@ -401,13 +401,7 @@ function App() {
     });
   }, []);
 
-  const [effectiveSidebarWidth, setEffectiveSidebarWidth] = useState(() => {
-    const taskVisible = localStorage.getItem("vk-cowork-task-panel-visible") === "true";
-    if (!taskVisible) return 168;
-    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
-    if (!Number.isFinite(raw)) return DEFAULT_SIDEBAR_WIDTH;
-    return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, raw));
-  });
+  const effectiveSidebarWidth = taskPanelVisible ? sidebarWidth : ASSISTANT_PANEL_WIDTH;
 
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -1048,7 +1042,7 @@ function App() {
         onNoWorkspace={() => setShowWorkspacePicker(true)}
         taskPanelVisible={taskPanelVisible}
         onToggleTaskPanel={handleToggleTaskPanel}
-        onEffectiveWidthChange={setEffectiveSidebarWidth}
+        onEffectiveWidthChange={undefined}
         onShowSplash={() => setShowSplash(true)}
         onOpenSop={() => setShowSopPage(true)}
         onOpenKnowledge={() => setShowKnowledgePage(true)}

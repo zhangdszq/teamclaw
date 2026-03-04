@@ -4,14 +4,21 @@ import { join } from "path";
 import type { ClientEvent } from "../types.js";
 import { loadAssistantsConfig, type AssistantConfig } from "./assistants-config.js";
 import { readRecentNotified } from "./notification-log.js";
+import { recordHeartbeatMetric } from "./heartbeat-metrics.js";
 
 type SessionRunner = (event: ClientEvent) => Promise<void>;
 
 const lastHeartbeatRun = new Map<string, number>();
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let memoryCompactTimer: NodeJS.Timeout | null = null;
+const runningByAssistant = new Map<string, number>(); // assistantId -> startedAt
+const lastCompletionAt = new Map<string, number>();
+const lastCompletionOutcome = new Map<string, "no_action" | "action" | "error">();
 
 const DAILY_MEMORY_MAX_CHARS = 4000;
+const HEARTBEAT_RUN_TIMEOUT_MS = 10 * 60_000;
+const RETRY_AFTER_ERROR_MS = 10 * 60_000;
+const FORCE_RUN_MAX_SILENCE_MS = 4 * 60 * 60_000;
 
 // ── Optimization A: memory mtime tracking (per assistant) ────────────────────
 const lastMemoryMtime = new Map<string, number>();
@@ -84,8 +91,9 @@ function buildHeartbeatPrompt(assistant: AssistantConfig): string {
 
   sections.push(
     "请根据以上规则，结合今日记忆中的待办/未完成事项执行心跳巡检。\n" +
-    "如有需要通知的事项，使用 send_notification 工具主动推送给用户。\n" +
-    "若没有「已推送通知」列表之外的新情况，必须输出 <no-action>，禁止重复汇报。",
+    "如有需要通知的事项，使用 send_notification 工具主动推送给用户（不要设置 title 参数，直接在 text 中写内容）。\n" +
+    "输出结尾必须包含一行结构化回执：HEARTBEAT_RESULT: {\"noAction\": true|false, \"reason\": \"一句话原因\"}。\n" +
+    "若没有「已推送通知」列表之外的新情况，必须输出 noAction=true（并可附带 <no-action> 作为兼容兜底），禁止重复汇报。",
   );
 
   return sections.join("\n\n");
@@ -95,13 +103,40 @@ function buildHeartbeatPrompt(assistant: AssistantConfig): string {
  * Called from ipc-handlers when a heartbeat session finishes.
  * Updates the no-action streak counter for adaptive intervals.
  */
-export function onHeartbeatResult(assistantId: string, wasNoAction: boolean): void {
+export function onHeartbeatResult(
+  assistantId: string,
+  wasNoAction: boolean,
+  status: "completed" | "error" = "completed",
+): void {
   const prev = noActionStreak.get(assistantId) ?? 0;
+  const startedAt = runningByAssistant.get(assistantId);
+  runningByAssistant.delete(assistantId);
+  const durationMs = startedAt ? Date.now() - startedAt : undefined;
+  lastCompletionAt.set(assistantId, Date.now());
+
+  if (status === "error") {
+    noActionStreak.set(assistantId, 0);
+    lastCompletionOutcome.set(assistantId, "error");
+    recordHeartbeatMetric("completed", {
+      assistantId,
+      outcome: "error",
+      durationMs,
+    });
+    return;
+  }
+
   noActionStreak.set(assistantId, wasNoAction ? prev + 1 : 0);
+  lastCompletionOutcome.set(assistantId, wasNoAction ? "no_action" : "action");
   if (wasNoAction) {
     const streak = prev + 1;
     console.log(`[Heartbeat] ${assistantId} no-action streak: ${streak}`);
   }
+  recordHeartbeatMetric("completed", {
+    assistantId,
+    outcome: wasNoAction ? "no_action" : "action",
+    durationMs,
+    streak: noActionStreak.get(assistantId) ?? 0,
+  });
 }
 
 export function startHeartbeatLoop(runner: SessionRunner): void {
@@ -122,22 +157,51 @@ export function startHeartbeatLoop(runner: SessionRunner): void {
 
       if (now - last < interval) continue;
 
+      const runningAt = runningByAssistant.get(a.id);
+      if (runningAt) {
+        const runningMs = now - runningAt;
+        if (runningMs < HEARTBEAT_RUN_TIMEOUT_MS) {
+          recordHeartbeatMetric("skipped", { assistantId: a.id, reason: "already_running", runningMs });
+          continue;
+        }
+        console.warn(`[Heartbeat] Cleared stale running lock for ${a.name} after ${Math.round(runningMs / 1000)}s`);
+        runningByAssistant.delete(a.id);
+      }
+
       // Optimization A: skip if memory file has not changed since last run
       if (existsSync(memPath)) {
         const mtime = statSync(memPath).mtimeMs;
         if (mtime === lastMemoryMtime.get(a.id)) {
-          if (baseInterval !== interval) {
-            // Only log when adaptive interval is also pushing us forward
+          const completionAt = lastCompletionAt.get(a.id) ?? 0;
+          const completionOutcome = lastCompletionOutcome.get(a.id);
+          const shouldRetryAfterError =
+            completionOutcome === "error" &&
+            completionAt > 0 &&
+            now - completionAt >= RETRY_AFTER_ERROR_MS;
+          const shouldForceRunAfterSilence =
+            completionAt > 0 &&
+            now - completionAt >= FORCE_RUN_MAX_SILENCE_MS;
+          if (!shouldRetryAfterError && !shouldForceRunAfterSilence) {
+            console.log(`[Heartbeat] Skipping ${a.name}: memory unchanged`);
+            // Still update lastHeartbeatRun so we don't spam the log every minute
+            lastHeartbeatRun.set(a.id, now);
+            recordHeartbeatMetric("skipped", { assistantId: a.id, reason: "memory_unchanged" });
+            continue;
           }
-          console.log(`[Heartbeat] Skipping ${a.name}: memory unchanged`);
-          // Still update lastHeartbeatRun so we don't spam the log every minute
-          lastHeartbeatRun.set(a.id, now);
-          continue;
+          const forceReason = shouldRetryAfterError ? "retry_after_error" : "force_after_silence";
+          console.log(`[Heartbeat] Forcing ${a.name}: ${forceReason}`);
+          recordHeartbeatMetric("triggered", { assistantId: a.id, reason: forceReason });
         }
         lastMemoryMtime.set(a.id, mtime);
       }
 
       lastHeartbeatRun.set(a.id, now);
+      recordHeartbeatMetric("triggered", {
+        assistantId: a.id,
+        reason: "interval_due",
+        intervalMs: interval,
+        baseIntervalMs: baseInterval,
+      });
       runAssistantHeartbeat(a, runner);
     }
   }, 60_000);
@@ -160,6 +224,9 @@ export function cleanupHeartbeatData(assistantId: string): void {
   lastMemoryMtime.delete(assistantId);
   noActionStreak.delete(assistantId);
   lastMemoryOffset.delete(assistantId);
+  runningByAssistant.delete(assistantId);
+  lastCompletionAt.delete(assistantId);
+  lastCompletionOutcome.delete(assistantId);
   console.log(`[Heartbeat] Cleaned up data for assistant: ${assistantId}`);
 }
 
@@ -167,6 +234,7 @@ function runAssistantHeartbeat(assistant: AssistantConfig, runner: SessionRunner
   const prompt = buildHeartbeatPrompt(assistant);
   const streak = noActionStreak.get(assistant.id) ?? 0;
   console.log(`[Heartbeat] Running heartbeat for assistant: ${assistant.name} (streak=${streak})`);
+  runningByAssistant.set(assistant.id, Date.now());
 
   runner({
     type: "session.start",
@@ -180,7 +248,16 @@ function runAssistantHeartbeat(assistant: AssistantConfig, runner: SessionRunner
       model: assistant.model,
       background: true,
     },
-  }).catch((e) => console.error(`[Heartbeat] Failed for "${assistant.name}":`, e));
+  }).catch((e) => {
+    runningByAssistant.delete(assistant.id);
+    lastCompletionAt.set(assistant.id, Date.now());
+    lastCompletionOutcome.set(assistant.id, "error");
+    recordHeartbeatMetric("completed", {
+      assistantId: assistant.id,
+      outcome: "start_error",
+    });
+    console.error(`[Heartbeat] Failed for "${assistant.name}":`, e);
+  });
 }
 
 export function startMemoryCompactTimer(runner: SessionRunner): void {

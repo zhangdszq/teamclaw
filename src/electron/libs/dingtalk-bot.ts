@@ -1574,8 +1574,7 @@ class DingtalkConnection {
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    // File messages must not see previous file analyses in daily logs — skip daily log injection.
-    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd, { skipDailyLog: hasFiles });
+    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const msgNow = msg.createAt ?? Date.now();

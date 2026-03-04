@@ -7,6 +7,36 @@ interface KnowledgePageProps {
 
 type TabKey = "memory" | "candidates" | "docs";
 
+function stripCandidateSuffix(title: string): string {
+  return title.replace(/\s*[·・]\s*经验候选$/, "");
+}
+
+function countStepLines(steps: string): number {
+  if (!steps) return 0;
+  return steps.split("\n").filter((l) => l.trim()).length;
+}
+
+function CollapsibleSection({ label, badge, children }: { label: string; badge?: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-xs text-ink-600 hover:text-ink-800 transition-colors py-0.5 w-full text-left"
+      >
+        <svg viewBox="0 0 16 16" className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} fill="currentColor">
+          <path d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" />
+        </svg>
+        <span className="font-medium">{label}</span>
+        {badge && <span className="text-[10px] text-muted-light">{badge}</span>}
+      </button>
+      {open && (
+        <pre className="mt-1 ml-4.5 text-xs text-muted leading-relaxed whitespace-pre-wrap break-words">{children}</pre>
+      )}
+    </div>
+  );
+}
+
 export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProps) {
   const [tab, setTab] = useState<TabKey>("candidates");
   const [candidates, setCandidates] = useState<KnowledgeCandidate[]>([]);
@@ -14,6 +44,8 @@ export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProp
   const [loading, setLoading] = useState(false);
   const [memoryContent, setMemoryContent] = useState("");
   const [memoryDir, setMemoryDir] = useState("");
+
+  const [refiningId, setRefiningId] = useState<string | null>(null);
 
   const [editingDoc, setEditingDoc] = useState<KnowledgeDoc | null>(null);
   const [docTitle, setDocTitle] = useState("");
@@ -175,64 +207,100 @@ export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProp
                 暂无经验候选。完成会话后会自动抽取为本地 Markdown 文件。
               </div>
             ) : (
-              candidates.map((item) => (
-                <div key={item.id} className="rounded-xl border border-ink-900/8 bg-surface px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-ink-800 truncate">{item.title || "未命名候选"}</p>
-                      <p className="mt-0.5 text-xs text-muted-light">
-                        {new Date(item.updatedAt).toLocaleString("zh-CN", { hour12: false })}
-                      </p>
+              candidates.map((item) => {
+                const displayTitle = stripCandidateSuffix(item.title) || "未命名候选";
+                const stepCount = countStepLines(item.steps);
+                const hasRisk = item.risk && item.risk !== "待人工审核";
+                return (
+                  <div key={item.id} className="rounded-xl border border-ink-900/8 bg-surface px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-ink-800 truncate">{displayTitle}</p>
+                        <p className="mt-0.5 text-xs text-muted-light">
+                          {new Date(item.updatedAt).toLocaleString("zh-CN", { hour12: false })}
+                        </p>
+                      </div>
+                      <div className="shrink-0 mt-0.5">{renderFlow(item.reviewStatus)}</div>
                     </div>
-                  </div>
 
-                  <div className="mt-2">{renderFlow(item.reviewStatus)}</div>
+                    {item.scenario && (
+                      <p className="mt-2 text-xs text-ink-600 leading-relaxed">{item.scenario}</p>
+                    )}
 
-                  {item.scenario && (
-                    <p className="mt-2 text-xs text-muted leading-relaxed line-clamp-2">{item.scenario}</p>
-                  )}
+                    {item.steps && (
+                      <CollapsibleSection label="步骤" badge={stepCount > 0 ? `${stepCount} 项` : undefined}>
+                        {item.steps}
+                      </CollapsibleSection>
+                    )}
 
-                  <div className="mt-3 flex items-center gap-2">
-                    {item.reviewStatus === "draft" && (
-                      <>
+                    {item.result && (
+                      <CollapsibleSection label="结果">
+                        {item.result}
+                      </CollapsibleSection>
+                    )}
+
+                    {hasRisk && (
+                      <CollapsibleSection label="风险">
+                        {item.risk}
+                      </CollapsibleSection>
+                    )}
+
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        disabled={refiningId === item.id}
+                        onClick={async () => {
+                          setRefiningId(item.id);
+                          try {
+                            await window.electron.refineKnowledgeCandidate(item.id);
+                            await refresh();
+                          } catch { /* noop */ }
+                          setRefiningId(null);
+                        }}
+                        className="rounded-md bg-info/10 px-2.5 py-1 text-xs font-medium text-info hover:bg-info/15 transition-colors disabled:opacity-50"
+                      >
+                        {refiningId === item.id ? "提炼中..." : "AI 提炼"}
+                      </button>
+                      {item.reviewStatus === "draft" && (
+                        <>
+                          <button
+                            onClick={async () => {
+                              await window.electron.updateKnowledgeCandidateStatus(item.id, "verified");
+                              await refresh();
+                              setTab("docs");
+                            }}
+                            className="rounded-md bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent hover:bg-accent/15 transition-colors"
+                          >
+                            标记已验证
+                          </button>
+                          <span className="text-[10px] text-muted-light">验证后自动生成知识文档</span>
+                        </>
+                      )}
+                      {item.reviewStatus === "verified" && (
                         <button
                           onClick={async () => {
-                            await window.electron.updateKnowledgeCandidateStatus(item.id, "verified");
+                            await window.electron.updateKnowledgeCandidateStatus(item.id, "archived");
                             await refresh();
-                            setTab("docs");
                           }}
-                          className="rounded-md bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent hover:bg-accent/15 transition-colors"
+                          className="rounded-md bg-ink-900/8 px-2.5 py-1 text-xs font-medium text-ink-700 hover:bg-ink-900/12 transition-colors"
                         >
-                          标记已验证
+                          归档
                         </button>
-                        <span className="text-[10px] text-muted-light">验证后自动生成知识文档</span>
-                      </>
-                    )}
-                    {item.reviewStatus === "verified" && (
+                      )}
                       <button
                         onClick={async () => {
-                          await window.electron.updateKnowledgeCandidateStatus(item.id, "archived");
-                          await refresh();
+                          if (confirm("确定删除此经验候选？")) {
+                            await window.electron.deleteKnowledgeCandidate(item.id);
+                            await refresh();
+                          }
                         }}
-                        className="rounded-md bg-ink-900/8 px-2.5 py-1 text-xs font-medium text-ink-700 hover:bg-ink-900/12 transition-colors"
+                        className="rounded-md bg-error/8 px-2.5 py-1 text-xs font-medium text-error hover:bg-error/12 transition-colors"
                       >
-                        归档
+                        删除
                       </button>
-                    )}
-                    <button
-                      onClick={async () => {
-                        if (confirm("确定删除此经验候选？")) {
-                          await window.electron.deleteKnowledgeCandidate(item.id);
-                          await refresh();
-                        }
-                      }}
-                      className="rounded-md bg-error/8 px-2.5 py-1 text-xs font-medium text-error hover:bg-error/12 transition-colors"
-                    >
-                      删除
-                    </button>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         )}

@@ -6,7 +6,7 @@ import { AssistantManagerModal } from "./AssistantManagerModal";
 import { SchedulerModal } from "./SchedulerModal";
 
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
-const ASSISTANT_PANEL_WIDTH = 168;
+export const ASSISTANT_PANEL_WIDTH = 168;
 
 function loadAssistantCwdLocal(assistantId: string | null): string {
   if (!assistantId) return "";
@@ -63,9 +63,6 @@ export function Sidebar({
 
   const effectiveWidth = taskPanelVisible ? width : ASSISTANT_PANEL_WIDTH;
 
-  useEffect(() => {
-    onEffectiveWidthChange?.(effectiveWidth);
-  }, [effectiveWidth, onEffectiveWidthChange]);
 
   const formatCwd = (cwd?: string) => {
     if (!cwd) return "Working dir unavailable";
@@ -102,6 +99,12 @@ export function Sidebar({
 
   useEffect(() => {
     loadAssistants();
+  }, [loadAssistants]);
+
+  useEffect(() => {
+    return window.electron.onAssistantsConfigChanged(() => {
+      loadAssistants();
+    });
   }, [loadAssistants]);
 
   const currentAssistant = useMemo(() => {

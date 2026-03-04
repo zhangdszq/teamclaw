@@ -256,10 +256,9 @@ export function AssistantManagerModal({
     const allSessions = Object.values(sessions);
     return assistants.map((assistant) => {
       const own = allSessions.filter((s) => s.assistantId === assistant.id);
-      const running = own.filter((s) => s.status === "running").length;
+      const running = own.filter((s) => s.status === "running" && !s.title?.startsWith("[心跳]")).length;
       const failed = own.filter((s) => s.status === "error").length;
       const completed = own.filter((s) => s.status === "completed").length;
-      const latest = [...own].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
       const status: "running" | "error" | "idle" =
         running > 0 ? "running" : failed > 0 ? "error" : "idle";
       return {
@@ -268,8 +267,6 @@ export function AssistantManagerModal({
         failed,
         completed,
         status,
-        latestTitle: latest?.title ?? "暂无任务",
-        latestAt: latest?.updatedAt,
       };
     });
   }, [assistants, sessions]);
@@ -800,13 +797,6 @@ export function AssistantManagerModal({
                             <p className="text-[10px] text-muted">失败</p>
                             <p className="text-sm font-semibold text-error">{row.failed}</p>
                           </div>
-                        </div>
-                        <div className="mt-3">
-                          <p className="text-[10px] text-muted uppercase tracking-wide">最近任务</p>
-                          <p className="mt-1 truncate text-xs text-ink-700">{row.latestTitle}</p>
-                          <p className="mt-0.5 text-[10px] text-muted-light">
-                            {row.latestAt ? new Date(row.latestAt).toLocaleString("zh-CN", { hour12: false }) : "暂无记录"}
-                          </p>
                         </div>
                       </div>
                     ))}

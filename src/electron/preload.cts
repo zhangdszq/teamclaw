@@ -39,6 +39,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("update-knowledge-candidate-status", id, status),
     deleteKnowledgeCandidate: (id: string) =>
         ipcInvoke("delete-knowledge-candidate", id),
+    refineKnowledgeCandidate: (id: string) =>
+        ipcInvoke("refine-knowledge-candidate", id),
     getKnowledgeDocs: () =>
         ipcInvoke("get-knowledge-docs"),
     createKnowledgeDoc: (title: string, content: string) =>
@@ -175,6 +177,11 @@ electron.contextBridge.exposeInMainWorld("electron", {
         };
         electron.ipcRenderer.on("assistant-bot-owner-ids-changed", handler);
         return () => electron.ipcRenderer.off("assistant-bot-owner-ids-changed", handler);
+    },
+    onAssistantsConfigChanged: (cb: (config: any) => void) => {
+        const handler = (_: Electron.IpcRendererEvent, config: any) => cb(config);
+        electron.ipcRenderer.on("assistants-config-changed", handler);
+        return () => electron.ipcRenderer.off("assistants-config-changed", handler);
     },
     // OpenAI Codex OAuth
     openaiLogin: () => 

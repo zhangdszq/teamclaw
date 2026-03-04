@@ -5,6 +5,7 @@ import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { getPreloadPath, getUIPath, getIconPath, getTrayIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources } from "./test.js";
 import { handleClientEvent, sessions } from "./ipc-handlers.js";
+import { buildConversationDigest, extractExperienceViaAI } from "./libs/experience-extractor.js";
 // Inject the shared SessionStore into bot modules so they use the same DB connection
 setSessionStore(sessions);
 setFeishuSessionStore(sessions);
@@ -33,6 +34,7 @@ import {
   getFeishuBotStatus,
   onFeishuBotStatusChange,
   setFeishuSessionStore,
+  updateFeishuBotConfig,
   type FeishuBotOptions,
 } from "./libs/feishu-bot.js";
 import {
@@ -96,6 +98,8 @@ import {
     listKnowledgeCandidates,
     updateKnowledgeCandidateReviewStatus,
     deleteKnowledgeCandidate,
+    getKnowledgeCandidateById,
+    updateKnowledgeCandidate,
     listKnowledgeDocs,
     createKnowledgeDoc,
     updateKnowledgeDoc,
@@ -707,6 +711,18 @@ app.on("ready", async () => {
         return deleteKnowledgeCandidate(id);
     });
 
+    ipcMainHandle("refine-knowledge-candidate", async (_: any, id: string) => {
+        const candidate = getKnowledgeCandidateById(id);
+        if (!candidate) return null;
+        const history = sessions.getSessionHistory(candidate.sourceSessionId);
+        if (!history?.messages?.length) return null;
+        const digest = buildConversationDigest(history.messages);
+        if (digest.length < 100) return null;
+        const aiResult = await extractExperienceViaAI(digest, candidate.title);
+        if (!aiResult) return null;
+        return updateKnowledgeCandidate(id, aiResult);
+    });
+
     ipcMainHandle("get-knowledge-docs", () => {
         return listKnowledgeDocs();
     });
@@ -788,7 +804,17 @@ app.on("ready", async () => {
             };
             updateDingtalkBotConfig(assistant.id, updates);
             updateTelegramBotConfig(assistant.id, updates);
+            updateFeishuBotConfig(assistant.id, updates);
         }
+
+        // Notify all renderer windows so Sidebar refreshes without restart
+        const wins = BrowserWindow.getAllWindows();
+        for (const win of wins) {
+            if (!win.isDestroyed()) {
+                win.webContents.send("assistants-config-changed", result);
+            }
+        }
+
         return result;
     });
 

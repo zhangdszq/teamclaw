@@ -156,6 +156,18 @@ export function createKnowledgeCandidate(input: {
   return candidate;
 }
 
+export function updateKnowledgeCandidate(
+  id: string,
+  updates: Partial<Pick<KnowledgeCandidate, "title" | "scenario" | "steps" | "result" | "risk">>,
+): KnowledgeCandidate | null {
+  const candidate = getKnowledgeCandidateById(id);
+  if (!candidate) return null;
+  Object.assign(candidate, updates);
+  candidate.updatedAt = new Date().toISOString();
+  writeFileSync(join(EXPERIENCE_DIR, `${candidate.id}.md`), candidateToMarkdown(candidate), "utf8");
+  return candidate;
+}
+
 export function updateKnowledgeCandidateReviewStatus(id: string, status: KnowledgeReviewStatus): KnowledgeCandidate | null {
   const candidate = getKnowledgeCandidateById(id);
   if (!candidate) return null;

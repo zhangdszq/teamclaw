@@ -344,8 +344,9 @@ export function usePromptActions(
     if (!prompt.trim() && attachments.length === 0) return;
 
     let finalPrompt = prompt.trim();
+    const hasAttachments = attachments.length > 0;
 
-    if (attachments.length > 0) {
+    if (hasAttachments) {
       const parts: string[] = [];
       for (const att of attachments) {
         if (att.isImage) {
@@ -365,10 +366,11 @@ export function usePromptActions(
     // 1. No active session
     // 2. Active session's provider differs from selected provider
     // 3. Active session's assistant differs from selected assistant
+    // 4. Requests with attachments should always start a fresh session
     const activeProvider = activeSession?.provider ?? "claude";
     const activeAssistantId = activeSession?.assistantId;
     const assistantChanged = Boolean(selectedAssistantId) && activeAssistantId !== selectedAssistantId;
-    const needNewSession = !activeSessionId || (activeProvider !== provider) || assistantChanged;
+    const needNewSession = hasAttachments || !activeSessionId || (activeProvider !== provider) || assistantChanged;
 
     if (needNewSession) {
       // ── 自动选择技能 ──────────────────────────────────────────────────────────

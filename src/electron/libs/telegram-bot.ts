@@ -1198,9 +1198,9 @@ class TelegramConnection {
       ? `## 当前激活技能\n请严格按照以下技能说明执行用户请求：\n\n${skillContent}`
       : undefined;
 
-    // When starting a fresh session for file messages, inject recent history so
-    // Claude knows what was discussed before, even without a resumed session.
-    const historySection = (hasFiles && history.length > 1)
+    // File/image messages must run in an isolated context to avoid mixing
+    // previous analyses into the current file response.
+    const historySection = (!hasFiles && history.length > 1)
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;
 

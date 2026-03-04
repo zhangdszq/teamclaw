@@ -583,12 +583,14 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
   const [memorySummary, setMemorySummary] = useState<{ longTermSize: number; dailyCount: number; totalSize: number } | null>(null);
   const [showMemoryTooltip, setShowMemoryTooltip] = useState(false);
 
-  // Load skills and memory summary on mount
+  // Sync skills from global store
+  const globalSkills = useAppStore((s) => s.skills);
   useEffect(() => {
-    window.electron.getClaudeConfig().then((config) => {
-      setSkills(config.skills);
-    }).catch(console.error);
-    // Load memory summary
+    setSkills(globalSkills);
+  }, [globalSkills]);
+
+  // Load memory summary on mount
+  useEffect(() => {
     window.electron.memoryList().then((list) => {
       setMemorySummary(list.summary);
     }).catch(console.error);
@@ -602,6 +604,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
     }
     const filter = skillFilter.toLowerCase().replace(/^\//, "");
     return skill.name.toLowerCase().includes(filter) ||
+      (skill.label || "").toLowerCase().includes(filter) ||
       (skill.description || "").toLowerCase().includes(filter);
   });
 
@@ -612,6 +615,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
     }
     const filter = toolbarSkillFilter.toLowerCase();
     return skill.name.toLowerCase().includes(filter) ||
+      (skill.label || "").toLowerCase().includes(filter) ||
       (skill.description || "").toLowerCase().includes(filter);
   });
 
@@ -798,14 +802,14 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
                   <div className={`text-[13px] font-medium leading-tight truncate transition-colors ${
                     isActive ? "text-accent" : "text-ink-800"
                   }`}>
-                    {skill.name}
+                    {skill.label || skill.name}
                   </div>
                   {skill.description && (
                     <div className="text-[11px] text-muted mt-0.5 truncate">{skill.description}</div>
                   )}
                 </div>
                 <div className={`text-[10px] tabular-nums transition-opacity ${isActive ? "opacity-100 text-accent/60" : "opacity-0 group-hover:opacity-60 text-muted"}`}>
-                  /{skill.name.split("-")[0]}
+                  {skill.name}
                 </div>
               </button>
             );
@@ -891,7 +895,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
-                    {skill.name}
+                    {skill.label || skill.name}
                   </div>
                   {skill.description && (
                     <div className="text-[11px] text-muted mt-px truncate">{skill.description}</div>
@@ -1032,7 +1036,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
               </svg>
-              <span className="truncate">{activeToolbarSkill.name}</span>
+              <span className="truncate">{activeToolbarSkill.label || activeToolbarSkill.name}</span>
               <button
                 onClick={() => {
                   const prefix = `/${activeToolbarSkill.name} `;

@@ -188,6 +188,8 @@ type SkillInfo = {
     name: string;
     fullPath: string;
     description?: string;
+    label?: string;
+    category?: string;
 }
 
 type AssistantConfig = {

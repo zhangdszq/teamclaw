@@ -48,6 +48,7 @@ interface AppState {
   selectedAssistantSkillTags: string[];
   selectedAssistantPersona: string;
   heartbeatReports: HeartbeatReport[];
+  skills: SkillInfo[];
 
   setPrompt: (prompt: string) => void;
   setCwd: (cwd: string) => void;
@@ -65,6 +66,7 @@ interface AppState {
   setAssistantModel: (model: string) => void;
   setSelectedAssistant: (assistantId: string, skillNames?: string[], provider?: AgentProvider, model?: string, persona?: string, skillTags?: string[]) => void;
   dismissHeartbeatReport: (ts: number) => void;
+  refreshSkills: () => Promise<void>;
 }
 
 function createSession(id: string): SessionView {
@@ -89,6 +91,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedAssistantSkillTags: [],
   selectedAssistantPersona: "",
   heartbeatReports: [],
+  skills: [],
 
   setPrompt: (prompt) => set({ prompt }),
   setCwd: (cwd) => set({ cwd }),
@@ -115,6 +118,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       heartbeatReports: state.heartbeatReports.filter((r) => r.ts !== ts),
     })),
+
+  refreshSkills: async () => {
+    try {
+      const config = await window.electron.getClaudeConfig();
+      set({ skills: config.skills ?? [] });
+    } catch {
+      // best-effort
+    }
+  },
 
   markHistoryRequested: (sessionId) => {
     set((state) => {

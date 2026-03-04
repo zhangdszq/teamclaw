@@ -33,7 +33,7 @@ export function QuickWindow() {
   );
   const filteredSkills = availableSkills.filter((s) => {
     const f = skillFilter.toLowerCase();
-    return s.name.toLowerCase().includes(f) || (s.description || "").toLowerCase().includes(f);
+    return s.name.toLowerCase().includes(f) || (s.label || "").toLowerCase().includes(f) || (s.description || "").toLowerCase().includes(f);
   });
 
   useEffect(() => {
@@ -354,7 +354,7 @@ export function QuickWindow() {
                 <svg viewBox="0 0 24 24" className="h-2.5 w-2.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 01-1 1H9a1 1 0 01-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
                 </svg>
-                <span className="truncate">{activeSkill.name}</span>
+                <span className="truncate">{activeSkill.label || activeSkill.name}</span>
                 <button
                   onClick={handleClearSkill}
                   className="flex-shrink-0 flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-accent/20 text-accent/50 hover:text-accent transition-colors"
@@ -457,7 +457,7 @@ export function QuickWindow() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
-                        {skill.name}
+                        {skill.label || skill.name}
                       </div>
                       {skill.description && (
                         <div className="text-[10px] text-muted truncate leading-tight mt-0.5">{skill.description}</div>

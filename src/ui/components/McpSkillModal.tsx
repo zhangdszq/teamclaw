@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { useAppStore } from "../store/useAppStore";
 
 // Category metadata from remote catalog JSON
 interface CatalogCategory {
@@ -278,6 +279,7 @@ interface McpSkillModalProps {
 const CATALOG_URL = "https://s.vipkidstatic.com/fe-static/temp/skills-catalog.json";
 
 export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSkillModalProps) {
+  const refreshSkills = useAppStore((s) => s.refreshSkills);
   const [activeTab, setActiveTab] = useState<"mcp" | "skill">(initialTab);
   const [loading, setLoading] = useState(false);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
@@ -302,9 +304,6 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
   // Assistants state — for assigning skills to assistants
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
-  // After install: pick assistants to assign the newly installed skill
-  const [pendingSkillName, setPendingSkillName] = useState<string | null>(null);
-  const [assignSelection, setAssignSelection] = useState<Set<string>>(new Set());
   // For existing skill cards: manage which assistants own the skill
   const [managingSkillName, setManagingSkillName] = useState<string | null>(null);
   const [manageSelection, setManageSelection] = useState<Set<string>>(new Set());
@@ -384,9 +383,10 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       if (result.success) {
         setInstallUrl("");
         loadConfig();
+        refreshSkills();
         if (result.skillName) {
-          setPendingSkillName(result.skillName);
-          setAssignSelection(new Set(assistants.map((a) => a.id)));
+          setManagingSkillName(result.skillName);
+          setManageSelection(new Set(assistants.map((a) => a.id)));
         }
       }
     } catch (err) {
@@ -403,8 +403,9 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       const result = await window.electron.installSkill(skill.installPath);
       if (result.success) {
         loadConfig();
-        setPendingSkillName(result.skillName);
-        setAssignSelection(new Set(assistants.map((a) => a.id)));
+        refreshSkills();
+        setManagingSkillName(result.skillName);
+        setManageSelection(new Set(assistants.map((a) => a.id)));
       }
     } catch (err) {
       console.error("Failed to install skill from catalog:", err);
@@ -426,6 +427,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     try {
       await window.electron.deleteSkill(skillName);
       loadConfig();
+      refreshSkills();
       if (managingSkillName === skillName) setManagingSkillName(null);
     } catch (err) {
       console.error("Failed to delete skill:", err);
@@ -699,74 +701,6 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                 </div>
               )}
 
-              {/* Assistant assignment picker — shown after any install (card or manual) */}
-              {pendingSkillName && (
-                <div className="px-6 py-3 border-b border-ink-900/10 bg-surface-secondary/50">
-                  <div className="rounded-xl border border-accent/20 bg-accent/5 p-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-ink-800">
-                          给哪些助理配置「{pendingSkillName}」？
-                        </span>
-                        <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={assignSelection.size === assistants.length && assistants.length > 0}
-                            onChange={(e) => {
-                              setAssignSelection(e.target.checked ? new Set(assistants.map((a) => a.id)) : new Set());
-                            }}
-                            className="h-3.5 w-3.5 rounded border-ink-900/20 text-accent focus:ring-accent/30"
-                          />
-                          全选
-                        </label>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {assistants.map((a) => {
-                          const checked = assignSelection.has(a.id);
-                          return (
-                            <label
-                              key={a.id}
-                              className={`flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                                checked
-                                  ? "border-accent/40 bg-accent/10 text-ink-800"
-                                  : "border-ink-900/10 bg-white text-muted hover:border-ink-900/20"
-                              }`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => {
-                                  const next = new Set(assignSelection);
-                                  if (checked) next.delete(a.id); else next.add(a.id);
-                                  setAssignSelection(next);
-                                }}
-                                className="hidden"
-                              />
-                              {a.name}
-                            </label>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-2 flex items-center gap-2">
-                        <button
-                          onClick={async () => {
-                            await handleAssignSkill(pendingSkillName, assignSelection);
-                            setPendingSkillName(null);
-                          }}
-                          className="rounded-lg bg-accent px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-hover transition-colors"
-                        >
-                          确认分配
-                        </button>
-                        <button
-                          onClick={() => setPendingSkillName(null)}
-                          className="rounded-lg border border-ink-900/10 px-4 py-1.5 text-xs text-muted hover:bg-surface-tertiary transition-colors"
-                        >
-                          跳过
-                        </button>
-                      </div>
-                    </div>
-                </div>
-              )}
-
               <div className="flex flex-1 overflow-hidden">
                 {/* Category Sidebar */}
                 <div className="w-52 border-r border-ink-900/10 p-4 overflow-y-auto">
@@ -863,15 +797,15 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                   </h3>
                                   {skill.isInstalled ? (
                                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                                      {confirmDeleteName === skill.name ? (
+                                      {confirmDeleteName === skill.skillKey ? (
                                         // Inline confirm
                                         <div className="flex items-center gap-1">
                                           <span className="text-[10px] text-error font-medium">确认删除?</span>
                                           <button
-                                            onClick={() => handleDeleteSkill(skill.name)}
+                                            onClick={() => handleDeleteSkill(skill.skillKey)}
                                             className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-error text-white hover:bg-error/80 transition-colors"
                                           >
-                                            {deletingNames.has(skill.name) ? (
+                                            {deletingNames.has(skill.skillKey) ? (
                                               <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
                                                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
                                                 <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -895,7 +829,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                             <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">本地</span>
                                           )}
                                           <button
-                                            onClick={() => setConfirmDeleteName(skill.name)}
+                                            onClick={() => setConfirmDeleteName(skill.skillKey)}
                                             title="删除技能"
                                             className="rounded-lg p-1 text-muted hover:bg-error/10 hover:text-error transition-colors"
                                           >

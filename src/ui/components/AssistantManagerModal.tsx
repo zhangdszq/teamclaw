@@ -76,7 +76,8 @@ export function AssistantManagerModal({
   onOpenMcp,
 }: AssistantManagerModalProps) {
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
-  const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
+  const availableSkills = useAppStore((s) => s.skills);
+  const refreshSkills = useAppStore((s) => s.refreshSkills);
   const [editing, setEditing] = useState<EditingAssistant | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
@@ -93,18 +94,15 @@ export function AssistantManagerModal({
 
   const loadData = useCallback(async () => {
     try {
-      const [config, claudeConfig] = await Promise.all([
-        window.electron.getAssistantsConfig(),
-        window.electron.getClaudeConfig(),
-      ]);
+      const config = await window.electron.getAssistantsConfig();
       setAssistants(config.assistants ?? []);
-      setAvailableSkills(claudeConfig.skills ?? []);
       setGlobalUserContext(config.userContext);
       if (config.defaults) setAssistantDefaults(config.defaults);
+      refreshSkills();
     } catch (err) {
       console.error("Failed to load assistants config:", err);
     }
-  }, []);
+  }, [refreshSkills]);
 
   useEffect(() => {
     if (open) loadData();
@@ -649,9 +647,11 @@ export function AssistantManagerModal({
                       {/* 技能列表 */}
                       <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-ink-900/8 bg-surface-secondary/50">
                         {(() => {
+                          const q = skillSearch.toLowerCase();
                           const filtered = availableSkills.filter((s) =>
-                            s.name.toLowerCase().includes(skillSearch.toLowerCase()) ||
-                            (s.description ?? "").toLowerCase().includes(skillSearch.toLowerCase())
+                            s.name.toLowerCase().includes(q) ||
+                            (s.label ?? "").toLowerCase().includes(q) ||
+                            (s.description ?? "").toLowerCase().includes(q)
                           );
                           if (filtered.length === 0) {
                             return (
@@ -686,7 +686,7 @@ export function AssistantManagerModal({
                                     </div>
                                     <div className="flex-1 min-w-0">
                                       <div className="text-xs font-medium text-ink-800 leading-tight">
-                                        {skill.name}
+                                        {skill.label || skill.name}
                                       </div>
                                       {skill.description && (
                                         <div className="mt-0.5 text-[10px] text-muted line-clamp-1 leading-snug">

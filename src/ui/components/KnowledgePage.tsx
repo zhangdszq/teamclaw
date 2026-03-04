@@ -8,7 +8,7 @@ interface KnowledgePageProps {
 type TabKey = "memory" | "candidates" | "docs";
 
 export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProps) {
-  const [tab, setTab] = useState<TabKey>("memory");
+  const [tab, setTab] = useState<TabKey>("candidates");
   const [candidates, setCandidates] = useState<KnowledgeCandidate[]>([]);
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
   const [loading, setLoading] = useState(false);
@@ -76,8 +76,11 @@ export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProp
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-surface-cream" style={{ top: `${titleBarHeight}px` }}>
       <header
-        className="flex items-center justify-between h-12 border-b border-ink-900/10 bg-surface-cream shrink-0 select-none px-6"
-        style={titleBarHeight === 0 ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined}
+        className="flex items-center justify-between h-12 border-b border-ink-900/10 bg-surface-cream shrink-0 select-none pr-6"
+        style={{
+          paddingLeft: titleBarHeight === 0 ? '80px' : '24px',
+          ...(titleBarHeight === 0 ? { WebkitAppRegion: "drag" } as React.CSSProperties : {}),
+        }}
       >
         <div className="flex items-center gap-3" style={titleBarHeight === 0 ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined}>
           <button onClick={onClose} className="flex items-center gap-1.5 text-sm text-muted hover:text-ink-700 transition-colors">
@@ -87,7 +90,7 @@ export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProp
             返回
           </button>
           <div className="h-4 w-px bg-ink-900/10" />
-          <span className="text-sm font-semibold text-ink-800">记忆与经验</span>
+          <span className="text-sm font-semibold text-ink-800">经验</span>
         </div>
         <div style={titleBarHeight === 0 ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined} className="flex items-center gap-2">
           <button
@@ -108,22 +111,22 @@ export function KnowledgePage({ onClose, titleBarHeight = 0 }: KnowledgePageProp
       <div className="px-6 pt-4">
         <div className="flex items-center gap-1 rounded-xl bg-ink-900/5 p-1 w-fit">
           <button
-            onClick={() => setTab("memory")}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "memory" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
-          >
-            记忆
-          </button>
-          <button
             onClick={() => setTab("candidates")}
             className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "candidates" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
           >
-            经验候选
+            经验
           </button>
           <button
             onClick={() => setTab("docs")}
             className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "docs" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
           >
-            知识文档
+            知识库
+          </button>
+          <button
+            onClick={() => setTab("memory")}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "memory" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
+          >
+            记忆
           </button>
         </div>
       </div>

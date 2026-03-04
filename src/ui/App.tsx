@@ -439,9 +439,11 @@ function App() {
   const refreshAssistantsList = useCallback(() => {
     window.electron.getAssistantsConfig().then((c) => setAssistantsList(c.assistants ?? [])).catch(console.error);
   }, []);
+  const refreshSkills = useAppStore((s) => s.refreshSkills);
   useEffect(() => {
     refreshAssistantsList();
-  }, [refreshAssistantsList]);
+    refreshSkills();
+  }, [refreshAssistantsList, refreshSkills]);
 
   // Save defaultCwd for the currently selected assistant
   const saveAssistantDefaultCwd = useCallback(async (path: string) => {

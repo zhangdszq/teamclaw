@@ -243,7 +243,7 @@ export function Sidebar({
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                 <path d="M12 11v6M9 14h6" />
               </svg>
-              <span className="text-[11px] font-medium">记忆与经验</span>
+              <span className="text-[11px] font-medium">经验</span>
             </button>
             <button
               onClick={() => onOpenSop?.()}

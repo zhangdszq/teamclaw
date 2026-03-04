@@ -1392,6 +1392,48 @@ app.on("ready", async () => {
             console.error("Failed to read Skills:", error);
         }
 
+        // Enrich skills with catalog metadata (label, description, category)
+        try {
+            const catalogPath = app.isPackaged
+                ? join(process.resourcesPath, "skills-catalog.json")
+                : join(app.getAppPath(), "skills-catalog.json");
+            if (existsSync(catalogPath)) {
+                const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
+                const catalogSkills: { name: string; label?: string; description?: string; category?: string; installPath?: string }[] = catalog.skills ?? [];
+
+                // Build lookup: catalog name -> catalog entry, AND derived dir name -> catalog entry
+                const byName = new Map<string, typeof catalogSkills[0]>();
+                const byDirName = new Map<string, typeof catalogSkills[0]>();
+                for (const cs of catalogSkills) {
+                    byName.set(cs.name, cs);
+                    if (cs.installPath) {
+                        const url = cs.installPath.replace(/\.git\/?$/, "").replace(/\/+$/, "");
+                        const blobM = url.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+\/(.+)$/);
+                        let dirName: string;
+                        if (blobM) {
+                            const parts = blobM[1].split("/");
+                            const last = parts[parts.length - 1];
+                            dirName = last.includes(".") ? parts[parts.length - 2] ?? "" : last;
+                        } else {
+                            dirName = url.split("/").pop() ?? "";
+                        }
+                        if (dirName) byDirName.set(dirName, cs);
+                    }
+                }
+
+                for (const skill of result.skills) {
+                    const match = byName.get(skill.name) ?? byDirName.get(skill.name);
+                    if (match) {
+                        if (match.label) skill.label = match.label;
+                        if (match.description && !skill.description) skill.description = match.description;
+                        if (match.category) skill.category = match.category;
+                    }
+                }
+            }
+        } catch {
+            // Catalog enrichment is best-effort
+        }
+
         return result;
     });
 

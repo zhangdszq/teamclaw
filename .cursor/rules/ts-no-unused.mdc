@@ -1,0 +1,51 @@
+---
+description: TypeScript noUnusedLocals / noUnusedParameters 构建检查
+globs: "**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# 禁止未使用的变量和参数
+
+项目 tsconfig 开启了 `noUnusedLocals` 和 `noUnusedParameters`，未使用的声明会导致构建失败。
+
+## 规则
+
+每次修改 `.ts` / `.tsx` 文件后，必须检查：
+
+1. 新增的 import、变量、参数、解构字段是否都被使用
+2. 删除功能代码后，相关的 import 和参数是否已一并清理
+3. 接口/类型中移除了某个字段时，所有引用该字段的解构也要同步清理
+
+## 常见修复方式
+
+```typescript
+// ❌ BAD — 解构了但未使用
+const { used, unused } = props;
+
+// ✅ GOOD — 只解构需要的
+const { used } = props;
+
+// ❌ BAD — import 后未使用
+import { helperA, helperB } from './utils';
+// 只用了 helperA
+
+// ✅ GOOD
+import { helperA } from './utils';
+
+// ❌ BAD — 参数未使用
+function handler(req: Request, res: Response, next: NextFunction) {
+  res.send('ok');
+}
+
+// ✅ GOOD — 用下划线前缀标记有意忽略
+function handler(_req: Request, res: Response, _next: NextFunction) {
+  res.send('ok');
+}
+```
+
+## 检查清单
+
+- [ ] 新增的 import 全部被引用
+- [ ] 解构的字段全部被使用
+- [ ] 函数参数全部被使用（不需要的加 `_` 前缀）
+- [ ] 删除代码后相关的 import 已清理

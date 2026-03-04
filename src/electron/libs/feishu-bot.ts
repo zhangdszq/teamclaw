@@ -115,6 +115,16 @@ export function stopFeishuBot(assistantId: string): void {
   emit(assistantId, "disconnected");
 }
 
+export function updateFeishuBotConfig(
+  assistantId: string,
+  updates: Partial<Pick<FeishuBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd">>,
+): void {
+  const conn = pool.get(assistantId);
+  if (!conn) return;
+  Object.assign(conn["opts"], updates);
+  console.log(`[Feishu] Config updated for assistant=${assistantId}:`, Object.keys(updates));
+}
+
 export function getFeishuBotStatus(assistantId: string): FeishuBotStatus {
   return pool.get(assistantId)?.status ?? "disconnected";
 }

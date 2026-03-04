@@ -1042,7 +1042,6 @@ function App() {
         onNoWorkspace={() => setShowWorkspacePicker(true)}
         taskPanelVisible={taskPanelVisible}
         onToggleTaskPanel={handleToggleTaskPanel}
-        onEffectiveWidthChange={undefined}
         onShowSplash={() => setShowSplash(true)}
         onOpenSop={() => setShowSopPage(true)}
         onOpenKnowledge={() => setShowKnowledgePage(true)}

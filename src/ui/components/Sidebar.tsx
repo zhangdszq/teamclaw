@@ -27,7 +27,6 @@ interface SidebarProps {
   onNoWorkspace?: () => void;
   taskPanelVisible: boolean;
   onToggleTaskPanel: () => void;
-  onEffectiveWidthChange?: (width: number) => void;
   onShowSplash?: () => void;
   onOpenSop?: () => void;
   onOpenKnowledge?: () => void;
@@ -43,7 +42,6 @@ export function Sidebar({
   onNoWorkspace,
   taskPanelVisible,
   onToggleTaskPanel,
-  onEffectiveWidthChange,
   onShowSplash,
   onOpenSop,
   onOpenKnowledge,

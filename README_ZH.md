@@ -10,7 +10,7 @@
 
 [English](README.md)
 
-![Teamclaw](screenshots/02-main-page.png)
+![Teamclaw](assets/splash-1.jpg)
 
 </div>
 
@@ -68,6 +68,8 @@ bun run dist:linux    # Linux (x64)
 
 ### IM 机器人集成
 
+<p align="center"><img src="assets/splash-2.jpg" width="600" /></p>
+
 将任意助理接入团队通讯平台：
 
 | 平台 | 能力 |
@@ -100,6 +102,8 @@ bun run dist:linux    # Linux (x64)
 - AI 结构化精炼（场景、步骤、结果、风险）
 
 ### 调度与自动化
+
+<p align="center"><img src="assets/splash-5.jpg" width="600" /></p>
 
 | 类型 | 说明 |
 |------|------|

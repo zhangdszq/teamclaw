@@ -10,7 +10,7 @@
 
 [简体中文](README_ZH.md)
 
-![Teamclaw](screenshots/02-main-page.png)
+![Teamclaw](assets/splash-1.jpg)
 
 </div>
 
@@ -68,6 +68,8 @@ Create multiple AI assistants, each with its own identity:
 
 ### IM Bot Integration
 
+<p align="center"><img src="assets/splash-2.jpg" width="600" /></p>
+
 Connect any assistant to your team's messaging platform:
 
 | Platform | Capabilities |
@@ -100,6 +102,8 @@ Multi-layer structured memory:
 - AI-powered structured refinement (scenario, steps, result, risk)
 
 ### Scheduler & Automation
+
+<p align="center"><img src="assets/splash-5.jpg" width="600" /></p>
 
 | Type | Description |
 |------|-------------|

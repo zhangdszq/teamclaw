@@ -291,6 +291,8 @@ type MemoryListResult = {
         totalSize: number;
     };
     dailies: MemoryFileInfo[];
+    assistantDailies?: MemoryFileInfo[];
+    lastCompactionAt?: string | null;
 }
 
 type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk";
@@ -763,9 +765,9 @@ interface Window {
         googleLogout: () => Promise<{ success: boolean }>;
         googleAuthStatus: () => Promise<GoogleAuthStatus>;
         // Memory
-        memoryRead: (target: string, date?: string) => Promise<MemoryReadResult>;
-        memoryWrite: (target: string, content: string, date?: string) => Promise<MemoryWriteResult>;
-        memoryList: () => Promise<MemoryListResult>;
+        memoryRead: (target: string, date?: string, assistantId?: string) => Promise<MemoryReadResult>;
+        memoryWrite: (target: string, content: string, date?: string, assistantId?: string) => Promise<MemoryWriteResult>;
+        memoryList: (assistantId?: string) => Promise<MemoryListResult>;
         // Scheduler
         getScheduledTasks: () => Promise<ScheduledTask[]>;
         addScheduledTask: (task: ScheduledTaskInput) => Promise<ScheduledTask>;

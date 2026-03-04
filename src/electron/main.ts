@@ -84,7 +84,7 @@ import {
   runHookTasks,
   type ScheduledTask
 } from "./libs/scheduler.js";
-import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer } from "./libs/heartbeat.js";
+import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer, readLastCompactionAt } from "./libs/heartbeat.js";
 import { loadPlanItems, updatePlanItem } from "./libs/plan-store.js";
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
@@ -1145,6 +1145,7 @@ app.on("ready", async () => {
             summary: scoped ? scoped.getMemorySummary() : getMemorySummary(),
             dailies: listDailyMemories(),
             assistantDailies: scoped ? scoped.listDailies() : [],
+            lastCompactionAt: readLastCompactionAt(),
         };
     });
 
@@ -1344,7 +1345,7 @@ app.on("ready", async () => {
         try {
             const settingsPath = join(claudeDir, "settings.json");
             if (existsSync(settingsPath)) {
-                const raw = readFileSync(settingsPath, "utf8");
+                const raw = readFileSync(settingsPath, "utf8").replace(/^\uFEFF/, "");
                 const parsed = JSON.parse(raw) as { mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> };
                 if (parsed.mcpServers) {
                     for (const [name, config] of Object.entries(parsed.mcpServers)) {
@@ -1370,7 +1371,12 @@ app.on("ready", async () => {
                     // Skip hidden directories and non-directory entries
                     if (skillName.startsWith(".")) continue;
                     const skillPath = join(skillsDir, skillName);
-                    if (!statSync(skillPath).isDirectory()) continue;
+                    try {
+                        if (!statSync(skillPath).isDirectory()) continue;
+                    } catch {
+                        // broken symlink or inaccessible entry — skip
+                        continue;
+                    }
                     const skillFilePath = join(skillPath, "SKILL.md");
                     // Only include skills that have a SKILL.md file
                     if (!existsSync(skillFilePath)) continue;
@@ -1552,21 +1558,36 @@ app.on("ready", async () => {
         }
     });
 
-    // Install skill via curl + unzip (no git required)
+    // Install skill — electron.net download (Chromium network stack) + fflate unzip.
     // Supports:
     //   - GitHub subdirectory: https://github.com/user/repo/tree/branch/subdir
     //   - GitHub full repo:    https://github.com/user/repo
     ipcMainHandle("install-skill", async (_: any, url: string) => {
-        const { execSync } = await import("child_process");
-        const { mkdtempSync, cpSync, rmSync } = await import("fs");
+        const { net } = await import("electron");
+        const { unzipSync } = await import("fflate");
+        const { mkdtempSync, cpSync, rmSync, writeFileSync } = await import("fs");
         const { tmpdir } = await import("os");
         const home = homedir();
 
+        // Download via electron.net (Chromium network stack — follows redirects, respects system proxy)
+        const downloadBuffer = (dlUrl: string): Promise<Buffer> => new Promise((resolve, reject) => {
+            const request = net.request({ url: dlUrl, redirect: "follow" });
+            const chunks: Buffer[] = [];
+            request.on("response", (response) => {
+                if (response.statusCode !== 200) {
+                    return reject(new Error(`HTTP ${response.statusCode} for ${dlUrl}`));
+                }
+                response.on("data", (chunk: Buffer) => chunks.push(chunk));
+                response.on("end", () => resolve(Buffer.concat(chunks)));
+                response.on("error", reject);
+            });
+            request.on("error", reject);
+            request.end();
+        });
+
         const urlClean = url.replace(/\.git\/?$/, "").replace(/\/+$/, "");
 
-        // Normalize blob URLs to tree URLs:
-        // /blob/branch/path/SKILL.md → /tree/branch/path (strip file, use parent dir)
-        // /blob/branch/path          → /tree/branch/path (already a directory)
+        // Normalize blob URLs to tree URLs
         let normalizedUrl = urlClean;
         const blobMatch = urlClean.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
         if (blobMatch) {
@@ -1579,7 +1600,6 @@ app.on("ready", async () => {
 
         const skillName = normalizedUrl.split("/").pop() || "unknown-skill";
 
-        // Parse GitHub URL
         const subdirMatch = normalizedUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/(.+)$/);
         const repoMatch = !subdirMatch && normalizedUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(\.git)?$/);
 
@@ -1588,49 +1608,49 @@ app.on("ready", async () => {
             join(home, ".codex", "skills", skillName),
         ];
 
-        const isWin = process.platform === "win32";
-
-        // Download GitHub zip and extract to targetDir (no git)
-        // - macOS/Linux: curl + unzip (both built-in)
-        // - Windows:     curl (built-in since Win10) + PowerShell Expand-Archive
-        const installFromGithub = (user: string, repo: string, branch: string, subPath: string | null, targetDir: string) => {
+        // Download + unzip entirely in Node.js (no child_process), works on all platforms
+        const installFromGithub = async (user: string, repo: string, branch: string, subPath: string | null, targetDir: string) => {
             const zipUrl = `https://github.com/${user}/${repo}/archive/refs/heads/${branch}.zip`;
             const tmpDir = mkdtempSync(join(tmpdir(), "skill-"));
-            const zipFile = join(tmpDir, "skill.zip");
-            const extractDir = join(tmpDir, "extract");
             try {
-                execSync(`curl -fsSL "${zipUrl}" -o "${zipFile}"`, { timeout: 60000 });
-                mkdirSync(extractDir, { recursive: true });
+                const zipBuf = await downloadBuffer(zipUrl);
+                const files = unzipSync(new Uint8Array(zipBuf));
 
-                if (isWin) {
-                    // PowerShell Expand-Archive always extracts everything; we pick subdir after
-                    const psZip = zipFile.replace(/\\/g, "/");
-                    const psExtract = extractDir.replace(/\\/g, "/");
-                    execSync(
-                        `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${psZip}' -DestinationPath '${psExtract}' -Force"`,
-                        { timeout: 60000 }
-                    );
-                } else {
-                    // macOS/Linux: unzip supports pattern to avoid extracting the whole archive
-                    const zipPrefix = `${repo}-${branch}/${subPath ?? ""}`;
-                    if (subPath) {
-                        execSync(`unzip -q "${zipFile}" "${zipPrefix}/*" -d "${extractDir}"`, { timeout: 30000 });
-                    } else {
-                        execSync(`unzip -q "${zipFile}" -d "${extractDir}"`, { timeout: 30000 });
+                // Determine the prefix inside the zip (e.g. "repo-branch/" or "repo-branch/subPath/")
+                const prefix = subPath
+                    ? `${repo}-${branch}/${subPath}/`
+                    : `${repo}-${branch}/`;
+
+                let extractedAny = false;
+                for (const [zipPath, data] of Object.entries(files)) {
+                    if (!zipPath.startsWith(prefix)) continue;
+                    const relPath = zipPath.slice(prefix.length);
+                    if (!relPath) continue; // skip the dir entry itself
+
+                    // ZIP directory entries end with '/' — create dir and skip
+                    if (zipPath.endsWith("/")) {
+                        mkdirSync(join(tmpDir, relPath.replace(/\/$/, "")), { recursive: true });
+                        continue;
                     }
+
+                    const destPath = join(tmpDir, relPath);
+                    mkdirSync(join(destPath, ".."), { recursive: true });
+                    writeFileSync(destPath, data);
+                    extractedAny = true;
                 }
 
-                const srcDir = subPath
-                    ? join(extractDir, `${repo}-${branch}`, ...subPath.split("/"))
-                    : join(extractDir, `${repo}-${branch}`);
+                if (!extractedAny) throw new Error(`zip 中未找到路径: ${prefix}`);
+
                 if (existsSync(targetDir)) rmSync(targetDir, { recursive: true, force: true });
-                cpSync(srcDir, targetDir, { recursive: true });
+                mkdirSync(join(targetDir, ".."), { recursive: true });
+                cpSync(tmpDir, targetDir, { recursive: true });
             } finally {
                 rmSync(tmpDir, { recursive: true, force: true });
             }
         };
 
         const results: string[] = [];
+        let hasSuccess = false;
 
         for (const targetDir of targets) {
             try {
@@ -1641,18 +1661,19 @@ app.on("ready", async () => {
 
                 if (subdirMatch) {
                     const [, user, repo, branch, subPath] = subdirMatch;
-                    installFromGithub(user, repo, branch, subPath, targetDir);
+                    await installFromGithub(user, repo, branch, subPath, targetDir);
                 } else if (repoMatch) {
                     const [, user, repo] = repoMatch;
                     try {
-                        installFromGithub(user, repo, "main", null, targetDir);
+                        await installFromGithub(user, repo, "main", null, targetDir);
                     } catch {
-                        installFromGithub(user, repo, "master", null, targetDir);
+                        await installFromGithub(user, repo, "master", null, targetDir);
                     }
                 } else {
                     throw new Error(`不支持的地址格式: ${normalizedUrl}`);
                 }
 
+                hasSuccess = true;
                 results.push(`${action}: ${targetDir}`);
             } catch (err) {
                 results.push(`失败 (${targetDir}): ${(err as Error).message}`);
@@ -1660,7 +1681,7 @@ app.on("ready", async () => {
         }
 
         console.log("[install-skill]", results);
-        return { success: true, skillName, message: results.join("\n") };
+        return { success: hasSuccess, skillName, message: results.join("\n") };
     });
 
     // Delete (uninstall) a skill from both ~/.claude/skills/ and ~/.codex/skills/

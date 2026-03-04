@@ -1130,7 +1130,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
               onMouseEnter={() => setShowMemoryTooltip(true)}
               onMouseLeave={() => setShowMemoryTooltip(false)}
             >
-              <div className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-accent cursor-default">
+              <div className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-accent cursor-pointer">
                 <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                   <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
                 </svg>

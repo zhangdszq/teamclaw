@@ -19,7 +19,7 @@ import { SopPage } from "./components/SopPage";
 import { PlanTablePage } from "./components/PlanTablePage";
 import { KnowledgePage } from "./components/KnowledgePage";
 import { TitleBar, usePlatform } from "./components/TitleBar";
-import MDContent from "./render/markdown";
+import MDContent, { ToastHost } from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import appIconUrl from "./assets/app-icon.png";
@@ -1352,6 +1352,7 @@ function App() {
         </div>
       )}
       </div>
+      <ToastHost />
     </div>
   );
 }

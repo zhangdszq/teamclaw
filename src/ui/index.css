@@ -63,6 +63,18 @@ body,
   height: 100%;
 }
 
+button,
+[role="button"],
+[type="button"],
+[type="submit"],
+[type="reset"],
+label[for],
+select,
+summary,
+a[href] {
+  cursor: pointer;
+}
+
 body {
   font-family: "Söhne", ui-sans-serif, system-ui, -apple-system, sans-serif;
   background-color: var(--color-surface-cream);

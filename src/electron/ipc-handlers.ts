@@ -20,7 +20,7 @@ import { existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { loadScheduledTasks, runHookTasks } from './libs/scheduler.js';
 import { loadAssistantsConfig } from './libs/assistants-config.js';
-import { onHeartbeatResult } from './libs/heartbeat.js';
+import { onHeartbeatResult, onCompactionResult } from './libs/heartbeat.js';
 import {
   createKnowledgeCandidate,
   findKnowledgeCandidateBySession,
@@ -28,6 +28,7 @@ import {
 } from './libs/knowledge-store.js';
 import { IMAGE_INLINE_RULE } from './libs/bot-base.js';
 import { buildConversationDigest, extractExperienceViaAI } from './libs/experience-extractor.js';
+import { appendDailyMemory, ScopedMemory } from './libs/memory-store.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -122,6 +123,11 @@ function emit(event: ServerEvent) {
     if (status === 'idle' || status === 'error') {
       const session = sessions.getSession(sessionId);
 
+      // ── Compaction completion: persist key only on success (BUG 1 fix) ──
+      if (session?.title?.startsWith('[记忆压缩]')) {
+        onCompactionResult(status !== 'error');
+      }
+
       // ── Heartbeat suppression ──────────────────────────────
       // If this is a heartbeat session, check if the response was trivial
       if (session?.title?.startsWith('[心跳]') && (session as any).suppressIfShort !== false) {
@@ -177,7 +183,8 @@ function emit(event: ServerEvent) {
         !session ||
         session.background ||
         session.title?.startsWith('[心跳]') ||
-        session.title?.startsWith('[经验候选]');
+        session.title?.startsWith('[经验候选]') ||
+        session.title?.startsWith('[记忆压缩]');
       if (!shouldSkip) {
         setImmediate(async () => {
           try {
@@ -227,6 +234,40 @@ function emit(event: ServerEvent) {
             }
           } catch (err) {
             console.warn('[IPC] Knowledge candidate extraction failed:', err);
+          }
+        });
+
+        // Auto-record in-app session to daily memory (BUG 4 fix).
+        // Bot sessions use recordConversation(); this covers UI/app sessions.
+        setImmediate(async () => {
+          try {
+            const session = sessions.getSession(sessionId);
+            if (!session) return;
+
+            const history = sessions.getSessionHistory(sessionId);
+            const allMessages = history?.messages ?? [];
+            if (allMessages.length < 2) return;
+
+            const digest = buildConversationDigest(allMessages);
+            if (digest.length < 100) return;
+
+            const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const assistantLabel = session.assistantId ? `app/${session.assistantId}` : 'app';
+            const title = (session.title || '普通会话').slice(0, 80);
+
+            // One-line summary → shared daily (heartbeat and compaction can see it)
+            const firstLine = digest.split('\n').find((l) => l.trim()) ?? '';
+            const summary = firstLine.replace(/^\[[AU]\]\s*/, '').slice(0, 100);
+            appendDailyMemory(`- ${time} [${assistantLabel}] ${title} — ${summary}`);
+
+            // Detailed digest → assistant private daily (full context for heartbeat)
+            if (session.assistantId) {
+              const scoped = new ScopedMemory(session.assistantId);
+              const block = `## ${time}\n**会话**: ${title}\n\n${digest.slice(0, 3000)}`;
+              scoped.appendDaily(block);
+            }
+          } catch (err) {
+            console.warn('[IPC] Daily memory recording failed:', err);
           }
         });
       }

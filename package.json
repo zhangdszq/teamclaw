@@ -44,6 +44,7 @@
     "dotenv": "^17.2.3",
     "electron-log": "^5.4.3",
     "electron-updater": "^6.8.3",
+    "fflate": "^0.8.2",
     "grammy": "^1.41.0",
     "highlight.js": "^11.11.1",
     "hono": "^4.11.7",

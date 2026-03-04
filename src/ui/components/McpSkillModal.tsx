@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useState, useMemo, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAppStore } from "../store/useAppStore";
+import { emitToast } from "../render/markdown";
 
 // Category metadata from remote catalog JSON
 interface CatalogCategory {
@@ -301,6 +302,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
   const [installingNames, setInstallingNames] = useState<Set<string>>(new Set());
   const [deletingNames, setDeletingNames] = useState<Set<string>>(new Set());
   const [installResult, setInstallResult] = useState<{ success: boolean; message: string } | null>(null);
+  const skillsGridRef = useRef<HTMLDivElement>(null);
 
   // Assistants state — for assigning skills to assistants
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
@@ -329,8 +331,8 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     }
   }, []);
 
-  const loadConfig = () => {
-    setLoading(true);
+  const loadConfig = (silent = false) => {
+    if (!silent) setLoading(true);
     Promise.all([
       window.electron.getClaudeConfig(),
       window.electron.getAssistantsConfig(),
@@ -338,9 +340,9 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       setMcpServers(config.mcpServers);
       setSkills(config.skills);
       setAssistants(assistantsConfig.assistants ?? []);
-      setLoading(false);
+      if (!silent) setLoading(false);
     }).catch(() => {
-      setLoading(false);
+      if (!silent) setLoading(false);
     });
   };
 
@@ -372,50 +374,60 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     return result;
   };
 
-  const handleInstallSkill = async () => {
+  const handleInstallSkill = () => {
     const url = installUrl.trim();
     if (!url) return;
     setInstalling(true);
     setInstallResult(null);
-    try {
-      const result = await window.electron.installSkill(url);
-      setInstallResult({ success: result.success, message: result.message });
-      if (result.success) {
-        setInstallUrl("");
-        loadConfig();
-        refreshSkills();
-        if (result.skillName) {
-          setManagingSkillName(result.skillName);
-          setManageSelection(new Set(assistants.map((a) => a.id)));
+    window.electron.installSkill(url)
+      .then((result) => {
+        setInstallResult({ success: result.success, message: result.message });
+        if (result.success) {
+          setInstallUrl("");
+          loadConfig(true);
+          refreshSkills();
+          emitToast("技能安装成功", "ok");
+          if (result.skillName) {
+            setManagingSkillName(result.skillName);
+            setManageSelection(new Set(assistants.map((a) => a.id)));
+          }
+        } else {
+          emitToast("技能安装失败", "err");
         }
-      }
-    } catch (err) {
-      setInstallResult({ success: false, message: String(err) });
-    } finally {
-      setInstalling(false);
-    }
+      })
+      .catch((err) => {
+        setInstallResult({ success: false, message: String(err) });
+        emitToast("技能安装失败", "err");
+      })
+      .finally(() => setInstalling(false));
   };
 
-  const handleInstallFromCatalog = async (skill: ViewSkill) => {
+  const handleInstallFromCatalog = (skill: ViewSkill) => {
     if (!skill.installPath || installingNames.has(skill.name)) return;
     setInstallingNames((prev) => new Set([...prev, skill.name]));
-    try {
-      const result = await window.electron.installSkill(skill.installPath);
-      if (result.success) {
-        loadConfig();
-        refreshSkills();
-        setManagingSkillName(result.skillName);
-        setManageSelection(new Set(assistants.map((a) => a.id)));
-      }
-    } catch (err) {
-      console.error("Failed to install skill from catalog:", err);
-    } finally {
-      setInstallingNames((prev) => {
-        const next = new Set(prev);
-        next.delete(skill.name);
-        return next;
+    window.electron.installSkill(skill.installPath)
+      .then((result) => {
+        if (result.success) {
+          loadConfig(true);
+          refreshSkills();
+          emitToast(`${skill.label || skill.name} 安装成功`, "ok");
+          setManagingSkillName(result.skillName);
+          setManageSelection(new Set(assistants.map((a) => a.id)));
+        } else {
+          emitToast(`${skill.label || skill.name} 安装失败`, "err");
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to install skill from catalog:", err);
+        emitToast(`${skill.label || skill.name} 安装失败`, "err");
+      })
+      .finally(() => {
+        setInstallingNames((prev) => {
+          const next = new Set(prev);
+          next.delete(skill.name);
+          return next;
+        });
       });
-    }
   };
 
   const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null);
@@ -426,11 +438,13 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     setConfirmDeleteName(null);
     try {
       await window.electron.deleteSkill(skillName);
-      loadConfig();
+      loadConfig(true);
       refreshSkills();
       if (managingSkillName === skillName) setManagingSkillName(null);
+      emitToast(`${skillName} 已卸载`, "ok");
     } catch (err) {
       console.error("Failed to delete skill:", err);
+      emitToast(`${skillName} 卸载失败`, "err");
     } finally {
       setDeletingNames((prev) => {
         const next = new Set(prev);
@@ -750,7 +764,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                 </div>
 
                 {/* Skills Grid */}
-                <div className="flex-1 p-6 overflow-y-auto">
+                <div ref={skillsGridRef} className="flex-1 p-6 overflow-y-auto">
                   {(loading || catalogLoading) ? (
                     <div className="flex flex-col items-center justify-center h-full gap-3">
                       <svg className="h-8 w-8 animate-spin text-muted" viewBox="0 0 24 24" fill="none">

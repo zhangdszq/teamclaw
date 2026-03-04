@@ -198,12 +198,12 @@ electron.contextBridge.exposeInMainWorld("electron", {
     googleAuthStatus: () =>
         ipcInvoke("google-auth-status"),
     // Memory
-    memoryRead: (target: string, date?: string) => 
-        ipcInvoke("memory-read", target, date),
-    memoryWrite: (target: string, content: string, date?: string) => 
-        ipcInvoke("memory-write", target, content, date),
-    memoryList: () => 
-        ipcInvoke("memory-list"),
+    memoryRead: (target: string, date?: string, assistantId?: string) => 
+        ipcInvoke("memory-read", target, date, assistantId),
+    memoryWrite: (target: string, content: string, date?: string, assistantId?: string) => 
+        ipcInvoke("memory-write", target, content, date, assistantId),
+    memoryList: (assistantId?: string) => 
+        ipcInvoke("memory-list", assistantId),
     // Scheduler
     getScheduledTasks: () => 
         ipcInvoke("get-scheduled-tasks"),

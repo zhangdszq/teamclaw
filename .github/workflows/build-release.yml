@@ -45,6 +45,8 @@ jobs:
             artifact-name: windows-x64
 
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout

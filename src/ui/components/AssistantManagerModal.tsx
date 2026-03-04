@@ -259,8 +259,11 @@ export function AssistantManagerModal({
       const running = own.filter((s) => s.status === "running" && !s.title?.startsWith("[心跳]")).length;
       const failed = own.filter((s) => s.status === "error").length;
       const completed = own.filter((s) => s.status === "completed").length;
+      const heartbeatError = own.some(
+        (s) => s.status === "error" && s.title?.startsWith("[心跳]")
+      );
       const status: "running" | "error" | "idle" =
-        running > 0 ? "running" : failed > 0 ? "error" : "idle";
+        running > 0 ? "running" : heartbeatError ? "error" : "idle";
       return {
         assistant,
         running,

@@ -105,7 +105,9 @@ function broadcast(event: ServerEvent) {
   const payload = JSON.stringify(event);
   const windows = BrowserWindow.getAllWindows();
   for (const win of windows) {
-    win.webContents.send('server-event', payload);
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('server-event', payload);
+    }
   }
 }
 
@@ -119,8 +121,9 @@ function emit(event: ServerEvent) {
       sessions.updateSession(sessionId, { status: validStatus });
     }
 
-    // When a session finishes, check for heartbeat suppression and hook triggers
+    // When a session finishes, flush queued messages to DB before reading history
     if (status === 'idle' || status === 'error') {
+      sessions.flushQueuedMessages();
       const session = sessions.getSession(sessionId);
 
       // ── Compaction completion: persist key only on success (BUG 1 fix) ──
@@ -273,11 +276,13 @@ function emit(event: ServerEvent) {
       }
     }
   }
+  // Broadcast to renderer FIRST, then persist asynchronously to avoid blocking
+  broadcast(event);
+
   if (event.type === 'stream.message' && 'payload' in event) {
     const { sessionId, message } = event.payload as { sessionId: string; message: any };
-    sessions.recordMessage(sessionId, message);
-    
-    // Capture claudeSessionId from init message
+    sessions.queueMessage(sessionId, message);
+
     if (message?.type === 'system' && message?.subtype === 'init' && message?.session_id) {
       console.log('[IPC] Captured claudeSessionId:', message.session_id);
       sessions.updateSession(sessionId, { claudeSessionId: message.session_id });
@@ -285,13 +290,11 @@ function emit(event: ServerEvent) {
   }
   if (event.type === 'stream.user_prompt' && 'payload' in event) {
     const { sessionId, prompt } = event.payload as { sessionId: string; prompt: string };
-    sessions.recordMessage(sessionId, {
+    sessions.queueMessage(sessionId, {
       type: 'user_prompt',
       prompt,
     });
   }
-  
-  broadcast(event);
 }
 
 // Check if we should use embedded API or direct SDK

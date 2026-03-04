@@ -80,6 +80,12 @@ export class SessionStore {
   // Global lock for creating new sessions
   private createSessionLock = false;
 
+  // ── Batched message write queue ──
+  private messageQueue: Array<{ id: string; sessionId: string; data: string; createdAt: number }> = [];
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly FLUSH_INTERVAL_MS = 200;
+  private static readonly FLUSH_BATCH_SIZE = 50;
+
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.initialize();
@@ -241,6 +247,36 @@ export class SessionStore {
         `insert or ignore into messages (id, session_id, data, created_at) values (?, ?, ?, ?)`
       )
       .run(id, sessionId, JSON.stringify(message), Date.now());
+  }
+
+  queueMessage(sessionId: string, message: StreamMessage): void {
+    const id = ('uuid' in message && message.uuid) ? String(message.uuid) : crypto.randomUUID();
+    this.messageQueue.push({ id, sessionId, data: JSON.stringify(message), createdAt: Date.now() });
+
+    if (this.messageQueue.length >= SessionStore.FLUSH_BATCH_SIZE) {
+      this.flushQueuedMessages();
+    } else if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => this.flushQueuedMessages(), SessionStore.FLUSH_INTERVAL_MS);
+    }
+  }
+
+  flushQueuedMessages(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    const batch = this.messageQueue.splice(0);
+    if (batch.length === 0) return;
+
+    const insert = this.db.prepare(
+      `insert or ignore into messages (id, session_id, data, created_at) values (?, ?, ?, ?)`
+    );
+    const runBatch = this.db.transaction((rows: typeof batch) => {
+      for (const row of rows) {
+        insert.run(row.id, row.sessionId, row.data, row.createdAt);
+      }
+    });
+    runBatch(batch);
   }
 
   deleteSession(id: string): boolean {

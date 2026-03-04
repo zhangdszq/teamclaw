@@ -179,6 +179,14 @@ function InlineImage({ src, alt, className }: { src: string; alt?: string; class
   );
 }
 
+export const StreamingText = memo(function StreamingText({ text }: { text: string }) {
+  return (
+    <div className="mt-2 text-sm leading-relaxed text-ink-700 whitespace-pre-wrap break-words">
+      {String(text ?? "")}
+    </div>
+  );
+});
+
 export default memo(function MDContent({ text }: { text: string }) {
   return (
     <>

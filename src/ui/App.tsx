@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { useIPC } from "./hooks/useIPC";
 import { useAppStore } from "./store/useAppStore";
@@ -19,7 +18,7 @@ import { SopPage } from "./components/SopPage";
 import { PlanTablePage } from "./components/PlanTablePage";
 import { KnowledgePage } from "./components/KnowledgePage";
 import { TitleBar, usePlatform } from "./components/TitleBar";
-import MDContent, { ToastHost } from "./render/markdown";
+import { ToastHost, StreamingText } from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import appIconUrl from "./assets/app-icon.png";
@@ -469,26 +468,34 @@ function App() {
     }
   };
 
-  // 更新指定 session 的 partial message
-  // forceFlush=true 用于 Claude streaming（IPC 事件可能被 React 18 批处理，需要强制刷新）
-  // forceFlush=false 用于打字机模拟（setInterval tick 已是独立事件循环，无需强制刷新）
-  const updatePartialMessage = useCallback((sessionId: string, content: string, isVisible: boolean, forceFlush = false) => {
-    if (forceFlush) {
-      flushSync(() => {
-        setPartialMessages(prev => {
-          const next = new Map(prev);
-          next.set(sessionId, { content, isVisible });
-          return next;
-        });
-      });
-    } else {
+  // rAF-throttled partial message updates: accumulate in a ref, commit once per frame
+  const pendingPartialRef = useRef<Map<string, SessionPartialState>>(new Map());
+  const rafIdRef = useRef<number | null>(null);
+
+  const schedulePartialFlush = useCallback(() => {
+    if (rafIdRef.current !== null) return;
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      const pending = pendingPartialRef.current;
+      if (pending.size === 0) return;
+      const snapshot = new Map(pending);
+      pending.clear();
       setPartialMessages(prev => {
         const next = new Map(prev);
-        next.set(sessionId, { content, isVisible });
+        for (const [k, v] of snapshot) next.set(k, v);
         return next;
       });
-    }
+    });
   }, []);
+
+  useEffect(() => {
+    return () => { if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current); };
+  }, []);
+
+  const updatePartialMessage = useCallback((sessionId: string, content: string, isVisible: boolean, _forceFlush = false) => {
+    pendingPartialRef.current.set(sessionId, { content, isVisible });
+    schedulePartialFlush();
+  }, [schedulePartialFlush]);
 
   // Clear partial message for a session
   const clearPartialMessage = useCallback((sessionId: string) => {
@@ -1235,10 +1242,10 @@ function App() {
               </div>
             )}
 
-            {/* Streaming content - typewriter display when active */}
+            {/* Streaming content - plain text during streaming for performance */}
             {showPartialMessage && (
               <div className="partial-message">
-                <MDContent text={partialMessage} />
+                <StreamingText text={partialMessage} />
                 <span className="inline-block w-[2px] h-[1em] bg-ink-400 animate-pulse ml-0.5 align-middle translate-y-[0.05em]" />
               </div>
             )}

@@ -449,9 +449,13 @@ export function SopPage({ onClose, onOpenPlanTable, titleBarHeight = 0 }: SopPag
 
   // Load installed Skills and MCPs once on mount
   useEffect(() => {
+    const loadSkillCatalog = typeof window.electron.skillCatalog === "function"
+      ? window.electron.skillCatalog()
+      : Promise.resolve<SkillCatalogData>({ skills: [], categories: [] });
+
     Promise.all([
       window.electron.getClaudeConfig(),
-      window.electron.skillCatalog(),
+      loadSkillCatalog,
     ]).then(([claudeConfig, catalog]) => {
       // Build lookup maps from catalog
       const catalogMap = new Map(catalog.skills.map((s) => [s.name, s]));

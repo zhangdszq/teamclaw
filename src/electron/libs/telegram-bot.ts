@@ -45,6 +45,7 @@ import {
   buildHistoryContext,
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
+  parseReplySegments,
 } from "./bot-base.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1237,8 +1238,68 @@ class TelegramConnection {
     replyText: string,
     draftMessageId: number | null,
   ): Promise<void> {
-    const chunks = chunkMessage(replyText);
     const chatIdNum = Number(chatId);
+
+    // Check if the reply contains any local-path images; if so use segment-based sending.
+    const segments = parseReplySegments(replyText);
+    const hasImages = segments.some((s) => s.kind === "image");
+
+    if (hasImages) {
+      // Delete streaming draft before segment-based multi-message send.
+      if (draftMessageId) {
+        try {
+          await this.bot?.api.deleteMessage(chatIdNum, draftMessageId);
+        } catch (e) {
+          console.warn("[Telegram] Failed to delete draft message:", e);
+        }
+      }
+
+      const { InputFile } = await import("grammy");
+      const { readFileSync } = await import("fs");
+      const { basename } = await import("path");
+
+      for (const seg of segments) {
+        if (seg.kind === "text") {
+          const textContent = seg.content.trim();
+          if (!textContent) continue;
+          for (const chunk of chunkMessage(textContent)) {
+            try {
+              await ctx.reply(markdownToTelegramHtml(chunk), {
+                parse_mode: "HTML",
+                reply_to_message_id: ctx.message?.message_id,
+              });
+            } catch {
+              try {
+                await ctx.reply(chunk, { reply_to_message_id: ctx.message?.message_id });
+              } catch (err2) {
+                console.error("[Telegram] Text segment reply failed:", err2);
+              }
+            }
+          }
+        } else {
+          // Image segment — send as photo
+          try {
+            const fileBuffer = readFileSync(seg.path);
+            const fileName = basename(seg.path);
+            const inputFile = new InputFile(fileBuffer, fileName);
+            await ctx.replyWithPhoto(inputFile, {
+              caption: seg.alt || undefined,
+              reply_to_message_id: ctx.message?.message_id,
+            });
+          } catch (err) {
+            console.error("[Telegram] Photo send failed:", err);
+            // Fallback: mention the path in text
+            try {
+              await ctx.reply(`[图片: ${seg.path}]`, { reply_to_message_id: ctx.message?.message_id });
+            } catch { /* ignore */ }
+          }
+        }
+      }
+      return;
+    }
+
+    // No images — original chunked send logic.
+    const chunks = chunkMessage(replyText);
 
     if (draftMessageId && chunks.length === 1) {
       // Single chunk — edit the streaming draft to its final version

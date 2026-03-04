@@ -92,6 +92,16 @@ import { parse as parseToml } from "smol-toml";
 import { query as agentQuery } from "@anthropic-ai/claude-agent-sdk";
 import { rmSync } from "fs";
 import { getSettingSources } from "./libs/claude-settings.js";
+import {
+    listKnowledgeCandidates,
+    updateKnowledgeCandidateReviewStatus,
+    deleteKnowledgeCandidate,
+    listKnowledgeDocs,
+    createKnowledgeDoc,
+    updateKnowledgeDoc,
+    deleteKnowledgeDoc,
+    getKnowledgeBasePath,
+} from "./libs/knowledge-store.js";
 
 // ─── Memory janitor: run on startup + every 24 h ─────────────
 function startMemoryJanitor(): void {
@@ -240,7 +250,13 @@ app.on("ready", async () => {
     protocol.handle("localfile", async (request) => {
         try {
             const { promises: fs } = await import("fs");
-            const filePath = decodeURIComponent(new URL(request.url).pathname);
+            const url = new URL(request.url);
+            // localfile:///absolute/path  → hostname="" pathname="/absolute/path"
+            // localfile://partial/path    → hostname="partial" pathname="/path" (browser normalised away one slash)
+            // Reconstruct the full absolute path in both cases.
+            const filePath = decodeURIComponent(
+                url.hostname ? `/${url.hostname}${url.pathname}` : url.pathname
+            );
             const data = await fs.readFile(filePath);
             const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
             const mimeMap: Record<string, string> = {
@@ -308,7 +324,6 @@ app.on("ready", async () => {
         } else {
             win.loadFile(getUIPath());
         }
-
         // Hide instead of close so the app stays alive for quick window
         win.on("close", (e) => {
             if (!isQuitting) {
@@ -419,7 +434,6 @@ app.on("ready", async () => {
         } else {
             quickWindow.loadFile(quickUrl, { query: { mode: "quick" } });
         }
-
         quickWindow.on("blur", () => {
             setTimeout(() => {
                 if (suppressBlur) return;
@@ -681,6 +695,38 @@ app.on("ready", async () => {
         return true;
     });
 
+    ipcMainHandle("get-knowledge-candidates", () => {
+        return listKnowledgeCandidates();
+    });
+
+    ipcMainHandle("update-knowledge-candidate-status", (_: any, id: string, status: "draft" | "verified" | "archived") => {
+        return updateKnowledgeCandidateReviewStatus(id, status);
+    });
+
+    ipcMainHandle("delete-knowledge-candidate", (_: any, id: string) => {
+        return deleteKnowledgeCandidate(id);
+    });
+
+    ipcMainHandle("get-knowledge-docs", () => {
+        return listKnowledgeDocs();
+    });
+
+    ipcMainHandle("create-knowledge-doc", (_: any, title: string, content: string) => {
+        return createKnowledgeDoc(title, content);
+    });
+
+    ipcMainHandle("update-knowledge-doc", (_: any, id: string, title: string, content: string) => {
+        return updateKnowledgeDoc(id, title, content);
+    });
+
+    ipcMainHandle("delete-knowledge-doc", (_: any, id: string) => {
+        return deleteKnowledgeDoc(id);
+    });
+
+    ipcMainHandle("get-knowledge-base-path", () => {
+        return getKnowledgeBasePath();
+    });
+
     ipcMainHandle("test-alert-webhook", async (_: any, input: { webhookUrl: string; secret?: string }) => {
         try {
             const settings = loadUserSettings();
@@ -799,7 +845,9 @@ app.on("ready", async () => {
     onDingtalkBotStatusChange((assistantId, status, detail) => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("dingtalk-bot-status", { assistantId, status, detail });
+            if (!win.isDestroyed()) {
+                win.webContents.send("dingtalk-bot-status", { assistantId, status, detail });
+            }
         }
     });
 
@@ -811,7 +859,9 @@ app.on("ready", async () => {
         });
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("server-event", event);
+            if (!win.isDestroyed()) {
+                win.webContents.send("server-event", event);
+            }
         }
     });
 
@@ -864,7 +914,9 @@ app.on("ready", async () => {
     onTelegramBotStatusChange((assistantId, status, detail) => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("telegram-bot-status", { assistantId, status, detail });
+            if (!win.isDestroyed()) {
+                win.webContents.send("telegram-bot-status", { assistantId, status, detail });
+            }
         }
     });
 
@@ -876,7 +928,9 @@ app.on("ready", async () => {
         });
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("server-event", event);
+            if (!win.isDestroyed()) {
+                win.webContents.send("server-event", event);
+            }
         }
     });
 
@@ -884,7 +938,9 @@ app.on("ready", async () => {
     onFeishuBotStatusChange((assistantId, status, detail) => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("feishu-bot-status", { assistantId, status, detail });
+            if (!win.isDestroyed()) {
+                win.webContents.send("feishu-bot-status", { assistantId, status, detail });
+            }
         }
     });
 
@@ -893,16 +949,16 @@ app.on("ready", async () => {
         return loadScheduledTasks();
     });
 
-    ipcMainHandle("add-scheduled-task", (_: any, task: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt">) => {
-        return addScheduledTask(task);
+    ipcMainHandle("add-scheduled-task", async (_: any, task: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt">) => {
+        return await addScheduledTask(task);
     });
 
-    ipcMainHandle("update-scheduled-task", (_: any, id: string, updates: Partial<ScheduledTask>) => {
-        return updateScheduledTask(id, updates);
+    ipcMainHandle("update-scheduled-task", async (_: any, id: string, updates: Partial<ScheduledTask>) => {
+        return await updateScheduledTask(id, updates);
     });
 
-    ipcMainHandle("delete-scheduled-task", (_: any, id: string) => {
-        return deleteScheduledTask(id);
+    ipcMainHandle("delete-scheduled-task", async (_: any, id: string) => {
+        return await deleteScheduledTask(id);
     });
 
     // Plan table handlers
@@ -942,15 +998,17 @@ app.on("ready", async () => {
 
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("scheduler:run-task", {
-                name: item.sopName,
-                sopName: item.sopName,
-                planTaskName: item.content.split("\n")[0].slice(0, 40),
-                prompt: buildPlanPrompt(item.content, item.sopName, id),
-                assistantId: item.assistantId,
-                cwd: undefined,
-                planItemId: id,
-            });
+            if (!win.isDestroyed()) {
+                win.webContents.send("scheduler:run-task", {
+                    name: item.sopName,
+                    sopName: item.sopName,
+                    planTaskName: item.content.split("\n")[0].slice(0, 40),
+                    prompt: buildPlanPrompt(item.content, item.sopName, id),
+                    assistantId: item.assistantId,
+                    cwd: undefined,
+                    planItemId: id,
+                });
+            }
         }
         return { ok: true };
     });
@@ -964,15 +1022,17 @@ app.on("ready", async () => {
 
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("scheduler:run-task", {
-                name: item.sopName,
-                sopName: item.sopName,
-                planTaskName: item.content.split("\n")[0].slice(0, 40),
-                prompt: buildPlanPrompt(item.content, item.sopName, id),
-                assistantId: item.assistantId,
-                cwd: undefined,
-                planItemId: id,
-            });
+            if (!win.isDestroyed()) {
+                win.webContents.send("scheduler:run-task", {
+                    name: item.sopName,
+                    sopName: item.sopName,
+                    planTaskName: item.content.split("\n")[0].slice(0, 40),
+                    prompt: buildPlanPrompt(item.content, item.sopName, id),
+                    assistantId: item.assistantId,
+                    cwd: undefined,
+                    planItemId: id,
+                });
+            }
         }
         return { ok: true };
     });
@@ -1108,6 +1168,18 @@ app.on("ready", async () => {
         return true;
     });
 
+    // Open a web URL in system default browser
+    ipcMainHandle("open-external-url", async (_: any, rawUrl: string) => {
+        try {
+            const parsed = new URL(rawUrl);
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+            await shell.openExternal(parsed.toString());
+            return true;
+        } catch {
+            return false;
+        }
+    });
+
     // Handle image selection (returns path only, Agent will use built-in analyze_image tool)
     ipcMainHandle("select-image", async () => {
         const result = await dialog.showOpenDialog(mainWindow, {
@@ -1138,6 +1210,34 @@ app.on("ready", async () => {
             return resized.toDataURL();
         } catch {
             return null;
+        }
+    });
+
+    // Save an image to a user-chosen path via Save dialog
+    ipcMainHandle("save-image", async (_: any, sourcePath: string) => {
+        const path = await import("path");
+        const fs = await import("fs");
+        const defaultName = path.basename(sourcePath) || "image.png";
+        const { ext } = path.parse(defaultName);
+        const extLower = ext.toLowerCase();
+        const filterMap: Record<string, string> = {
+            ".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG",
+            ".gif": "GIF", ".webp": "WebP", ".bmp": "BMP", ".svg": "SVG",
+        };
+        const result = await dialog.showSaveDialog(mainWindow, {
+            title: "保存图片",
+            defaultPath: defaultName,
+            filters: [
+                { name: filterMap[extLower] ?? "图片", extensions: [extLower.replace(".", "") || "png"] },
+                { name: "所有文件", extensions: ["*"] },
+            ],
+        });
+        if (result.canceled || !result.filePath) return { ok: false, reason: "canceled" };
+        try {
+            await fs.promises.copyFile(sourcePath, result.filePath);
+            return { ok: true, savedTo: result.filePath };
+        } catch (err) {
+            return { ok: false, reason: String(err) };
         }
     });
 
@@ -1394,11 +1494,25 @@ app.on("ready", async () => {
         const home = homedir();
 
         const urlClean = url.replace(/\.git\/?$/, "").replace(/\/+$/, "");
-        const skillName = urlClean.split("/").pop() || "unknown-skill";
+
+        // Normalize blob URLs to tree URLs:
+        // /blob/branch/path/SKILL.md → /tree/branch/path (strip file, use parent dir)
+        // /blob/branch/path          → /tree/branch/path (already a directory)
+        let normalizedUrl = urlClean;
+        const blobMatch = urlClean.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
+        if (blobMatch) {
+            const [, user, repo, branch, filePath] = blobMatch;
+            const parts = filePath.split("/");
+            const lastPart = parts[parts.length - 1];
+            const dirPath = lastPart.includes(".") ? parts.slice(0, -1).join("/") : filePath;
+            normalizedUrl = `https://github.com/${user}/${repo}/tree/${branch}/${dirPath}`;
+        }
+
+        const skillName = normalizedUrl.split("/").pop() || "unknown-skill";
 
         // Parse GitHub URL
-        const subdirMatch = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/(.+)$/);
-        const repoMatch = !subdirMatch && url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(\.git)?$/);
+        const subdirMatch = normalizedUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/(.+)$/);
+        const repoMatch = !subdirMatch && normalizedUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(\.git)?$/);
 
         const targets = [
             join(home, ".claude", "skills", skillName),
@@ -1467,7 +1581,7 @@ app.on("ready", async () => {
                         installFromGithub(user, repo, "master", null, targetDir);
                     }
                 } else {
-                    throw new Error(`不支持的地址格式: ${url}`);
+                    throw new Error(`不支持的地址格式: ${normalizedUrl}`);
                 }
 
                 results.push(`${action}: ${targetDir}`);
@@ -1536,7 +1650,9 @@ app.on("ready", async () => {
     setGoalCompleteNotifier(() => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-            win.webContents.send("goal-completed");
+            if (!win.isDestroyed()) {
+                win.webContents.send("goal-completed");
+            }
         }
     });
 

@@ -458,7 +458,7 @@ const createScheduledTaskTool = tool(
         }
       }
 
-      const task = addScheduledTask({
+      const task = await addScheduledTask({
         name: String(input.name ?? ""),
         prompt: String(input.prompt ?? ""),
         enabled: true,
@@ -531,7 +531,7 @@ const deleteScheduledTaskTool = tool(
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return ok(`未找到 ID 为 ${taskId} 的任务`);
 
-      const success = deleteScheduledTask(taskId);
+      const success = await deleteScheduledTask(taskId);
       return ok(success ? `已删除定时任务：${task.name}` : `删除失败，请重试`);
     } catch (err) {
       return ok(`删除失败: ${err instanceof Error ? err.message : String(err)}`);

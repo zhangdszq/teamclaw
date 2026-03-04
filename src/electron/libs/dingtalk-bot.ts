@@ -35,6 +35,7 @@ import {
   buildHistoryContext,
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
+  parseReplySegments,
 } from "./bot-base.js";
 
 function getLocalIp(): string {
@@ -2008,7 +2009,7 @@ class DingtalkConnection {
 
   // ── Send markdown via sessionWebhook ─────────────────────────────────────────
 
-  private async sendMarkdown(webhook: string, text: string): Promise<void> {
+  private async sendMarkdownRaw(webhook: string, text: string): Promise<void> {
     const resp = await fetch(webhook, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2023,6 +2024,54 @@ class DingtalkConnection {
 
     if (!resp.ok) {
       console.error(`[DingTalk] Reply failed: HTTP ${resp.status} ${await resp.text()}`);
+    }
+  }
+
+  /**
+   * Send a reply that may contain inline images (![alt](localPath)).
+   * Images are uploaded to DingTalk media server and sent as separate image messages;
+   * surrounding text is sent as Markdown.  Falls back to plain Markdown if no local images found.
+   */
+  private async sendMarkdown(webhook: string, text: string): Promise<void> {
+    const segments = parseReplySegments(text);
+    const hasImages = segments.some((s) => s.kind === "image");
+
+    if (!hasImages) {
+      return this.sendMarkdownRaw(webhook, text);
+    }
+
+    for (const seg of segments) {
+      if (seg.kind === "text") {
+        const trimmed = seg.content.trim();
+        if (!trimmed) continue;
+        await this.sendMarkdownRaw(webhook, trimmed).catch((e) =>
+          console.warn("[DingTalk] Text segment send failed:", e),
+        );
+      } else {
+        // Upload the local image and send as msgtype:"image"
+        try {
+          const mediaId = await uploadMediaV1(
+            this.opts.appKey,
+            this.opts.appSecret,
+            seg.path,
+            "image",
+          );
+          if (!mediaId) throw new Error("upload returned null media_id");
+
+          const resp = await fetch(webhook, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ msgtype: "image", image: { media_id: mediaId } }),
+          });
+          if (!resp.ok) {
+            console.error(`[DingTalk] Image send failed: HTTP ${resp.status} ${await resp.text()}`);
+          }
+        } catch (err) {
+          console.error("[DingTalk] Image segment send error:", err);
+          // Fallback: mention path as text
+          await this.sendMarkdownRaw(webhook, `[图片: ${seg.path}]`).catch(() => {});
+        }
+      }
     }
   }
 }

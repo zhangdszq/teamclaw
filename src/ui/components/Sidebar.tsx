@@ -30,11 +30,11 @@ interface SidebarProps {
   onEffectiveWidthChange?: (width: number) => void;
   onShowSplash?: () => void;
   onOpenSop?: () => void;
+  onOpenKnowledge?: () => void;
   titleBarHeight?: number;
 }
 
 export function Sidebar({
-  onNewSession: _onNewSession,
   onDeleteSession,
   width,
   onResizeStart,
@@ -46,6 +46,7 @@ export function Sidebar({
   onEffectiveWidthChange,
   onShowSplash,
   onOpenSop,
+  onOpenKnowledge,
   titleBarHeight = 0,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
@@ -232,7 +233,17 @@ export function Sidebar({
                 <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
-              <span className="text-[11px] font-medium">助理管理</span>
+              <span className="text-[11px] font-medium">团队管理</span>
+            </button>
+            <button
+              onClick={() => onOpenKnowledge?.()}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                <path d="M12 11v6M9 14h6" />
+              </svg>
+              <span className="text-[11px] font-medium">记忆与经验</span>
             </button>
             <button
               onClick={() => onOpenSop?.()}

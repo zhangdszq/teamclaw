@@ -23,6 +23,8 @@ interface CatalogSkill {
 // Merged view combining catalog + installed state
 interface ViewSkill {
   name: string;
+  /** Actual installed directory name used for skillNames assignment (may differ from catalog name) */
+  skillKey: string;
   label?: string;
   description?: string;
   category: string;
@@ -84,6 +86,23 @@ function getSkillCategoryFromText(name: string, desc: string): string {
   if (text.includes("效率") || text.includes("productivity") || text.includes("automat") || text.includes("自动") || text.includes("feishu") || text.includes("飞书")) return "productivity";
   if (text.includes("research") || text.includes("调研") || text.includes("搜索") || text.includes("search")) return "research";
   return "other";
+}
+
+// Derive the local install directory name from a catalog installPath.
+// Mirrors the normalization logic in main.ts install-skill handler:
+//   /blob/branch/path/SKILL.md → "path" (strip file, take parent dir name)
+//   /blob/branch/path          → "path" (last segment)
+//   /tree/branch/path          → "path" (last segment)
+//   https://github.com/user/repo → "repo"
+function getInstallDirName(installPath: string): string {
+  const url = installPath.replace(/\.git\/?$/, "").replace(/\/+$/, "");
+  const blobMatch = url.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+\/(.+)$/);
+  if (blobMatch) {
+    const parts = blobMatch[1].split("/");
+    const last = parts[parts.length - 1];
+    return last.includes(".") ? parts[parts.length - 2] ?? "" : last;
+  }
+  return url.split("/").pop() ?? "";
 }
 
 // Build a category config lookup: CDN catalog > built-in fallback > auto-generated
@@ -386,7 +405,6 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
         loadConfig();
         setPendingSkillName(result.skillName);
         setAssignSelection(new Set(assistants.map((a) => a.id)));
-        setShowInstallForm(true);
       }
     } catch (err) {
       console.error("Failed to install skill from catalog:", err);
@@ -457,9 +475,13 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
     // Catalog skills first (with install status overlay)
     const result: ViewSkill[] = catalog.map((cs) => {
-      const installed = installedMap.get(cs.name);
+      // Match by catalog name first; fall back to derived install dir name
+      // (e.g. catalog name "pm-user-story" installs to dir "user-story")
+      const dirName = cs.installPath ? getInstallDirName(cs.installPath) : "";
+      const installed = installedMap.get(cs.name) ?? (dirName ? installedMap.get(dirName) : undefined);
       return {
         name: cs.name,
+        skillKey: installed?.name ?? (dirName || cs.name),
         label: cs.label,
         description: cs.description,
         category: cs.category,
@@ -475,6 +497,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       if (!catalogNames.has(s.name) && !s.name.startsWith(".")) {
         result.push({
           name: s.name,
+          skillKey: s.name,
           label: s.name,
           description: undefined,
           category: getSkillCategoryFromText(s.name, s.description || ""),
@@ -626,7 +649,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
               </div>
 
 
-              {/* Install Skill Form */}
+              {/* Manual Install Form — only shown when clicking 手动安装 */}
               {showInstallForm && (
                 <div className="px-6 py-3 border-b border-ink-900/10 bg-surface-secondary/50">
                   <div className="flex items-center gap-3">
@@ -673,10 +696,13 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                   <p className="mt-2 text-[11px] text-muted-light">
                     技能将同时安装到 ~/.claude/skills/ 和 ~/.codex/skills/
                   </p>
+                </div>
+              )}
 
-                  {/* Assistant assignment picker after successful install */}
-                  {pendingSkillName && (
-                    <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
+              {/* Assistant assignment picker — shown after any install (card or manual) */}
+              {pendingSkillName && (
+                <div className="px-6 py-3 border-b border-ink-900/10 bg-surface-secondary/50">
+                  <div className="rounded-xl border border-accent/20 bg-accent/5 p-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-ink-800">
                           给哪些助理配置「{pendingSkillName}」？
@@ -738,7 +764,6 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                         </button>
                       </div>
                     </div>
-                  )}
                 </div>
               )}
 
@@ -927,8 +952,8 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
                             {/* Installed: assistant assignment UI */}
                             {skill.isInstalled && (() => {
-                              const owners = getSkillAssistants(skill.name);
-                              const isManaging = managingSkillName === skill.name;
+                              const owners = getSkillAssistants(skill.skillKey);
+                              const isManaging = managingSkillName === skill.skillKey;
                               return (
                                 <div className="mt-3">
                                   <div className="flex items-center justify-between">
@@ -946,7 +971,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                         if (isManaging) {
                                           setManagingSkillName(null);
                                         } else {
-                                          setManagingSkillName(skill.name);
+                                          setManagingSkillName(skill.skillKey);
                                           setManageSelection(new Set(owners.map((a) => a.id)));
                                         }
                                       }}
@@ -1000,7 +1025,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                       </div>
                                       <button
                                         onClick={async () => {
-                                          await handleAssignSkill(skill.name, manageSelection);
+                                          await handleAssignSkill(skill.skillKey, manageSelection);
                                           setManagingSkillName(null);
                                         }}
                                         className="mt-2 w-full rounded-lg bg-accent px-3 py-1.5 text-[10px] font-medium text-white hover:bg-accent-hover transition-colors"

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { BotConfigModal } from "./BotConfigModal";
+import { useAppStore } from "../store/useAppStore";
 
 
 interface AssistantManagerModalProps {
@@ -48,6 +49,7 @@ function emptyAssistant(defaults?: AssistantDefaults): EditingAssistant {
 }
 
 const CARDS_PER_PAGE = 6;
+type TeamManagerTab = "dashboard" | "members";
 
 const AVATAR_COLORS = [
   "bg-violet-100 text-violet-600",
@@ -84,8 +86,10 @@ export function AssistantManagerModal({
   const [newTagInput, setNewTagInput] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [assistantDefaults, setAssistantDefaults] = useState<AssistantDefaults | undefined>(undefined);
+  const [managerTab, setManagerTab] = useState<TeamManagerTab>("dashboard");
 
   const [globalUserContext, setGlobalUserContext] = useState<string | undefined>(undefined);
+  const sessions = useAppStore((s) => s.sessions);
 
   const loadData = useCallback(async () => {
     try {
@@ -250,6 +254,28 @@ export function AssistantManagerModal({
     (currentPage + 1) * CARDS_PER_PAGE
   );
 
+  const dashboardRows = useMemo(() => {
+    const allSessions = Object.values(sessions);
+    return assistants.map((assistant) => {
+      const own = allSessions.filter((s) => s.assistantId === assistant.id);
+      const running = own.filter((s) => s.status === "running").length;
+      const failed = own.filter((s) => s.status === "error").length;
+      const completed = own.filter((s) => s.status === "completed").length;
+      const latest = [...own].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+      const status: "running" | "error" | "idle" =
+        running > 0 ? "running" : failed > 0 ? "error" : "idle";
+      return {
+        assistant,
+        running,
+        failed,
+        completed,
+        status,
+        latestTitle: latest?.title ?? "暂无任务",
+        latestAt: latest?.updatedAt,
+      };
+    });
+  }, [assistants, sessions]);
+
   return (
     <>
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -270,8 +296,8 @@ export function AssistantManagerModal({
               )}
               <Dialog.Title className="text-base font-semibold text-ink-800">
                 {editing
-                  ? (isNew ? "新建助理" : `编辑 · ${editing.name}`)
-                  : "助理管理"}
+                  ? (isNew ? "新建成员" : `编辑 · ${editing.name}`)
+                  : "团队管理"}
               </Dialog.Title>
             </div>
             <div className="flex items-center gap-1.5">
@@ -310,7 +336,7 @@ export function AssistantManagerModal({
                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <path d="M12 5v14M5 12h14" />
                     </svg>
-                    新建助理
+                    新建成员
                   </button>
                 </>
               )}
@@ -720,7 +746,73 @@ export function AssistantManagerModal({
             </div>
           ) : (
             <div className="mt-4 flex flex-1 flex-col min-h-0">
-              {assistants.length === 0 ? (
+              <div className="mb-3 flex items-center gap-1 rounded-xl bg-ink-900/5 p-1 w-fit">
+                <button
+                  onClick={() => setManagerTab("dashboard")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                    managerTab === "dashboard" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
+                  }`}
+                >
+                  团队看板
+                </button>
+                <button
+                  onClick={() => setManagerTab("members")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                    managerTab === "members" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
+                  }`}
+                >
+                  成员管理
+                </button>
+              </div>
+
+              {managerTab === "dashboard" ? (
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  <div className="grid grid-cols-2 gap-3">
+                    {dashboardRows.map((row) => (
+                      <div key={row.assistant.id} className="rounded-2xl border border-ink-900/8 bg-surface p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            {row.assistant.avatar ? (
+                              <img src={row.assistant.avatar} alt="" className="h-8 w-8 rounded-full object-cover" />
+                            ) : (
+                              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${getAvatarColor(row.assistant.name)}`}>
+                                {row.assistant.name.slice(0, 1).toUpperCase()}
+                              </div>
+                            )}
+                            <span className="text-sm font-semibold text-ink-800">{row.assistant.name}</span>
+                          </div>
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                            row.status === "running" ? "bg-info/10 text-info" : row.status === "error" ? "bg-error/10 text-error" : "bg-ink-900/8 text-muted"
+                          }`}>
+                            {row.status === "running" ? "执行中" : row.status === "error" ? "异常" : "空闲"}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                          <div className="rounded-lg bg-surface-secondary p-2">
+                            <p className="text-[10px] text-muted">运行中</p>
+                            <p className="text-sm font-semibold text-info">{row.running}</p>
+                          </div>
+                          <div className="rounded-lg bg-surface-secondary p-2">
+                            <p className="text-[10px] text-muted">已完成</p>
+                            <p className="text-sm font-semibold text-success">{row.completed}</p>
+                          </div>
+                          <div className="rounded-lg bg-surface-secondary p-2">
+                            <p className="text-[10px] text-muted">失败</p>
+                            <p className="text-sm font-semibold text-error">{row.failed}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3">
+                          <p className="text-[10px] text-muted uppercase tracking-wide">最近任务</p>
+                          <p className="mt-1 truncate text-xs text-ink-700">{row.latestTitle}</p>
+                          <p className="mt-0.5 text-[10px] text-muted-light">
+                            {row.latestAt ? new Date(row.latestAt).toLocaleString("zh-CN", { hour12: false }) : "暂无记录"}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : assistants.length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-900/10 py-14 text-center">
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-surface-secondary">
                     <svg viewBox="0 0 24 24" className="h-6 w-6 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -729,8 +821,8 @@ export function AssistantManagerModal({
                       <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
                     </svg>
                   </div>
-                  <p className="text-sm font-medium text-ink-700">暂无助理</p>
-                  <p className="mt-1 text-xs text-muted">点击右上角「新建助理」创建第一个</p>
+                  <p className="text-sm font-medium text-ink-700">暂无成员</p>
+                  <p className="mt-1 text-xs text-muted">点击右上角「新建成员」创建第一个</p>
                 </div>
               ) : (
                 <>
@@ -829,7 +921,7 @@ export function AssistantManagerModal({
                                 return botCount > 0 ? (
                                   <div className="flex items-center gap-1">
                                     <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                    <span className="text-[11px] text-emerald-600">{botCount} 机器人</span>
+                                    <span className="text-[11px] text-emerald-600">{botCount} 消息通道</span>
                                   </div>
                                 ) : null;
                               })()}

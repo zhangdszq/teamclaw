@@ -9,6 +9,7 @@ import {
 import { runClaude, runCodex, stopSession, type ServerEvent } from '../services/runner.js';
 import type { AgentProvider } from '../types.js';
 import { loadAssistantsConfig } from '../../libs/assistants-config.js';
+import { IMAGE_INLINE_RULE } from '../../libs/bot-base.js';
 
 const agent = new Hono();
 
@@ -39,6 +40,8 @@ function applyAssistantContext(prompt: string, skillNames?: string[], persona?: 
 
   const normalized = (skillNames ?? []).map((s) => s.trim()).filter(Boolean);
   if (normalized.length > 0) sections.push(normalized.map((s) => `/${s}`).join("\n"));
+
+  sections.push(IMAGE_INLINE_RULE);
 
   if (sections.length === 0) return prompt;
   return `${sections.join("\n\n")}\n\n${prompt}`;
@@ -103,6 +106,46 @@ agent.post('/start', async (c) => {
 
   if (!body.title) {
     return c.json({ error: 'title is required' }, 400);
+  }
+
+  // Validate optional field: cwd (must be a non-empty string if provided)
+  if (body.cwd !== undefined) {
+    if (typeof body.cwd !== 'string' || body.cwd.trim() === '') {
+      return c.json({ error: 'cwd must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: allowedTools (must be a non-empty string if provided)
+  if (body.allowedTools !== undefined) {
+    if (typeof body.allowedTools !== 'string' || body.allowedTools.trim() === '') {
+      return c.json({ error: 'allowedTools must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: model (must be a non-empty string if provided)
+  if (body.model !== undefined) {
+    if (typeof body.model !== 'string' || body.model.trim() === '') {
+      return c.json({ error: 'model must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: assistantId (must be a non-empty string if provided)
+  if (body.assistantId !== undefined) {
+    if (typeof body.assistantId !== 'string' || body.assistantId.trim() === '') {
+      return c.json({ error: 'assistantId must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: assistantSkillNames (must be an array if provided)
+  if (body.assistantSkillNames !== undefined) {
+    if (!Array.isArray(body.assistantSkillNames)) {
+      return c.json({ error: 'assistantSkillNames must be an array' }, 400);
+    }
+    for (const item of body.assistantSkillNames) {
+      if (typeof item !== 'string') {
+        return c.json({ error: 'assistantSkillNames must contain only strings' }, 400);
+      }
+    }
   }
 
   const provider: AgentProvider = body.provider ?? 'claude';
@@ -194,6 +237,27 @@ agent.post('/continue', async (c) => {
 
   if (!body.prompt) {
     return c.json({ error: 'prompt is required' }, 400);
+  }
+
+  // Validate optional field: cwd (must be a non-empty string if provided)
+  if (body.cwd !== undefined) {
+    if (typeof body.cwd !== 'string' || body.cwd.trim() === '') {
+      return c.json({ error: 'cwd must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: title (must be a non-empty string if provided)
+  if (body.title !== undefined) {
+    if (typeof body.title !== 'string' || body.title.trim() === '') {
+      return c.json({ error: 'title must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: model (must be a non-empty string if provided)
+  if (body.model !== undefined) {
+    if (typeof body.model !== 'string' || body.model.trim() === '') {
+      return c.json({ error: 'model must be a non-empty string' }, 400);
+    }
   }
 
   const continueProvider: AgentProvider = body.provider ?? 'claude';

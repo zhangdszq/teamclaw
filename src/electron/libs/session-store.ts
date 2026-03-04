@@ -67,9 +67,18 @@ function parseSkillNames(raw: unknown): string[] {
   }
 }
 
+// Type guard for SessionStatus
+function isValidSessionStatus(status: unknown): status is SessionStatus {
+  return typeof status === 'string' && ['idle', 'running', 'completed', 'error'].includes(status);
+}
+
 export class SessionStore {
   private sessions = new Map<string, Session>();
   private db: Database.Database;
+  // Lock map for session updates to prevent race conditions
+  private updateLocks = new Map<string, Promise<void>>();
+  // Global lock for creating new sessions
+  private createSessionLock = false;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -205,10 +214,18 @@ export class SessionStore {
 
   updateSession(id: string, updates: Partial<Session>): Session | undefined {
     const session = this.sessions.get(id);
-    if (!session) return undefined;
+    if (!session) return;
+    // Keep in-memory + DB updates in the same call path.
     Object.assign(session, updates);
     this.persistSession(id, updates);
-    return session;
+  }
+
+  // Type-safe status validation
+  validateAndNormalizeStatus(status: unknown): SessionStatus | undefined {
+    if (isValidSessionStatus(status)) {
+      return status;
+    }
+    return undefined;
   }
 
   setAbortController(id: string, controller: AbortController | undefined): void {

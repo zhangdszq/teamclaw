@@ -21,6 +21,11 @@ import { homedir } from 'os';
 import { loadScheduledTasks, runHookTasks } from './libs/scheduler.js';
 import { loadAssistantsConfig } from './libs/assistants-config.js';
 import { onHeartbeatResult } from './libs/heartbeat.js';
+import {
+  createKnowledgeCandidate,
+  findKnowledgeCandidateBySession,
+} from './libs/knowledge-store.js';
+import { IMAGE_INLINE_RULE } from './libs/bot-base.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -88,7 +93,11 @@ function emit(event: ServerEvent) {
   // Persist relevant events to local store
   if (event.type === 'session.status' && 'payload' in event) {
     const { sessionId, status } = event.payload as { sessionId: string; status: string };
-    sessions.updateSession(sessionId, { status: status as any });
+    // Use type guard instead of 'as any' for type safety
+    const validStatus = sessions.validateAndNormalizeStatus(status);
+    if (validStatus) {
+      sessions.updateSession(sessionId, { status: validStatus });
+    }
 
     // When a session finishes, check for heartbeat suppression and hook triggers
     if (status === 'idle' || status === 'error') {
@@ -137,6 +146,52 @@ function emit(event: ServerEvent) {
         }
       });
     }
+
+    // Auto-extract knowledge candidate from completed/idle sessions.
+    if (status === 'completed' || status === 'idle') {
+      const session = sessions.getSession(sessionId);
+      const shouldSkip =
+        !session ||
+        session.background ||
+        session.title?.startsWith('[心跳]') ||
+        session.title?.startsWith('[经验候选]');
+      if (!shouldSkip) {
+        setImmediate(async () => {
+          try {
+            if (findKnowledgeCandidateBySession(sessionId)) return;
+
+            const history = sessions.getSessionHistory(sessionId);
+            const assistantMessages = (history?.messages ?? []).filter((m: any) => m.type === 'assistant');
+
+            // For idle (manual stop), require at least 2 assistant messages to be meaningful
+            if (status === 'idle' && assistantMessages.length < 2) return;
+
+            const lastAssistant = assistantMessages[assistantMessages.length - 1] as any;
+            const text: string = lastAssistant?.message?.content
+              ?.filter((c: any) => c.type === 'text')
+              ?.map((c: any) => String(c.text))
+              ?.join('\n')
+              ?.trim() ?? '';
+
+            if (!text || text.length < 80) return;
+            const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+            const steps = lines.filter((line) => /^(\d+[\).、]|[-*])/.test(line)).slice(0, 12).join('\n');
+
+            createKnowledgeCandidate({
+              title: `${(session.title || '普通会话').slice(0, 100)} · 经验候选`,
+              scenario: (session.title || '普通会话').slice(0, 120),
+              steps: steps || '（自动抽取未识别到明确步骤，建议人工补充）',
+              result: text.slice(0, 1200),
+              risk: '待人工审核',
+              sourceSessionId: sessionId,
+              assistantId: session.assistantId,
+            });
+          } catch (err) {
+            console.warn('[IPC] Knowledge candidate extraction failed:', err);
+          }
+        });
+      }
+    }
   }
   if (event.type === 'stream.message' && 'payload' in event) {
     const { sessionId, message } = event.payload as { sessionId: string; message: any };
@@ -181,6 +236,8 @@ function applyAssistantContext(prompt: string, skillNames?: string[], persona?: 
 
   const normalized = (skillNames ?? []).map((s) => s.trim()).filter(Boolean);
   if (normalized.length > 0) sections.push(normalized.map((s) => `/${s}`).join("\n"));
+
+  sections.push(IMAGE_INLINE_RULE);
 
   if (sections.length === 0) return prompt;
   return `${sections.join("\n\n")}\n\n${prompt}`;
@@ -449,7 +506,7 @@ export async function handleClientEvent(event: ClientEvent) {
 
       if (sessionProvider === 'codex') {
         runCodex({
-          prompt: event.payload.prompt,
+          prompt: event.payload.prompt, // IMAGE_INLINE_RULE is appended inside codex-runner
           session,
           model: session.model,
           onEvent: emit,

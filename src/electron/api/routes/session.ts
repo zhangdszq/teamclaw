@@ -42,6 +42,27 @@ session.post('/', async (c) => {
     return c.json({ error: 'title is required' }, 400);
   }
 
+  // Validate optional field: cwd (must be a non-empty string if provided)
+  if (body.cwd !== undefined) {
+    if (typeof body.cwd !== 'string' || body.cwd.trim() === '') {
+      return c.json({ error: 'cwd must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: allowedTools (must be a non-empty string if provided)
+  if (body.allowedTools !== undefined) {
+    if (typeof body.allowedTools !== 'string' || body.allowedTools.trim() === '') {
+      return c.json({ error: 'allowedTools must be a non-empty string' }, 400);
+    }
+  }
+
+  // Validate optional field: prompt (must be a non-empty string if provided)
+  if (body.prompt !== undefined) {
+    if (typeof body.prompt !== 'string') {
+      return c.json({ error: 'prompt must be a string' }, 400);
+    }
+  }
+
   const newSession = createSession({
     cwd: body.cwd,
     title: body.title,

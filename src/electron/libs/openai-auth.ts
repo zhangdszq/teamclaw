@@ -3,11 +3,13 @@
  * 
  * Implements the same OAuth flow used by OpenAI Codex CLI:
  * - PKCE (S256) authorization code flow
- * - Electron BrowserWindow for login UI
+ * - System browser for login UI
+ * - Temporary local HTTP server to receive OAuth callback
  * - Token exchange and refresh
  * - Credential storage in user settings
  */
-import { BrowserWindow, net } from "electron";
+import { createServer, type Server } from "http";
+import { net, shell } from "electron";
 import { randomBytes, createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
@@ -145,107 +147,92 @@ export function ensureCodexAuthSync(): void {
   }
 }
 
-// ─── OAuth Login (Electron BrowserWindow) ────────────────────
+const OPENAI_SUCCESS_HTML = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>登录成功</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:32px;line-height:1.6;">
+  <h2 style="margin:0 0 8px;color:#2C5F2F;">OpenAI 登录成功</h2>
+  <p style="margin:0;color:#444;">请返回 AI Team 应用继续使用。</p>
+  <script>setTimeout(() => window.close(), 2500);</script>
+</body></html>`;
 
-export function openAILogin(parentWindow?: BrowserWindow): Promise<{ success: boolean; email?: string; error?: string }> {
+const openAIErrorHtml = (message: string) => `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>登录失败</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:32px;line-height:1.6;">
+  <h2 style="margin:0 0 8px;color:#DC2626;">OpenAI 登录失败</h2>
+  <p style="margin:0;color:#444;">${message}</p>
+</body></html>`;
+
+// ─── OAuth Login (System Browser + Local Server) ─────────────
+
+export function openAILogin(_parentWindow?: unknown): Promise<{ success: boolean; email?: string; error?: string }> {
   return new Promise((resolve) => {
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = generateCodeChallenge(codeVerifier);
     const state = generateState();
 
-    // Build authorization URL
-    const authUrl = new URL(AUTHORIZE_URL);
-    authUrl.searchParams.set("response_type", "code");
-    authUrl.searchParams.set("client_id", CLIENT_ID);
-    authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
-    authUrl.searchParams.set("scope", SCOPE);
-    authUrl.searchParams.set("code_challenge", codeChallenge);
-    authUrl.searchParams.set("code_challenge_method", "S256");
-    authUrl.searchParams.set("state", state);
-    authUrl.searchParams.set("id_token_add_organizations", "true");
-    authUrl.searchParams.set("codex_cli_simplified_flow", "true");
-    authUrl.searchParams.set("originator", "codex_cli_rs");
-
-    // Create auth window
-    const authWindow = new BrowserWindow({
-      width: 520,
-      height: 720,
-      parent: parentWindow,
-      modal: true,
-      show: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-      },
-      title: "Sign in with OpenAI",
-      backgroundColor: "#FFFFFF",
-      autoHideMenuBar: true,
-    });
-
     let resolved = false;
-    let callbackHandled = false;
+    let server: Server | null = null;
     const finish = (result: { success: boolean; email?: string; error?: string }) => {
       if (resolved) return;
       resolved = true;
-      if (!authWindow.isDestroyed()) {
-        authWindow.close();
+      if (server) {
+        server.close();
+        server = null;
       }
       resolve(result);
     };
 
-    // Intercept navigation to catch the OAuth callback.
-    // In Electron 39+ the first parameter is a `details` object with a `url` property;
-    // the second positional `url` is deprecated but still provided.
-    authWindow.webContents.on("will-redirect", (details: any, deprecatedUrl?: string) => {
-      const url: string = typeof details === "string" ? details : (details?.url ?? deprecatedUrl ?? "");
-      if (url.startsWith(REDIRECT_URI)) {
-        if (typeof details?.preventDefault === "function") details.preventDefault();
-        handleCallback(url);
-      }
-    });
+    const timeout = setTimeout(() => {
+      finish({ success: false, error: "登录超时，请重试" });
+    }, 120_000);
 
-    authWindow.webContents.on("will-navigate", (details: any, deprecatedUrl?: string) => {
-      const url: string = typeof details === "string" ? details : (details?.url ?? deprecatedUrl ?? "");
-      if (url.startsWith(REDIRECT_URI)) {
-        if (typeof details?.preventDefault === "function") details.preventDefault();
-        handleCallback(url);
+    server = createServer(async (req, res) => {
+      const requestUrl = new URL(req.url ?? "/", REDIRECT_URI);
+      if (requestUrl.pathname !== "/auth/callback") {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
       }
-    });
 
-    async function handleCallback(url: string) {
-      if (callbackHandled) return;
-      callbackHandled = true;
-      if (!url.startsWith(REDIRECT_URI)) return;
+      const code = requestUrl.searchParams.get("code");
+      const returnedState = requestUrl.searchParams.get("state");
+      const error = requestUrl.searchParams.get("error");
+
+      if (error) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(openAIErrorHtml(`OAuth 错误: ${error}`));
+        clearTimeout(timeout);
+        finish({ success: false, error: `OAuth error: ${error}` });
+        return;
+      }
+
+      if (!code) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(openAIErrorHtml("未收到授权码"));
+        clearTimeout(timeout);
+        finish({ success: false, error: "No authorization code received" });
+        return;
+      }
+
+      if (returnedState !== state) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(openAIErrorHtml("State 不匹配，可能存在安全风险"));
+        clearTimeout(timeout);
+        finish({ success: false, error: "State mismatch - possible CSRF attack" });
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(OPENAI_SUCCESS_HTML);
+      clearTimeout(timeout);
 
       try {
-        const callbackUrl = new URL(url);
-        const code = callbackUrl.searchParams.get("code");
-        const returnedState = callbackUrl.searchParams.get("state");
-        const error = callbackUrl.searchParams.get("error");
-
-        if (error) {
-          finish({ success: false, error: `OAuth error: ${error}` });
-          return;
-        }
-
-        if (!code) {
-          finish({ success: false, error: "No authorization code received" });
-          return;
-        }
-
-        if (returnedState !== state) {
-          finish({ success: false, error: "State mismatch - possible CSRF attack" });
-          return;
-        }
-
-        // Exchange code for tokens
         const tokens = await exchangeCodeForTokens(code, codeVerifier);
         if (!tokens) {
           finish({ success: false, error: "Failed to exchange authorization code for tokens" });
           return;
         }
 
-        // Save tokens to user settings
         const settings = loadUserSettings();
         settings.openaiTokens = {
           accessToken: tokens.accessToken,
@@ -254,11 +241,8 @@ export function openAILogin(parentWindow?: BrowserWindow): Promise<{ success: bo
           expiresAt: tokens.expiresAt,
         };
         saveUserSettings(settings);
-
-        // Sync tokens to ~/.codex/auth.json for Codex CLI
         syncTokensToCodexAuth(tokens);
 
-        // Extract email from JWT
         const decoded = decodeJWT(tokens.accessToken);
         finish({ success: true, email: decoded?.email ?? undefined });
       } catch (err) {
@@ -267,20 +251,30 @@ export function openAILogin(parentWindow?: BrowserWindow): Promise<{ success: bo
           error: `Callback error: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
-    }
-
-    // Handle window closed by user
-    authWindow.on("closed", () => {
-      finish({ success: false, error: "Login cancelled by user" });
     });
 
-    // Show window once ready
-    authWindow.once("ready-to-show", () => {
-      authWindow.show();
+    server.listen(1455, "127.0.0.1", () => {
+      const authUrl = new URL(AUTHORIZE_URL);
+      authUrl.searchParams.set("response_type", "code");
+      authUrl.searchParams.set("client_id", CLIENT_ID);
+      authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+      authUrl.searchParams.set("scope", SCOPE);
+      authUrl.searchParams.set("code_challenge", codeChallenge);
+      authUrl.searchParams.set("code_challenge_method", "S256");
+      authUrl.searchParams.set("state", state);
+      authUrl.searchParams.set("id_token_add_organizations", "true");
+      authUrl.searchParams.set("codex_cli_simplified_flow", "true");
+      authUrl.searchParams.set("originator", "codex_cli_rs");
+      void shell.openExternal(authUrl.toString());
     });
 
-    // Load authorization URL
-    authWindow.loadURL(authUrl.toString());
+    server.on("error", (err) => {
+      clearTimeout(timeout);
+      finish({
+        success: false,
+        error: `本地回调端口 1455 启动失败: ${err.message}`,
+      });
+    });
   });
 }
 

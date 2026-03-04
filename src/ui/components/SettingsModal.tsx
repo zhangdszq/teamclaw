@@ -28,10 +28,11 @@ const NAV_ITEMS: NavItem[] = [
   },
   {
     id: "memory",
-    label: "记忆",
+    label: "记忆与经验",
     icon: (
       <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+        <path d="M12 11v6M9 14h6" />
       </svg>
     ),
   },
@@ -142,6 +143,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
 
   // Memory state
   const [memoryDir, setMemoryDir] = useState("");
+  const [kbPath, setKbPath] = useState("");
 
   // Shortcut state
   const [quickShortcut, setQuickShortcut] = useState("Alt+Space");
@@ -216,6 +218,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
       loadOpenAIStatus();
       loadGoogleStatus();
       loadMemoryDir();
+      window.electron.getKnowledgeBasePath().then(setKbPath).catch(() => {});
       window.electron.getQuickWindowShortcut().then(setQuickShortcut).catch(() => {});
       setShortcutSaved(false);
     }
@@ -854,7 +857,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
               {activeSection === "memory" && (
                 <div className="grid gap-4">
                   <p className="text-sm text-muted">
-                    Agent 在新会话启动时会自动加载记忆，并在对话中主动记录重要信息
+                    Agent 会自动加载记忆并主动记录重要信息；会话完成后自动抽取经验候选。所有数据以 Markdown 存储在本地。
                   </p>
 
                   <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
@@ -891,10 +894,37 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     </button>
                   </div>
 
+                  <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/10 flex-shrink-0">
+                        <svg viewBox="0 0 24 24" className="h-5 w-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                          <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-ink-800">经验库目录</p>
+                        {kbPath && (
+                          <p className="text-[11px] text-muted-light font-mono truncate">{kbPath}</p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (kbPath) window.electron.openPath(kbPath);
+                      }}
+                      className="w-full rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-soft transition-colors"
+                      style={{ background: '#2C5F2F' }}
+                    >
+                      打开经验库目录
+                    </button>
+                  </div>
+
                   <div className="rounded-xl border border-info/20 bg-info/5 p-3">
                     <p className="text-xs text-info leading-relaxed">
-                      <strong>说明：</strong>记忆目录包含 MEMORY.md（长期记忆）和 daily/ 文件夹（每日记忆），
-                      可直接用编辑器查看和修改。
+                      <strong>说明：</strong>记忆目录包含 MEMORY.md（长期记忆）和 daily/（每日记忆）；
+                      经验库包含 experience/（经验候选）和 docs/（知识文档）。均可直接用编辑器查看和修改。
                     </p>
                   </div>
                 </div>

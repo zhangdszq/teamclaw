@@ -33,6 +33,22 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("get-user-settings"),
     saveUserSettings: (settings: any) => 
         ipcInvoke("save-user-settings", settings),
+    getKnowledgeCandidates: () =>
+        ipcInvoke("get-knowledge-candidates"),
+    updateKnowledgeCandidateStatus: (id: string, status: "draft" | "verified" | "archived") =>
+        ipcInvoke("update-knowledge-candidate-status", id, status),
+    deleteKnowledgeCandidate: (id: string) =>
+        ipcInvoke("delete-knowledge-candidate", id),
+    getKnowledgeDocs: () =>
+        ipcInvoke("get-knowledge-docs"),
+    createKnowledgeDoc: (title: string, content: string) =>
+        ipcInvoke("create-knowledge-doc", title, content),
+    updateKnowledgeDoc: (id: string, title: string, content: string) =>
+        ipcInvoke("update-knowledge-doc", id, title, content),
+    deleteKnowledgeDoc: (id: string) =>
+        ipcInvoke("delete-knowledge-doc", id),
+    getKnowledgeBasePath: () =>
+        ipcInvoke("get-knowledge-base-path"),
     testAlertWebhook: (webhookUrl: string, secret?: string) =>
         ipcInvoke("test-alert-webhook", { webhookUrl, secret }),
     checkEnvironment: () => 
@@ -45,6 +61,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("open-privacy-settings"),
     openPath: (targetPath: string) => 
         ipcInvoke("open-path", targetPath),
+    openExternalUrl: (url: string) =>
+        ipcInvoke("open-external-url", url),
     installClaudeCLI: () => 
         ipcInvoke("install-claude-cli"),
     isClaudeCLIInstalled: () => 
@@ -67,6 +85,9 @@ electron.contextBridge.exposeInMainWorld("electron", {
     // Generate a thumbnail data URL for a local image (128px max dim, returns data:image/png;base64,...)
     getImageThumbnail: (filePath: string) =>
         ipcInvoke("get-image-thumbnail", filePath),
+    // Open Save dialog and copy the source image to the chosen path
+    saveImage: (sourcePath: string) =>
+        ipcInvoke("save-image", sourcePath),
     // Install tools
     installNodeJs: () => 
         ipcInvoke("install-nodejs"),

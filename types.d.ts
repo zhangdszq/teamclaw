@@ -75,6 +75,30 @@ type UserSettings = {
     alertDingtalkSecret?: string;
 }
 
+type KnowledgeReviewStatus = "draft" | "verified" | "archived";
+
+type KnowledgeCandidate = {
+    id: string;
+    title: string;
+    scenario: string;
+    steps: string;
+    result: string;
+    risk: string;
+    sourceSessionId: string;
+    assistantId?: string;
+    createdAt: string;
+    updatedAt: string;
+    reviewStatus: KnowledgeReviewStatus;
+}
+
+type KnowledgeDoc = {
+    id: string;
+    title: string;
+    content: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
 type ScheduledTaskHookFilter = {
     assistantId?: string;
     titlePattern?: string;
@@ -542,18 +566,28 @@ type EventPayloadMapping = {
     "select-directory": string | null;
     "get-user-settings": UserSettings;
     "save-user-settings": boolean;
+    "get-knowledge-candidates": KnowledgeCandidate[];
+    "update-knowledge-candidate-status": KnowledgeCandidate | null;
+    "delete-knowledge-candidate": boolean;
+    "get-knowledge-docs": KnowledgeDoc[];
+    "create-knowledge-doc": KnowledgeDoc;
+    "update-knowledge-doc": KnowledgeDoc | null;
+    "delete-knowledge-doc": boolean;
+    "get-knowledge-base-path": string;
     "test-alert-webhook": { ok: boolean; error?: string };
     "check-environment": EnvironmentCheckResult;
     "validate-api-config": ValidateApiResult;
     "request-folder-access": FolderAccessResult;
     "open-privacy-settings": boolean;
     "open-path": boolean;
+    "open-external-url": boolean;
     "install-claude-cli": InstallResult;
     "is-claude-cli-installed": boolean;
     "select-image": string | null;
     "save-pasted-image": string | null;
     "select-file": { path: string; isDir: boolean }[] | null;
     "get-image-thumbnail": string | null;
+    "save-image": { ok: boolean; savedTo?: string; reason?: string };
     "install-nodejs": InstallResult;
     "install-sdk": InstallResult;
     "get-claude-config": ClaudeConfigInfo;
@@ -649,12 +683,21 @@ interface Window {
         selectDirectory: () => Promise<string | null>;
         getUserSettings: () => Promise<UserSettings>;
         saveUserSettings: (settings: UserSettings) => Promise<boolean>;
+        getKnowledgeCandidates: () => Promise<KnowledgeCandidate[]>;
+        updateKnowledgeCandidateStatus: (id: string, status: KnowledgeReviewStatus) => Promise<KnowledgeCandidate | null>;
+        deleteKnowledgeCandidate: (id: string) => Promise<boolean>;
+        getKnowledgeDocs: () => Promise<KnowledgeDoc[]>;
+        createKnowledgeDoc: (title: string, content: string) => Promise<KnowledgeDoc>;
+        updateKnowledgeDoc: (id: string, title: string, content: string) => Promise<KnowledgeDoc | null>;
+        deleteKnowledgeDoc: (id: string) => Promise<boolean>;
+        getKnowledgeBasePath: () => Promise<string>;
         testAlertWebhook: (webhookUrl: string, secret?: string) => Promise<{ ok: boolean; error?: string }>;
         checkEnvironment: () => Promise<EnvironmentCheckResult>;
         validateApiConfig: (baseUrl?: string, authToken?: string, model?: string) => Promise<ValidateApiResult>;
         requestFolderAccess: (folderPath?: string) => Promise<FolderAccessResult>;
         openPrivacySettings: () => Promise<boolean>;
         openPath: (targetPath: string) => Promise<boolean>;
+        openExternalUrl: (url: string) => Promise<boolean>;
         installClaudeCLI: () => Promise<InstallResult>;
         isClaudeCLIInstalled: () => Promise<boolean>;
         onInstallProgress: (callback: (message: string) => void) => UnsubscribeFunction;
@@ -667,6 +710,7 @@ interface Window {
         getPathForFile: (file: File) => string;
         // Generate a thumbnail data URL for a local image
         getImageThumbnail: (filePath: string) => Promise<string | null>;
+        saveImage: (sourcePath: string) => Promise<{ ok: boolean; savedTo?: string; reason?: string }>;
         // Install tools
         installNodeJs: () => Promise<InstallResult>;
         installSdk: () => Promise<InstallResult>;

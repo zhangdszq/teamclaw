@@ -50,6 +50,183 @@ export interface UserSettings {
   alertDingtalkSecret?: string;
 }
 
+// Custom error class for validation errors
+export class UserSettingsValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserSettingsValidationError';
+  }
+}
+
+// Validation functions
+function isValidUrl(url: string): boolean {
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isValidProxyUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    // Support http, https, socks5 proxy protocols
+    return ['http:', 'https:', 'socks5:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function validateOpenAITokens(tokens: unknown): void {
+  if (!tokens || typeof tokens !== 'object') {
+    throw new UserSettingsValidationError('openaiTokens must be an object');
+  }
+  const t = tokens as Record<string, unknown>;
+  if (typeof t.accessToken !== 'string' || !t.accessToken) {
+    throw new UserSettingsValidationError('openaiTokens.accessToken must be a non-empty string');
+  }
+  if (typeof t.refreshToken !== 'string' || !t.refreshToken) {
+    throw new UserSettingsValidationError('openaiTokens.refreshToken must be a non-empty string');
+  }
+  if (typeof t.expiresAt !== 'number' || t.expiresAt <= 0) {
+    throw new UserSettingsValidationError('openaiTokens.expiresAt must be a positive number');
+  }
+}
+
+function validateGoogleTokens(tokens: unknown): void {
+  if (!tokens || typeof tokens !== 'object') {
+    throw new UserSettingsValidationError('googleTokens must be an object');
+  }
+  const t = tokens as Record<string, unknown>;
+  if (typeof t.accessToken !== 'string' || !t.accessToken) {
+    throw new UserSettingsValidationError('googleTokens.accessToken must be a non-empty string');
+  }
+  if (typeof t.refreshToken !== 'string' || !t.refreshToken) {
+    throw new UserSettingsValidationError('googleTokens.refreshToken must be a non-empty string');
+  }
+  if (typeof t.expiresAt !== 'number' || t.expiresAt <= 0) {
+    throw new UserSettingsValidationError('googleTokens.expiresAt must be a positive number');
+  }
+}
+
+function validateGoogleUser(user: unknown): void {
+  if (!user || typeof user !== 'object') {
+    throw new UserSettingsValidationError('googleUser must be an object');
+  }
+  const u = user as Record<string, unknown>;
+  if (typeof u.email !== 'string' || !u.email) {
+    throw new UserSettingsValidationError('googleUser.email must be a non-empty string');
+  }
+  // Email format validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(u.email)) {
+    throw new UserSettingsValidationError('googleUser.email must be a valid email address');
+  }
+}
+
+// Comprehensive validation function - throws on invalid settings
+function validateUserSettings(settings: unknown): asserts settings is UserSettings {
+  if (!settings || typeof settings !== 'object') {
+    throw new UserSettingsValidationError('Settings must be an object');
+  }
+
+  const s = settings as Record<string, unknown>;
+
+  // Validate anthropicBaseUrl if provided
+  if (s.anthropicBaseUrl !== undefined) {
+    if (typeof s.anthropicBaseUrl !== 'string') {
+      throw new UserSettingsValidationError('anthropicBaseUrl must be a string');
+    }
+    if (s.anthropicBaseUrl && !isValidUrl(s.anthropicBaseUrl)) {
+      throw new UserSettingsValidationError('anthropicBaseUrl must be a valid URL');
+    }
+  }
+
+  // Validate anthropicAuthToken if provided
+  if (s.anthropicAuthToken !== undefined && typeof s.anthropicAuthToken !== 'string') {
+    throw new UserSettingsValidationError('anthropicAuthToken must be a string');
+  }
+
+  // Validate anthropicModel if provided
+  if (s.anthropicModel !== undefined && typeof s.anthropicModel !== 'string') {
+    throw new UserSettingsValidationError('anthropicModel must be a string');
+  }
+
+  // Validate proxy settings
+  if (s.proxyEnabled !== undefined && typeof s.proxyEnabled !== 'boolean') {
+    throw new UserSettingsValidationError('proxyEnabled must be a boolean');
+  }
+
+  if (s.proxyUrl !== undefined) {
+    if (typeof s.proxyUrl !== 'string') {
+      throw new UserSettingsValidationError('proxyUrl must be a string');
+    }
+    if (s.proxyUrl && !isValidProxyUrl(s.proxyUrl)) {
+      throw new UserSettingsValidationError('proxyUrl must be a valid proxy URL (http, https, or socks5)');
+    }
+  }
+
+  // Validate openaiTokens
+  if (s.openaiTokens !== undefined) {
+    validateOpenAITokens(s.openaiTokens);
+  }
+
+  // Validate webhookToken if provided
+  if (s.webhookToken !== undefined && typeof s.webhookToken !== 'string') {
+    throw new UserSettingsValidationError('webhookToken must be a string');
+  }
+
+  // Validate personalization fields
+  if (s.userName !== undefined && typeof s.userName !== 'string') {
+    throw new UserSettingsValidationError('userName must be a string');
+  }
+
+  if (s.workDescription !== undefined && typeof s.workDescription !== 'string') {
+    throw new UserSettingsValidationError('workDescription must be a string');
+  }
+
+  if (s.globalPrompt !== undefined && typeof s.globalPrompt !== 'string') {
+    throw new UserSettingsValidationError('globalPrompt must be a string');
+  }
+
+  // Validate quickWindowShortcut if provided
+  if (s.quickWindowShortcut !== undefined && typeof s.quickWindowShortcut !== 'string') {
+    throw new UserSettingsValidationError('quickWindowShortcut must be a string');
+  }
+
+  // Validate googleTokens
+  if (s.googleTokens !== undefined) {
+    validateGoogleTokens(s.googleTokens);
+  }
+
+  // Validate googleUser
+  if (s.googleUser !== undefined) {
+    validateGoogleUser(s.googleUser);
+  }
+
+  // Validate splashSeen if provided
+  if (s.splashSeen !== undefined && typeof s.splashSeen !== 'boolean') {
+    throw new UserSettingsValidationError('splashSeen must be a boolean');
+  }
+
+  // Validate DingTalk webhook if provided
+  if (s.alertDingtalkWebhook !== undefined) {
+    if (typeof s.alertDingtalkWebhook !== 'string') {
+      throw new UserSettingsValidationError('alertDingtalkWebhook must be a string');
+    }
+    if (s.alertDingtalkWebhook && !isValidUrl(s.alertDingtalkWebhook)) {
+      throw new UserSettingsValidationError('alertDingtalkWebhook must be a valid URL');
+    }
+  }
+
+  // Validate alertDingtalkSecret if provided
+  if (s.alertDingtalkSecret !== undefined && typeof s.alertDingtalkSecret !== 'string') {
+    throw new UserSettingsValidationError('alertDingtalkSecret must be a string');
+  }
+
+}
+
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");
 
 function ensureDirectory() {
@@ -72,21 +249,8 @@ export function loadUserSettings(): UserSettings {
 }
 
 export function saveUserSettings(settings: UserSettings): void {
-  // Basic validation
-  if (!settings || typeof settings !== 'object') {
-    console.warn('[UserSettings] Invalid settings object, skipping save');
-    return;
-  }
-
-  // Validate proxy URL format if provided
-  if (settings.proxyUrl) {
-    try {
-      new URL(settings.proxyUrl);
-    } catch {
-      console.warn('[UserSettings] Invalid proxy URL format, skipping save');
-      return;
-    }
-  }
+  // Run comprehensive validation - throws on invalid settings
+  validateUserSettings(settings);
 
   ensureDirectory();
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");

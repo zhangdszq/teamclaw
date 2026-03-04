@@ -31,6 +31,7 @@ import {
   buildHistoryContext,
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
+  parseReplySegments,
 } from "./bot-base.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -713,9 +714,69 @@ class FeishuConnection {
 
   // ── Send message ──────────────────────────────────────────────────────────────
 
+  /**
+   * Upload a local image file to Feishu and return the image_key.
+   * Returns null on failure.
+   */
+  private async uploadImageForPost(filePath: string): Promise<string | null> {
+    try {
+      const fs = await import("fs");
+      const imageBuffer = fs.readFileSync(filePath);
+      const uploadResp = await this.feishuClient.im.image.create({
+        data: { image_type: "message", image: imageBuffer },
+      });
+      const imageKey = (uploadResp as Record<string, unknown>)?.image_key as string | undefined;
+      return imageKey ?? null;
+    } catch (err) {
+      console.error("[Feishu] Image upload error:", err);
+      return null;
+    }
+  }
+
   private async sendReply(messageId: string, chatId: string, text: string): Promise<void> {
     try {
-      // Reply in thread if we have a messageId
+      const segments = parseReplySegments(text);
+      const hasImages = segments.some((s) => s.kind === "image");
+
+      if (hasImages) {
+        // Build Feishu "post" rich-text content: each segment becomes a paragraph.
+        const paragraphs: Array<Array<{ tag: string; text?: string; image_key?: string }>> = [];
+
+        for (const seg of segments) {
+          if (seg.kind === "text") {
+            const trimmed = seg.content.trim();
+            if (!trimmed) continue;
+            paragraphs.push([{ tag: "text", text: trimmed }]);
+          } else {
+            const imageKey = await this.uploadImageForPost(seg.path);
+            if (imageKey) {
+              paragraphs.push([{ tag: "img", image_key: imageKey }]);
+            } else {
+              // Fallback: mention path as text if upload failed
+              paragraphs.push([{ tag: "text", text: `[图片: ${seg.path}]` }]);
+            }
+          }
+        }
+
+        const postContent = JSON.stringify({ zh_cn: { title: "", content: paragraphs } });
+
+        if (messageId) {
+          await this.feishuClient.im.message.reply({
+            path: { message_id: messageId },
+            data: { content: postContent, msg_type: "post", reply_in_thread: false },
+          });
+          return;
+        }
+        if (chatId) {
+          await this.feishuClient.im.message.create({
+            params: { receive_id_type: "chat_id" },
+            data: { receive_id: chatId, content: postContent, msg_type: "post" },
+          });
+        }
+        return;
+      }
+
+      // No images — plain text path (existing behavior)
       if (messageId) {
         await this.feishuClient.im.message.reply({
           path: { message_id: messageId },

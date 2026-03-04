@@ -12,6 +12,7 @@ import {
 import type { ServerEvent } from "../types.js";
 import type { Session } from "./session-store.js";
 import { buildSmartMemoryContext } from "./memory-store.js";
+import { IMAGE_INLINE_RULE } from "./bot-base.js";
 import { app } from "electron";
 import { join } from "path";
 import { existsSync } from "fs";
@@ -63,6 +64,29 @@ function syntheticUuid(): string {
   return `codex-${Date.now()}-${++counter}`;
 }
 
+// ─── Output post-processing ──────────────────────────────────
+
+const IMG_EXT_RE = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg)$/i;
+
+/**
+ * Convert backtick-quoted absolute image paths in Codex output to Markdown
+ * image syntax so the renderer can display them inline.
+ *
+ * e.g.  `/tmp/shot.png`  →  ![](/tmp/shot.png)
+ *       `C:\Users\foo\shot.jpg`  →  ![](C:/Users/foo/shot.jpg)
+ *
+ * Only affects paths with recognised image extensions; other backtick paths
+ * (directories, scripts, etc.) are left unchanged to avoid false positives.
+ */
+function inlineCodeImagesToMarkdown(text: string): string {
+  return text.replace(/`((?:\/|[A-Za-z]:[/\\])[^`\n]+)`/g, (match, rawPath) => {
+    const path = rawPath.trim();
+    if (!IMG_EXT_RE.test(path)) return match;
+    const urlPath = path.replace(/\\/g, "/");
+    return `![](${urlPath})`;
+  });
+}
+
 // ─── SDKMessage construction helpers ─────────────────────────
 // We build plain objects that match the shapes the UI already renders.
 
@@ -89,7 +113,7 @@ function makeAssistantText(text: string): Record<string, unknown> {
     uuid: syntheticUuid(),
     message: {
       role: "assistant",
-      content: [{ type: "text", text }],
+      content: [{ type: "text", text: inlineCodeImagesToMarkdown(text) }],
     },
   };
 }
@@ -318,7 +342,10 @@ export async function runCodex(
         ? codex.resumeThread(session.claudeSessionId, threadOpts)
         : codex.startThread(threadOpts);
 
-      const { events } = await thread.runStreamed(effectivePrompt, {
+      // Append image-inline rule as a suffix so the model treats it as an active
+      // instruction for this turn (suffix placement is more salient than prefix for Codex).
+      const promptWithRule = `${effectivePrompt}\n\n${IMAGE_INLINE_RULE}`;
+      const { events } = await thread.runStreamed(promptWithRule, {
         signal: abortController.signal,
       });
 

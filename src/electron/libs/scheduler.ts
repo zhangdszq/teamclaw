@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, renameSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import { app } from "electron";
 import type { ClientEvent } from "../types.js";
@@ -8,6 +8,66 @@ import { loadAssistantsConfig } from "./assistants-config.js";
 let taskCache: ScheduledTask[] | null = null;
 let taskCacheTime = 0;
 const TASK_CACHE_TTL_MS = 60000; // 1 minute cache
+
+// File lock for atomic operations
+let fileLock: { held: boolean; queue: Array<() => void> } = { held: false, queue: [] };
+
+// Acquire file lock to prevent race conditions (async version)
+function acquireFileLock(): Promise<() => void> {
+  return new Promise((resolve) => {
+    if (!fileLock.held) {
+      fileLock.held = true;
+      resolve(() => releaseFileLock());
+    } else {
+      fileLock.queue.push(() => releaseFileLock());
+      // Wait for lock to be released
+      const checkLock = () => {
+        if (!fileLock.held || fileLock.queue[0] === undefined) {
+          fileLock.held = true;
+          const release = fileLock.queue.shift();
+          resolve(() => {
+            if (release) release();
+          });
+        } else {
+          setTimeout(checkLock, 10);
+        }
+      };
+      setTimeout(checkLock, 10);
+    }
+  });
+}
+
+// Synchronous lock acquisition for read operations
+function acquireFileLockSync(): () => void {
+  if (!fileLock.held) {
+    fileLock.held = true;
+    return () => releaseFileLock();
+  } else {
+    // Wait for lock
+    while (fileLock.held) {
+      // Busy wait - should be brief
+    }
+    fileLock.held = true;
+    return () => releaseFileLock();
+  }
+}
+
+// Release file lock and process queue
+function releaseFileLock(): void {
+  if (fileLock.queue.length > 0) {
+    const next = fileLock.queue.shift();
+    if (next) next();
+  } else {
+    fileLock.held = false;
+  }
+}
+
+// Atomic file write with locking
+function atomicWriteFile(filePath: string, content: string): void {
+  const tempPath = `${filePath}.tmp.${Date.now()}`;
+  writeFileSync(tempPath, content, "utf8");
+  renameSync(tempPath, filePath);
+}
 
 // Types
 export interface ScheduledTaskHookFilter {
@@ -80,6 +140,9 @@ export function loadScheduledTasks(): ScheduledTask[] {
     return taskCache;
   }
 
+  // Acquire lock for read operation to ensure consistency
+  const releaseLock = acquireFileLockSync();
+
   try {
     if (!existsSync(SCHEDULER_FILE)) {
       taskCache = [];
@@ -94,6 +157,8 @@ export function loadScheduledTasks(): ScheduledTask[] {
   } catch (error) {
     console.error("Failed to load scheduled tasks:", error);
     return [];
+  } finally {
+    releaseLock();
   }
 }
 
@@ -103,17 +168,23 @@ export function invalidateTaskCache(): void {
   taskCacheTime = 0;
 }
 
-// Save tasks
-export function saveScheduledTasks(tasks: ScheduledTask[]): void {
-  ensureDirectory();
-  const state: SchedulerState = { tasks };
-  writeFileSync(SCHEDULER_FILE, JSON.stringify(state, null, 2), "utf8");
-  // Invalidate cache after saving
-  invalidateTaskCache();
+// Save tasks with file lock and atomic write
+export async function saveScheduledTasks(tasks: ScheduledTask[]): Promise<void> {
+  const releaseLock = await acquireFileLock();
+  try {
+    ensureDirectory();
+    const state: SchedulerState = { tasks };
+    // Use atomic write to prevent partial writes
+    atomicWriteFile(SCHEDULER_FILE, JSON.stringify(state, null, 2));
+    // Invalidate cache after saving
+    invalidateTaskCache();
+  } finally {
+    releaseLock();
+  }
 }
 
 // Add task
-export function addScheduledTask(task: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt">): ScheduledTask {
+export async function addScheduledTask(task: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt">): Promise<ScheduledTask> {
   const tasks = loadScheduledTasks();
   const newTask: ScheduledTask = {
     ...task,
@@ -121,42 +192,42 @@ export function addScheduledTask(task: Omit<ScheduledTask, "id" | "createdAt" | 
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  
+
   // Calculate next run time
   newTask.nextRun = calculateNextRun(newTask);
-  
+
   tasks.push(newTask);
-  saveScheduledTasks(tasks);
+  await saveScheduledTasks(tasks);
   return newTask;
 }
 
 // Update task
-export function updateScheduledTask(id: string, updates: Partial<ScheduledTask>): ScheduledTask | null {
+export async function updateScheduledTask(id: string, updates: Partial<ScheduledTask>): Promise<ScheduledTask | null> {
   const tasks = loadScheduledTasks();
   const index = tasks.findIndex(t => t.id === id);
   if (index === -1) return null;
-  
+
   tasks[index] = {
     ...tasks[index],
     ...updates,
     updatedAt: new Date().toISOString(),
   };
-  
+
   // Recalculate next run time
   tasks[index].nextRun = calculateNextRun(tasks[index]);
-  
-  saveScheduledTasks(tasks);
+
+  await saveScheduledTasks(tasks);
   return tasks[index];
 }
 
 // Delete task
-export function deleteScheduledTask(id: string): boolean {
+export async function deleteScheduledTask(id: string): Promise<boolean> {
   const tasks = loadScheduledTasks();
   const index = tasks.findIndex(t => t.id === id);
   if (index === -1) return false;
-  
+
   tasks.splice(index, 1);
-  saveScheduledTasks(tasks);
+  await saveScheduledTasks(tasks);
   return true;
 }
 

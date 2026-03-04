@@ -106,6 +106,67 @@ export const FILE_SEND_RULE =
   "- 不要只告诉用户文件路径\n" +
   "- 直接调用 send_file(file_path='/tmp/xxx') 发送";
 
+/**
+ * The "图文混排规则" section — injected via applyAssistantContext for all channels (App + Bot).
+ * Instructs Claude to embed local image paths with Markdown ![](path) syntax so the UI
+ * can render them inline and bots can extract & upload them.
+ */
+export const IMAGE_INLINE_RULE =
+  "## 图文混排规则\n" +
+  "当你的回复中包含本地图片文件（如截图、生成图等），必须将文件路径直接以 Markdown 图片语法嵌入回复正文：\n" +
+  "- 格式：`![图片描述](/绝对/路径/图片.png)`\n" +
+  "- 图片应出现在文字对应位置，不要只列文件路径。\n" +
+  "- Windows 路径示例：`![截图](C:/Users/xxx/AppData/Local/Temp/shot.png)`\n" +
+  "- macOS/Linux 路径示例：`![关键截图](/tmp/shot-123.png)`";
+
+// ─── parseReplySegments ───────────────────────────────────────────────────────
+
+/** A segment in a mixed image+text reply. */
+export type ReplySegment =
+  | { kind: "text"; content: string }
+  | { kind: "image"; path: string; alt: string };
+
+/** Returns true for absolute local paths on both macOS/Linux and Windows. */
+function isAbsLocalPath(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[/\\]/.test(p);
+}
+
+/**
+ * Split a Markdown reply that contains `![alt](path)` image references into an
+ * ordered array of text segments and image segments.  Only absolute local paths
+ * are extracted as image segments — remote http/https URLs are left as-is inside
+ * text segments so they are rendered normally.
+ */
+export function parseReplySegments(text: string): ReplySegment[] {
+  const segments: ReplySegment[] = [];
+  // Regex: ![alt](path) where path is an absolute local path
+  const IMG_RE = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = IMG_RE.exec(text)) !== null) {
+    const [fullMatch, alt, rawPath] = match;
+    const path = rawPath.trim();
+
+    if (!isAbsLocalPath(path)) continue; // leave remote URLs in text
+
+    // Text before this image
+    const before = text.slice(lastIndex, match.index);
+    if (before) segments.push({ kind: "text", content: before });
+
+    segments.push({ kind: "image", path, alt });
+    lastIndex = match.index + fullMatch.length;
+  }
+
+  // Remaining text after the last image
+  const trailing = text.slice(lastIndex);
+  if (trailing) segments.push({ kind: "text", content: trailing });
+
+  // If nothing was parsed as image, return a single text segment
+  if (segments.length === 0) return [{ kind: "text", content: text }];
+  return segments;
+}
+
 // ─── buildHistoryContext ──────────────────────────────────────────────────────
 
 /**

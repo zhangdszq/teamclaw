@@ -2,7 +2,7 @@
   "name": "vk-cowork",
   "productName": "AI Team",
   "private": true,
-  "version": "0.0.61",
+  "version": "0.0.62",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {

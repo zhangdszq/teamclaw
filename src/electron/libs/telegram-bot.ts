@@ -1188,7 +1188,7 @@ class TelegramConnection {
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
+    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const nowStr = new Date().toLocaleString("zh-CN", { timeZone: tz, hour12: false });

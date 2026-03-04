@@ -46,7 +46,7 @@ const ASSISTANTS_FILE = join(VK_COWORK_DIR, "assistants-config.json");
  *
  * Falls back to "claude" when neither is configured.
  */
-function resolveDefaultProvider(): "claude" | "codex" {
+export function resolveDefaultProvider(): "claude" | "codex" {
   const settings = loadUserSettings();
 
   const hasClaude =

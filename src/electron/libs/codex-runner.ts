@@ -302,7 +302,7 @@ export async function runCodex(
   let effectivePrompt = prompt;
   if (!session.claudeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
+      const memoryCtx = await buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + "\n\n" + prompt;
         console.log("[CodexRunner/fallback] Memory context injected, length:", memoryCtx.length);

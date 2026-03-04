@@ -212,6 +212,7 @@ type AssistantConfig = {
 }
 
 type AssistantDefaults = {
+    defaultProvider: "claude" | "codex";
     persona: string;
     coreValues: string;
     relationship: string;

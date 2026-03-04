@@ -451,7 +451,7 @@ class FeishuConnection {
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
+    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
     const historySection = history.length > 1
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;

@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFile as readFileAsync } from "fs/promises";
 import { join, dirname } from "path";
 import { app } from "electron";
 
@@ -242,6 +243,15 @@ export function loadUserSettings(): UserSettings {
       return {};
     }
     const raw = readFileSync(SETTINGS_FILE, "utf8");
+    return JSON.parse(raw) as UserSettings;
+  } catch {
+    return {};
+  }
+}
+
+export async function loadUserSettingsAsync(): Promise<UserSettings> {
+  try {
+    const raw = await readFileAsync(SETTINGS_FILE, "utf8");
     return JSON.parse(raw) as UserSettings;
   } catch {
     return {};

@@ -12,7 +12,7 @@ setTelegramSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
-import { loadAssistantsConfig, saveAssistantsConfig, assistantConfigEvents, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
+import { loadAssistantsConfig, saveAssistantsConfig, assistantConfigEvents, resolveDefaultProvider, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
 import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type TelegramBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
@@ -747,6 +747,7 @@ app.on("ready", async () => {
         return {
             ...config,
             defaults: {
+                defaultProvider: resolveDefaultProvider(),
                 persona: DEFAULT_PERSONA,
                 coreValues: DEFAULT_CORE_VALUES,
                 relationship: DEFAULT_RELATIONSHIP,
@@ -1083,12 +1084,12 @@ app.on("ready", async () => {
     // Memory system
     // The optional last argument `assistantId` scopes per-assistant operations.
     // Shared operations (long-term, daily, abstract) are unaffected by assistantId.
-    ipcMainHandle("memory-read", (_: any, target: string, date?: string, assistantId?: string) => {
+    ipcMainHandle("memory-read", async (_: any, target: string, date?: string, assistantId?: string) => {
         const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         if (target === "long-term") return { content: readLongTermMemory() };
         if (target === "daily") return { content: readDailyMemory(date ?? new Date().toISOString().slice(0, 10)) };
         if (target === "assistant-daily") return { content: scoped ? scoped.readDaily(date ?? new Date().toISOString().slice(0, 10)) : "" };
-        if (target === "context") return { content: buildMemoryContext() };
+        if (target === "context") return { content: await buildMemoryContext() };
         if (target === "session-state") return { content: scoped ? scoped.readSessionState() : readSessionState() };
         if (target === "abstract") return { content: readAbstract() };
         return { content: "", memoryDir: getMemoryDir() };
@@ -1425,7 +1426,7 @@ app.on("ready", async () => {
                     const match = byName.get(skill.name) ?? byDirName.get(skill.name);
                     if (match) {
                         if (match.label) skill.label = match.label;
-                        if (match.description && !skill.description) skill.description = match.description;
+                        if (match.description) skill.description = match.description;
                         if (match.category) skill.category = match.category;
                     }
                 }

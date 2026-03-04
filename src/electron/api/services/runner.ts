@@ -190,7 +190,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
+      const memoryCtx = await buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + '\n\n' + prompt;
         console.log('[Runner] Memory context injected, length:', memoryCtx.length);
@@ -502,7 +502,7 @@ export async function* runCodex(options: RunnerOptions): AsyncGenerator<ServerEv
   let effectivePrompt = prompt;
   if (!session.claudeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
+      const memoryCtx = await buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + '\n\n' + prompt;
         console.log('[CodexRunner] Memory context injected, length:', memoryCtx.length);

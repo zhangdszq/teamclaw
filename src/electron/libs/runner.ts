@@ -96,7 +96,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
+      const memoryCtx = await buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + "\n\n" + prompt;
         console.log("[Runner/fallback] Memory context injected, length:", memoryCtx.length);

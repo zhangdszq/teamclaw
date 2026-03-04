@@ -9,40 +9,56 @@ const MAX_HEIGHT = MAX_ROWS * LINE_HEIGHT;
 
 // Skill category config
 const SKILL_CATEGORY_CONFIG: Record<string, { icon: string; color: string }> = {
-  "development": { icon: "code", color: "text-blue-500 bg-blue-500/10" },
-  "writing": { icon: "pen", color: "text-purple-500 bg-purple-500/10" },
-  "analysis": { icon: "chart", color: "text-green-500 bg-green-500/10" },
-  "design": { icon: "palette", color: "text-pink-500 bg-pink-500/10" },
-  "productivity": { icon: "zap", color: "text-yellow-500 bg-yellow-500/10" },
-  "research": { icon: "search", color: "text-cyan-500 bg-cyan-500/10" },
-  "other": { icon: "box", color: "text-gray-500 bg-gray-500/10" },
+  "teaching":           { icon: "code",    color: "text-emerald-600 bg-emerald-500/10" },
+  "picturebook":        { icon: "palette", color: "text-rose-500 bg-rose-500/10" },
+  "product-management": { icon: "chart",   color: "text-violet-600 bg-violet-500/10" },
+  "operations":         { icon: "zap",     color: "text-orange-600 bg-orange-500/10" },
+  "video":              { icon: "palette", color: "text-red-500 bg-red-500/10" },
+  "image":              { icon: "palette", color: "text-orange-500 bg-orange-500/10" },
+  "social":             { icon: "search",  color: "text-indigo-500 bg-indigo-500/10" },
+  "document":           { icon: "pen",     color: "text-teal-500 bg-teal-500/10" },
+  "infographic":        { icon: "chart",   color: "text-amber-500 bg-amber-500/10" },
+  "development":        { icon: "code",    color: "text-blue-500 bg-blue-500/10" },
+  "writing":            { icon: "pen",     color: "text-purple-500 bg-purple-500/10" },
+  "analysis":           { icon: "chart",   color: "text-green-500 bg-green-500/10" },
+  "design":             { icon: "palette", color: "text-pink-500 bg-pink-500/10" },
+  "productivity":       { icon: "zap",     color: "text-yellow-500 bg-yellow-500/10" },
+  "research":           { icon: "search",  color: "text-cyan-500 bg-cyan-500/10" },
+  "other":              { icon: "box",     color: "text-gray-500 bg-gray-500/10" },
 };
 
-// Get category from skill name/description
+// Category label lookup (matches BUILTIN_CATEGORIES in McpSkillModal)
+const CATEGORY_LABELS: Record<string, string> = {
+  "teaching": "教研专用", "picturebook": "绘本馆专用", "product-management": "产品经理专用",
+  "operations": "运营专用", "video": "视频处理", "image": "图像生成", "writing": "写作内容",
+  "social": "社交媒体", "document": "文档工具", "infographic": "信息图表",
+  "development": "开发工具", "productivity": "效率工具", "analysis": "数据分析",
+  "design": "设计创意", "research": "研究调查", "other": "其他",
+};
+
 function getSkillCategory(skill: SkillInfo): string {
-  const name = skill.name.toLowerCase();
-  const desc = (skill.description || "").toLowerCase();
-  const text = name + " " + desc;
-  
-  if (text.includes("code") || text.includes("dev") || text.includes("程序") || text.includes("开发") || text.includes("debug")) {
-    return "development";
+  if (skill.category && skill.category in SKILL_CATEGORY_CONFIG) return skill.category;
+  const text = (skill.name + " " + (skill.description || "")).toLowerCase();
+  if (text.includes("code") || text.includes("dev") || text.includes("程序") || text.includes("开发") || text.includes("debug")) return "development";
+  if (text.includes("write") || text.includes("写作") || text.includes("文档") || text.includes("blog") || text.includes("article")) return "writing";
+  if (text.includes("data") || text.includes("分析") || text.includes("chart") || text.includes("数据") || text.includes("report")) return "analysis";
+  if (text.includes("design") || text.includes("设计") || text.includes("ui") || text.includes("ux") || text.includes("创意")) return "design";
+  if (text.includes("效率") || text.includes("productivity") || text.includes("automat") || text.includes("自动")) return "productivity";
+  if (text.includes("research") || text.includes("调研") || text.includes("搜索") || text.includes("search")) return "research";
+  return skill.category || "other";
+}
+
+function groupSkillsByCategory(skills: SkillInfo[]): { category: string; label: string; skills: SkillInfo[] }[] {
+  const groups: Record<string, SkillInfo[]> = {};
+  for (const skill of skills) {
+    const cat = getSkillCategory(skill);
+    (groups[cat] ??= []).push(skill);
   }
-  if (text.includes("write") || text.includes("写作") || text.includes("文档") || text.includes("blog") || text.includes("article")) {
-    return "writing";
-  }
-  if (text.includes("data") || text.includes("分析") || text.includes("chart") || text.includes("数据") || text.includes("report")) {
-    return "analysis";
-  }
-  if (text.includes("design") || text.includes("设计") || text.includes("ui") || text.includes("ux") || text.includes("创意")) {
-    return "design";
-  }
-  if (text.includes("效率") || text.includes("productivity") || text.includes("automat") || text.includes("自动")) {
-    return "productivity";
-  }
-  if (text.includes("research") || text.includes("调研") || text.includes("搜索") || text.includes("search")) {
-    return "research";
-  }
-  return "other";
+  return Object.entries(groups).map(([cat, items]) => ({
+    category: cat,
+    label: CATEGORY_LABELS[cat] || cat,
+    skills: items,
+  }));
 }
 
 // Skill icon component
@@ -778,42 +794,58 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
         </div>
       ) : (
         <div ref={skillListRef} className="max-h-[320px] overflow-y-auto overflow-x-hidden py-1.5 px-1.5">
-          {filteredSkills.map((skill, index) => {
-            const category = getSkillCategory(skill);
-            const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
-            const isActive = index === selectedIndex;
-            return (
-              <button
-                key={skill.name}
-                className={`group w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-xl transition-all duration-150 ${
-                  isActive
-                    ? "bg-accent/[0.08] ring-1 ring-accent/20"
-                    : "hover:bg-ink-900/[0.04]"
-                }`}
-                onClick={() => handleSelectSkill(skill)}
-                onMouseEnter={() => setSelectedIndex(index)}
-              >
-                <div className={`flex h-8 w-8 items-center justify-center rounded-[10px] flex-shrink-0 transition-colors ${
-                  isActive ? config.color.replace(/\/10/, "/15") : config.color
-                }`}>
-                  <SkillIcon type={config.icon} className="h-4 w-4" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-[13px] font-medium leading-tight truncate transition-colors ${
-                    isActive ? "text-accent" : "text-ink-800"
-                  }`}>
-                    {skill.label || skill.name}
-                  </div>
-                  {skill.description && (
-                    <div className="text-[11px] text-muted mt-0.5 truncate">{skill.description}</div>
+          {(() => {
+            const groups = groupSkillsByCategory(filteredSkills);
+            let flatIdx = 0;
+            return groups.map((group) => {
+              const startIdx = flatIdx;
+              const items = group.skills.map((skill) => {
+                const idx = flatIdx++;
+                const category = getSkillCategory(skill);
+                const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
+                const isActive = idx === selectedIndex;
+                return (
+                  <button
+                    key={skill.name}
+                    className={`group w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-xl transition-all duration-150 ${
+                      isActive
+                        ? "bg-accent/[0.08] ring-1 ring-accent/20"
+                        : "hover:bg-ink-900/[0.04]"
+                    }`}
+                    onClick={() => handleSelectSkill(skill)}
+                    onMouseEnter={() => setSelectedIndex(idx)}
+                  >
+                    <div className={`flex h-8 w-8 items-center justify-center rounded-[10px] flex-shrink-0 transition-colors ${
+                      isActive ? config.color.replace(/\/10/, "/15") : config.color
+                    }`}>
+                      <SkillIcon type={config.icon} className="h-4 w-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-[13px] font-medium leading-tight truncate transition-colors ${
+                        isActive ? "text-accent" : "text-ink-800"
+                      }`}>
+                        {skill.label || skill.name}
+                      </div>
+                      {skill.description && (
+                        <div className="text-[11px] text-muted mt-0.5 truncate">{skill.description}</div>
+                      )}
+                    </div>
+                  </button>
+                );
+              });
+              void startIdx;
+              return (
+                <div key={group.category}>
+                  {groups.length > 1 && (
+                    <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+                      {group.label}
+                    </div>
                   )}
+                  {items}
                 </div>
-                <div className={`text-[10px] tabular-nums transition-opacity ${isActive ? "opacity-100 text-accent/60" : "opacity-0 group-hover:opacity-60 text-muted"}`}>
-                  {skill.name}
-                </div>
-              </button>
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       )}
       <div className="border-t border-ink-900/[0.04] px-3.5 py-1.5 flex items-center gap-3 text-[11px] text-muted/70">
@@ -870,40 +902,57 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
         </div>
       ) : (
         <div ref={toolbarSkillListRef} className="max-h-56 overflow-y-auto py-1 px-1.5">
-          {toolbarFilteredSkills.map((skill, index) => {
-            const category = getSkillCategory(skill);
-            const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
-            const isActive = index === toolbarSkillSelectedIndex;
-            return (
-              <button
-                key={skill.name}
-                className={`w-full px-2.5 py-2 text-left flex items-center gap-2.5 rounded-xl transition-all duration-150 ${
-                  isActive
-                    ? "bg-accent/[0.08] ring-1 ring-accent/20"
-                    : "hover:bg-ink-900/[0.04]"
-                }`}
-                onClick={() => {
-                  handleSelectSkill(skill);
-                  setActiveToolbarSkill(skill);
-                  setShowToolbarSkillPicker(false);
-                  setToolbarSkillFilter("");
-                }}
-                onMouseEnter={() => setToolbarSkillSelectedIndex(index)}
-              >
-                <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
-                  <SkillIcon type={config.icon} className="h-3.5 w-3.5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
-                    {skill.label || skill.name}
-                  </div>
-                  {skill.description && (
-                    <div className="text-[11px] text-muted mt-px truncate">{skill.description}</div>
+          {(() => {
+            const groups = groupSkillsByCategory(toolbarFilteredSkills);
+            let flatIdx = 0;
+            return groups.map((group) => {
+              const items = group.skills.map((skill) => {
+                const idx = flatIdx++;
+                const category = getSkillCategory(skill);
+                const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
+                const isActive = idx === toolbarSkillSelectedIndex;
+                return (
+                  <button
+                    key={skill.name}
+                    className={`w-full px-2.5 py-2 text-left flex items-center gap-2.5 rounded-xl transition-all duration-150 ${
+                      isActive
+                        ? "bg-accent/[0.08] ring-1 ring-accent/20"
+                        : "hover:bg-ink-900/[0.04]"
+                    }`}
+                    onClick={() => {
+                      handleSelectSkill(skill);
+                      setActiveToolbarSkill(skill);
+                      setShowToolbarSkillPicker(false);
+                      setToolbarSkillFilter("");
+                    }}
+                    onMouseEnter={() => setToolbarSkillSelectedIndex(idx)}
+                  >
+                    <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
+                      <SkillIcon type={config.icon} className="h-3.5 w-3.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
+                        {skill.label || skill.name}
+                      </div>
+                      {skill.description && (
+                        <div className="text-[11px] text-muted mt-px truncate">{skill.description}</div>
+                      )}
+                    </div>
+                  </button>
+                );
+              });
+              return (
+                <div key={group.category}>
+                  {groups.length > 1 && (
+                    <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+                      {group.label}
+                    </div>
                   )}
+                  {items}
                 </div>
-              </button>
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       )}
     </div>

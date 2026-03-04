@@ -29,9 +29,9 @@ function getScopedMemory(c: { req: { query: (k: string) => string | undefined } 
 }
 
 // GET /memory — full assembled memory context
-memoryRoutes.get('/', (c) => {
+memoryRoutes.get('/', async (c) => {
   try {
-    const context = buildMemoryContext();
+    const context = await buildMemoryContext();
     const scoped = getScopedMemory(c);
     const summary = scoped ? scoped.getMemorySummary() : getMemorySummary();
     return c.json({ context, summary, memoryDir: getMemoryDir() });

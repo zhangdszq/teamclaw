@@ -20,9 +20,12 @@ import {
   readdirSync, renameSync, unlinkSync, statSync,
   copyFileSync,
 } from "fs";
+import { readFile as readFileAsync } from "fs/promises";
+import { spawn } from "child_process";
 import { join } from "path";
 import { homedir } from "os";
-import { loadUserSettings } from "./user-settings.js";
+import { loadUserSettingsAsync } from "./user-settings.js";
+import { listKnowledgeDocs } from "./knowledge-store.js";
 
 // Write lock to prevent concurrent writes
 const writeLocks = new Map<string, Promise<void>>();
@@ -239,6 +242,16 @@ function atomicWrite(filePath: string, content: string): void {
   }
 }
 
+// ─── Async read helper ────────────────────────────────────────
+
+async function readFileOrEmpty(filePath: string): Promise<string> {
+  try {
+    return await readFileAsync(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 // ─── Long-term memory (MEMORY.md) ────────────────────────────
 
 export function readLongTermMemory(): string {
@@ -363,6 +376,19 @@ export function refreshRootAbstract(assistantId?: string): void {
     sops.forEach(s => lines.push(`- ${s.name}: ${s.description || "(no description)"}  [${s.updatedAt}]`));
     lines.push("");
   }
+
+  // Knowledge docs (from ~/.vk-cowork/knowledge/docs/)
+  try {
+    const kDocs = listKnowledgeDocs().slice(0, 20);
+    if (kDocs.length) {
+      lines.push("### 知识文档 — 路径: ~/.vk-cowork/knowledge/docs/{id}.md");
+      kDocs.forEach(d => {
+        const summary = d.content.replace(/\n/g, " ").slice(0, 60);
+        lines.push(`- ${d.title}: ${summary}...  [${d.updatedAt.slice(0, 10)}]`);
+      });
+      lines.push("");
+    }
+  } catch { /* knowledge-store unavailable */ }
 
   // Shared daily summaries
   lines.push("### 近期共享日志 — 路径: daily/{日期}.md");
@@ -606,6 +632,10 @@ export class ScopedMemory {
     return readFileSync(p, "utf8");
   }
 
+  async readSessionStateAsync(): Promise<string> {
+    return readFileOrEmpty(this._sessionStatePath());
+  }
+
   writeSessionState(content: string): void {
     atomicWrite(this._sessionStatePath(), content);
   }
@@ -619,6 +649,10 @@ export class ScopedMemory {
     const p = this._dailyPath(date);
     if (!existsSync(p)) return "";
     return readFileSync(p, "utf8");
+  }
+
+  async readDailyAsync(date: string): Promise<string> {
+    return readFileOrEmpty(this._dailyPath(date));
   }
 
   appendDaily(content: string, date?: string): void {
@@ -798,8 +832,15 @@ const MEMORY_PROTOCOL = `
 - 看到相关 SOP 名称 → 读取 ~/.vk-cowork/memory/sops/{名称}.md
 - 看到共享日志相关日期 → 读取 ~/.vk-cowork/memory/daily/{日期}.md
 - 看到你的对话日志日期 → 读取对应的 assistants/{ID}/daily/{日期}.md
+- 看到知识文档标题 → 读取 ~/.vk-cowork/knowledge/docs/{id}.md
 - 看到 insights 条目 → 读取对应路径
+执行任务前先检查索引中的知识文档和 SOP 列表，看是否有相关经验可参考。
 不要猜测记忆内容，先读取再行动。按需加载比盲目搜索更高效。
+
+━━ 知识库 ━━
+如果上方 <memory> 中包含"相关知识（语义检索）"，这些是系统根据你的任务自动检索到的经验文档。
+知识库路径: ~/.vk-cowork/knowledge/（experience/ 经验候选，docs/ 知识文档）
+会话完成后系统会自动从对话中抽取经验候选，无需手动操作。
 
 ━━ 写入规则 ━━
 写入共享 MEMORY.md（关于用户的信息）：
@@ -846,6 +887,265 @@ SOP 是所有助理共享的知识库。当你完成一个复杂任务时，用 
 过期的 P1/P2 条目会被后台 janitor 自动归档，无需手动处理。
 `.trim();
 
+// ─── Pre-flight knowledge retrieval ──────────────────────────
+
+interface QmdHit { title: string; snippet: string }
+
+const QMD_AVAILABILITY_TTL_MS = 30_000;
+const QMD_QUERY_CACHE_TTL_MS = 5 * 60_000;
+const MAX_CONCURRENT_QMD_QUERIES = 3;
+
+let _qmdAvailability = { value: false, checkedAt: 0 };
+let _qmdProbeInFlight = false;
+const _qmdQueryCache = new Map<string, { hits: QmdHit[]; updatedAt: number }>();
+const _qmdQueryInFlight = new Set<string>();
+const _activeTimeouts = new Set<NodeJS.Timeout>();
+
+function scheduleQmdAvailabilityProbe(): void {
+  if (_qmdProbeInFlight) return;
+  _qmdProbeInFlight = true;
+  let child: ReturnType<typeof spawn> | null = null;
+
+  try {
+    child = spawn("qmd", ["--version"], { stdio: "ignore", shell: false });
+  } catch (spawnError) {
+    _qmdProbeInFlight = false;
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    if (child) {
+      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+    }
+  }, 2000);
+
+  _activeTimeouts.add(timer);
+
+  const cleanup = () => {
+    _qmdProbeInFlight = false;
+    _activeTimeouts.delete(timer);
+    clearTimeout(timer);
+  };
+
+  child.once("close", (code) => {
+    cleanup();
+    _qmdAvailability = { value: code === 0, checkedAt: Date.now() };
+  });
+
+  child.once("error", () => {
+    cleanup();
+    _qmdAvailability = { value: false, checkedAt: Date.now() };
+  });
+}
+
+function isQmdAvailable(): boolean {
+  const now = Date.now();
+  if (now - _qmdAvailability.checkedAt > QMD_AVAILABILITY_TTL_MS) {
+    // Keep callsite non-blocking; availability refresh happens in background.
+    scheduleQmdAvailabilityProbe();
+  }
+  return _qmdAvailability.value;
+}
+
+function normalizeKnowledgeQuery(prompt: string): string {
+  return prompt
+    .replace(/[\r\n\t\f\v]/g, " ") // Remove control chars
+    .replace(/\s+/g, " ") // Normalize whitespace
+    .trim()
+    .slice(0, 200);
+}
+
+function cleanupQmdQueryCache(): void {
+  const now = Date.now();
+  for (const [query, entry] of _qmdQueryCache.entries()) {
+    if (now - entry.updatedAt > QMD_QUERY_CACHE_TTL_MS) {
+      _qmdQueryCache.delete(query);
+    }
+  }
+}
+
+function scheduleQmdKnowledgeQuery(query: string, topK: number): void {
+  if (!query || _qmdQueryInFlight.has(query) || !isQmdAvailable()) return;
+
+  // Concurrency control: limit simultaneous queries
+  if (_qmdQueryInFlight.size >= MAX_CONCURRENT_QMD_QUERIES) {
+    return; // Silently drop if too many concurrent requests
+  }
+
+  _qmdQueryInFlight.add(query);
+  let stdout = "";
+  let child: ReturnType<typeof spawn> | null = null;
+
+  try {
+    child = spawn(
+      "qmd",
+      ["query", query, "--json", "-n", String(topK), "--collection", "vk-knowledge"],
+      {
+        stdio: ["ignore", "pipe", "ignore"],
+        shell: false,
+        // Prevent zombie processes
+        detached: false,
+      },
+    );
+  } catch (spawnError) {
+    _qmdQueryInFlight.delete(query);
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    if (child) {
+      try {
+        child.kill("SIGTERM"); // Try graceful shutdown first
+        setTimeout(() => {
+          try { child?.kill("SIGKILL"); } catch { /* ignore */ }
+        }, 1000);
+      } catch { /* ignore */ }
+    }
+  }, 8000);
+
+  _activeTimeouts.add(timer);
+
+  child.stdout?.on("data", (chunk: Buffer | string) => {
+    stdout += String(chunk);
+  });
+
+  const cleanup = () => {
+    _qmdQueryInFlight.delete(query);
+    _activeTimeouts.delete(timer);
+    clearTimeout(timer);
+  };
+
+  child.once("close", (code, signal) => {
+    cleanup();
+    // Accept both successful exit (0) and termination by signal
+    if (code !== 0 && code !== null) return;
+
+    try {
+      const items = JSON.parse(stdout);
+      if (!Array.isArray(items)) return;
+      const hits: QmdHit[] = items
+        .filter((it: any) => it && (it.title || it.content))
+        .map((it: any) => ({
+          title: String(it.title || it.path || "untitled").slice(0, 80),
+          snippet: String(it.content || "").slice(0, 300),
+        }));
+      _qmdQueryCache.set(query, { hits, updatedAt: Date.now() });
+      // Periodic cache cleanup
+      if (_qmdQueryCache.size > 50) {
+        cleanupQmdQueryCache();
+      }
+    } catch {
+      // Ignore parse errors from qmd and keep memory assembly robust.
+    }
+  });
+
+  child.once("error", (error) => {
+    cleanup();
+    // Log but don't crash - qmd errors should not break memory context building
+    console.warn(`[QMD Query] Failed for "${query.slice(0, 50)}...":`, error.message);
+  });
+}
+
+/**
+ * Query the local knowledge base via qmd CLI.
+ * Returns top-k results with title and snippet.
+ * Gracefully returns [] if qmd is not installed or fails.
+ */
+async function queryKnowledgeViaQmd(prompt: string, topK = 3): Promise<QmdHit[]> {
+  const query = normalizeKnowledgeQuery(prompt);
+  if (!query) return [];
+
+  const cached = _qmdQueryCache.get(query);
+  if (cached && Date.now() - cached.updatedAt < QMD_QUERY_CACHE_TTL_MS) {
+    return cached.hits.slice(0, topK);
+  }
+
+  // Clean cache periodically to prevent unbounded growth
+  if (_qmdQueryCache.size > 100) {
+    cleanupQmdQueryCache();
+  }
+
+  // If qmd is not available, return empty immediately
+  if (!isQmdAvailable()) return [];
+
+  // Try to execute query synchronously if not already in flight
+  if (!_qmdQueryInFlight.has(query)) {
+    return new Promise((resolve) => {
+      _qmdQueryInFlight.add(query);
+      let stdout = "";
+      let child: ReturnType<typeof spawn> | null = null;
+
+      try {
+        child = spawn(
+          "qmd",
+          ["query", query, "--json", "-n", String(topK), "--collection", "vk-knowledge"],
+          {
+            stdio: ["ignore", "pipe", "ignore"],
+            shell: false,
+            detached: false,
+          },
+        );
+      } catch (spawnError) {
+        _qmdQueryInFlight.delete(query);
+        resolve([]);
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        if (child) {
+          try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        }
+      }, 5000); // Shorter timeout for synchronous wait
+
+      child.stdout?.on("data", (chunk: Buffer | string) => {
+        stdout += String(chunk);
+      });
+
+      child.once("close", (code, signal) => {
+        clearTimeout(timer);
+        _qmdQueryInFlight.delete(query);
+
+        if (code !== 0 && code !== null) {
+          resolve([]);
+          return;
+        }
+
+        try {
+          const items = JSON.parse(stdout);
+          if (!Array.isArray(items)) {
+            resolve([]);
+            return;
+          }
+          const hits: QmdHit[] = items
+            .filter((it: any) => it && (it.title || it.content))
+            .map((it: any) => ({
+              title: String(it.title || it.path || "untitled").slice(0, 80),
+              snippet: String(it.content || "").slice(0, 300),
+            }));
+          _qmdQueryCache.set(query, { hits, updatedAt: Date.now() });
+          resolve(hits.slice(0, topK));
+        } catch {
+          resolve([]);
+        }
+      });
+
+      child.once("error", () => {
+        clearTimeout(timer);
+        _qmdQueryInFlight.delete(query);
+        resolve([]);
+      });
+    });
+  }
+
+  // If already in flight, wait a short time for cache to populate, then return empty
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const cached = _qmdQueryCache.get(query);
+      resolve(cached ? cached.hits.slice(0, topK) : []);
+    }, 100);
+  });
+}
+
 /**
  * Build a slim memory context for the given prompt.
  *
@@ -858,18 +1158,19 @@ SOP 是所有助理共享的知识库。当你完成一个复杂任务时，用 
  *   3. MEMORY.md (long-term core preferences/decisions — always relevant)
  *   4. SESSION-STATE.md (cross-session working memory)
  *   5. Today's daily note (immediate context)
+ *   6. Pre-flight knowledge hits from qmd (semantic search, if available)
  *
  * NOT injected (Agent loads on-demand via file_read):
  *   - Yesterday's / historical daily logs
  *   - Full SOP content (names+descriptions are in .abstract)
  *   - Insight files
  */
-export function buildSmartMemoryContext(
+export async function buildSmartMemoryContext(
   prompt: string,
   assistantId?: string,
   sessionCwd?: string,
   opts?: { skipDailyLog?: boolean },
-): string {
+): Promise<string> {
   ensureDirs();
 
   const scoped = assistantId ? new ScopedMemory(assistantId) : null;
@@ -878,8 +1179,8 @@ export function buildSmartMemoryContext(
   if (!assistantId) {
     try {
       const configPath = join(homedir(), ".vk-cowork", "assistants-config.json");
-      if (existsSync(configPath)) {
-        const raw = readFileSync(configPath, "utf8");
+      const raw = await readFileOrEmpty(configPath);
+      if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed.assistants?.length > 1) {
           console.warn("[Memory] WARNING: assistantId missing with multiple assistants. Falling back to global memory.");
@@ -888,34 +1189,30 @@ export function buildSmartMemoryContext(
     } catch { /* ignore */ }
   }
 
-  // Ensure .abstract is up-to-date (includes assistant section if ID provided)
-  try { refreshRootAbstract(assistantId); } catch { /* non-blocking */ }
+  // Note: .abstract refresh is skipped in async context to avoid blocking; it happens on writes
 
   const todayDate = localDateStr();
 
-  // Shared layer
-  const abstract = readAbstract(MEMORY_ROOT).trim();
-  const longTerm = readLongTermMemory().trim();
-  const sharedToday = readDailyMemory(todayDate).trim();
+  // Parallel async reads — avoids sequential blocking I/O
+  const [abstract, longTerm, sharedToday, sessionState, assistantToday, settings] = await Promise.all([
+    readFileOrEmpty(join(MEMORY_ROOT, ".abstract")),
+    readFileOrEmpty(LONG_TERM_FILE),
+    readFileOrEmpty(dailyPath(todayDate)),
+    scoped ? scoped.readSessionStateAsync() : readFileOrEmpty(SESSION_STATE_FILE),
+    scoped ? scoped.readDailyAsync(todayDate) : Promise.resolve(""),
+    loadUserSettingsAsync(),
+  ]);
 
-  // Per-assistant layer (or fallback to global)
-  const sessionState = scoped ? scoped.readSessionState().trim() : readSessionState().trim();
-  const assistantToday = scoped ? scoped.readDaily(todayDate).trim() : "";
-
-  // Inject personalization from user settings
   const preamble: string[] = [];
-  try {
-    const settings = loadUserSettings();
-    const profileLines: string[] = [];
-    if (settings.userName?.trim()) profileLines.push(`- 姓名: ${settings.userName.trim()}`);
-    if (settings.workDescription?.trim()) profileLines.push(`- 工作描述: ${settings.workDescription.trim()}`);
-    if (profileLines.length) {
-      preamble.push("[用户档案]", ...profileLines, "");
-    }
-    if (settings.globalPrompt?.trim()) {
-      preamble.push("[全局指令]", settings.globalPrompt.trim(), "");
-    }
-  } catch { /* ignore — settings unavailable */ }
+  const profileLines: string[] = [];
+  if (settings.userName?.trim()) profileLines.push(`- 姓名: ${settings.userName.trim()}`);
+  if (settings.workDescription?.trim()) profileLines.push(`- 工作描述: ${settings.workDescription.trim()}`);
+  if (profileLines.length) {
+    preamble.push("[用户档案]", ...profileLines, "");
+  }
+  if (settings.globalPrompt?.trim()) {
+    preamble.push("[全局指令]", settings.globalPrompt.trim(), "");
+  }
 
   if (sessionCwd?.trim()) {
     preamble.push("[工作环境]", `- 当前工作目录: ${sessionCwd.trim()}`, "");
@@ -923,35 +1220,53 @@ export function buildSmartMemoryContext(
 
   const parts: string[] = [...preamble, "<memory>"];
 
-  if (abstract) {
+  const abstractTrimmed = abstract.trim();
+  if (abstractTrimmed) {
     parts.push("## 记忆目录索引");
-    parts.push(abstract);
+    parts.push(abstractTrimmed);
     parts.push("");
   }
-  if (longTerm) {
+  const longTermTrimmed = longTerm.trim();
+  if (longTermTrimmed) {
     parts.push("## 共享长期记忆 (MEMORY.md)");
-    parts.push(longTerm);
+    parts.push(longTermTrimmed);
     parts.push("");
   }
-  if (sessionState) {
+  const sessionStateTrimmed = sessionState.trim();
+  if (sessionStateTrimmed) {
     parts.push("## 工作记忆 (SESSION-STATE.md)");
-    parts.push(sessionState);
+    parts.push(sessionStateTrimmed);
     parts.push("");
   }
   // Skip daily logs for file-analysis messages — the logs contain previous file analyses
   // that pollute Claude's output with content from a different file.
   if (!opts?.skipDailyLog) {
-    if (sharedToday) {
+    const sharedTodayTrimmed = sharedToday.trim();
+    if (sharedTodayTrimmed) {
       parts.push(`## 今日共享日志 (${todayDate})`);
-      parts.push(sharedToday);
+      parts.push(sharedTodayTrimmed);
       parts.push("");
     }
-    if (assistantToday) {
+    const assistantTodayTrimmed = assistantToday.trim();
+    if (assistantTodayTrimmed) {
       parts.push(`## 今日对话日志 (${todayDate})`);
-      parts.push(assistantToday);
+      parts.push(assistantTodayTrimmed);
       parts.push("");
     }
   }
+
+  // Pre-flight knowledge retrieval via qmd (semantic search)
+  try {
+    const qmdHits = await queryKnowledgeViaQmd(prompt, 3);
+    if (qmdHits.length) {
+      parts.push("## 相关知识（语义检索）");
+      for (const hit of qmdHits) {
+        parts.push(`### ${hit.title}`);
+        parts.push(hit.snippet);
+        parts.push("");
+      }
+    }
+  } catch { /* qmd unavailable, skip silently */ }
 
   if (parts.length <= preamble.length + 1) {
     parts.push("（暂无历史记忆）");
@@ -965,7 +1280,7 @@ export function buildSmartMemoryContext(
 }
 
 /** Legacy alias — kept for backward compat */
-export function buildMemoryContext(): string {
+export async function buildMemoryContext(): Promise<string> {
   return buildSmartMemoryContext("");
 }
 

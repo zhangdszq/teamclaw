@@ -4,6 +4,77 @@ import type { ClientEvent } from "../types";
 const COLLAPSED_HEIGHT = 152;
 const EXPANDED_HEIGHT = 404;
 
+const SKILL_CATEGORY_CONFIG: Record<string, { icon: string; color: string }> = {
+  "teaching":           { icon: "code",    color: "text-emerald-600 bg-emerald-500/10" },
+  "picturebook":        { icon: "palette", color: "text-rose-500 bg-rose-500/10" },
+  "product-management": { icon: "chart",   color: "text-violet-600 bg-violet-500/10" },
+  "operations":         { icon: "zap",     color: "text-orange-600 bg-orange-500/10" },
+  "video":              { icon: "palette", color: "text-red-500 bg-red-500/10" },
+  "image":              { icon: "palette", color: "text-orange-500 bg-orange-500/10" },
+  "social":             { icon: "search",  color: "text-indigo-500 bg-indigo-500/10" },
+  "document":           { icon: "pen",     color: "text-teal-500 bg-teal-500/10" },
+  "infographic":        { icon: "chart",   color: "text-amber-500 bg-amber-500/10" },
+  "development":        { icon: "code",    color: "text-blue-500 bg-blue-500/10" },
+  "writing":            { icon: "pen",     color: "text-purple-500 bg-purple-500/10" },
+  "analysis":           { icon: "chart",   color: "text-green-500 bg-green-500/10" },
+  "design":             { icon: "palette", color: "text-pink-500 bg-pink-500/10" },
+  "productivity":       { icon: "zap",     color: "text-yellow-500 bg-yellow-500/10" },
+  "research":           { icon: "search",  color: "text-cyan-500 bg-cyan-500/10" },
+  "other":              { icon: "box",     color: "text-gray-500 bg-gray-500/10" },
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  "teaching": "教研专用", "picturebook": "绘本馆专用", "product-management": "产品经理专用",
+  "operations": "运营专用", "video": "视频处理", "image": "图像生成", "writing": "写作内容",
+  "social": "社交媒体", "document": "文档工具", "infographic": "信息图表",
+  "development": "开发工具", "productivity": "效率工具", "analysis": "数据分析",
+  "design": "设计创意", "research": "研究调查", "other": "其他",
+};
+
+function getSkillCategory(skill: SkillInfo): string {
+  if (skill.category && skill.category in SKILL_CATEGORY_CONFIG) return skill.category;
+  const text = (skill.name + " " + (skill.description || "")).toLowerCase();
+  if (text.includes("code") || text.includes("dev") || text.includes("程序") || text.includes("开发")) return "development";
+  if (text.includes("write") || text.includes("写作") || text.includes("文档") || text.includes("blog")) return "writing";
+  if (text.includes("data") || text.includes("分析") || text.includes("数据")) return "analysis";
+  if (text.includes("design") || text.includes("设计") || text.includes("创意")) return "design";
+  if (text.includes("效率") || text.includes("productivity") || text.includes("自动")) return "productivity";
+  if (text.includes("research") || text.includes("调研") || text.includes("搜索")) return "research";
+  return skill.category || "other";
+}
+
+function groupSkillsByCategory(skills: SkillInfo[]): { category: string; label: string; skills: SkillInfo[] }[] {
+  const groups: Record<string, SkillInfo[]> = {};
+  for (const skill of skills) {
+    const cat = getSkillCategory(skill);
+    (groups[cat] ??= []).push(skill);
+  }
+  return Object.entries(groups).map(([cat, items]) => ({
+    category: cat,
+    label: CATEGORY_LABELS[cat] || cat,
+    skills: items,
+  }));
+}
+
+function QWSkillIcon({ type, className = "" }: { type: string; className?: string }) {
+  switch (type) {
+    case "code":
+      return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>;
+    case "pen":
+      return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /></svg>;
+    case "chart":
+      return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>;
+    case "palette":
+      return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2"><circle cx="13.5" cy="6.5" r="1.5" /><circle cx="17.5" cy="10.5" r="1.5" /><circle cx="8.5" cy="7.5" r="1.5" /><circle cx="6.5" cy="12.5" r="1.5" /><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.555C21.965 6.012 17.461 2 12 2z" /></svg>;
+    case "zap":
+      return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>;
+    case "search":
+      return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>;
+    default:
+      return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" /></svg>;
+  }
+}
+
 export function QuickWindow() {
   const [prompt, setPrompt] = useState("");
   const [sending, setSending] = useState(false);
@@ -435,37 +506,52 @@ export function QuickWindow() {
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto py-1 px-1.5">
-              {filteredSkills.map((skill, index) => {
-                const isActive = index === skillSelectedIndex;
-                return (
-                  <button
-                    key={skill.name}
-                    className={`w-full px-2.5 py-2 text-left flex items-center gap-2.5 rounded-xl transition-all duration-150 ${
-                      isActive
-                        ? "bg-accent/[0.08] ring-1 ring-accent/20"
-                        : "hover:bg-ink-900/[0.04]"
-                    }`}
-                    onClick={() => handleSelectSkill(skill)}
-                    onMouseEnter={() => setSkillSelectedIndex(index)}
-                  >
-                    <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 transition-colors ${
-                      isActive ? "bg-accent/15 text-accent" : "bg-ink-900/[0.05] text-ink-500"
-                    }`}>
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                        <path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 01-1 1H9a1 1 0 01-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
-                      </svg>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
-                        {skill.label || skill.name}
-                      </div>
-                      {skill.description && (
-                        <div className="text-[10px] text-muted truncate leading-tight mt-0.5">{skill.description}</div>
+              {(() => {
+                const groups = groupSkillsByCategory(filteredSkills);
+                let flatIdx = 0;
+                return groups.map((group) => {
+                  const items = group.skills.map((skill) => {
+                    const idx = flatIdx++;
+                    const cat = getSkillCategory(skill);
+                    const config = SKILL_CATEGORY_CONFIG[cat] || SKILL_CATEGORY_CONFIG.other;
+                    const isActive = idx === skillSelectedIndex;
+                    return (
+                      <button
+                        key={skill.name}
+                        className={`w-full px-2.5 py-2 text-left flex items-center gap-2.5 rounded-xl transition-all duration-150 ${
+                          isActive
+                            ? "bg-accent/[0.08] ring-1 ring-accent/20"
+                            : "hover:bg-ink-900/[0.04]"
+                        }`}
+                        onClick={() => handleSelectSkill(skill)}
+                        onMouseEnter={() => setSkillSelectedIndex(idx)}
+                      >
+                        <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
+                          <QWSkillIcon type={config.icon} className="h-3.5 w-3.5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
+                            {skill.label || skill.name}
+                          </div>
+                          {skill.description && (
+                            <div className="text-[10px] text-muted truncate leading-tight mt-0.5">{skill.description}</div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  });
+                  return (
+                    <div key={group.category}>
+                      {groups.length > 1 && (
+                        <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+                          {group.label}
+                        </div>
                       )}
+                      {items}
                     </div>
-                  </button>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           )}
         </div>

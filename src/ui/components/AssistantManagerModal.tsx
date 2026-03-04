@@ -34,7 +34,7 @@ function emptyAssistant(defaults?: AssistantDefaults): EditingAssistant {
     id: "",
     name: "",
     avatar: "",
-    provider: "claude",
+    provider: defaults?.defaultProvider ?? "claude",
     model: "",
     skillNames: [],
     skillTags: [],

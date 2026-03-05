@@ -312,7 +312,7 @@ export function startHeartbeatLoop(runner: SessionRunner): void {
         const shouldRetryAfterError =
           completionOutcome === "error" &&
           completionAt > 0 &&
-          now - completionAt >= RETRY_AFTER_ERROR_MS;
+          now - completionAt >= retryAfterErrorMs(errorStreak.get(a.id) ?? 0);
         const shouldForceRunAfterSilence =
           completionAt > 0 &&
           now - completionAt >= FORCE_RUN_MAX_SILENCE_MS;

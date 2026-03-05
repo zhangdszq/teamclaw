@@ -46,6 +46,7 @@ import {
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
   parseReplySegments,
+  extractPartialText,
 } from "./bot-base.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -84,15 +85,6 @@ interface StreamResult {
 }
 
 // ─── Streaming helpers ───────────────────────────────────────────────────────
-
-function extractPartialText(message: Record<string, unknown>): string | null {
-  const msg = message?.message as Record<string, unknown> | undefined;
-  if (!msg?.content || !Array.isArray(msg.content)) return null;
-  const texts = (msg.content as Array<{ type?: string; text?: string }>)
-    .filter((b) => b.type === "text" && b.text)
-    .map((b) => b.text!);
-  return texts.length > 0 ? texts.join("") : null;
-}
 
 const DRAFT_THROTTLE_MS = 1500;
 const DRAFT_SUFFIX = "\n\n⏳ ...";

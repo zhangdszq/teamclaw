@@ -1,18 +1,20 @@
 /**
  * DingTalk Stream Mode Bot Service
  *
- * Full rewrite incorporating features from soimy/openclaw-channel-dingtalk:
+ * Architecture (soimy/openclaw-channel-dingtalk inspired):
  * - Exponential backoff + jitter reconnection with configurable params
- * - AI Card streaming mode (real-time streaming via DingTalk interactive cards)
+ * - AI Card streaming via Agent SDK (Claude tools + real-time card updates)
+ * - AICardStatus state machine + token auto-refresh + 401 retry
+ * - Card created BEFORE media download for immediate "思考中" feedback
+ * - Per-session lock (prevents concurrent processing of same conversation)
+ * - Inflight task registry for reconnect recovery
+ * - Three-level fallback delivery: Card → sessionWebhook → Proactive API
+ * - Active health check (5s interval, triggers reconnect on silent disconnect)
  * - Media handling: voice ASR passthrough, image download + vision, file description
  * - Access control: dmPolicy (open/allowlist), groupPolicy (open/allowlist), allowFrom
  * - Message deduplication by msgId (5-min TTL)
- * - sessionWebhook expiry detection
- * - DingTalk OAuth2 access token caching (for Card API)
- * - Anthropic client caching (per-assistant, invalidated on settings change)
  */
 import WebSocket from "ws";
-import Anthropic from "@anthropic-ai/sdk";
 import { Codex, type CodexOptions, type ThreadOptions } from "@openai/codex-sdk";
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -36,6 +38,7 @@ import {
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
   parseReplySegments,
+  extractPartialText,
 } from "./bot-base.js";
 
 function getLocalIp(): string {
@@ -76,7 +79,7 @@ export interface DingtalkBotOptions {
   // Reply mode
   messageType?: "markdown" | "card";
   cardTemplateId?: string;
-  /** Card template content field key — defaults to "msgContent" */
+  /** Card template content field key — defaults to "content" */
   cardTemplateKey?: string;
   // Access control
   dmPolicy?: "open" | "allowlist";
@@ -137,10 +140,30 @@ interface DingtalkMessage {
 }
 
 
+/** Card lifecycle state — mirrors Openclaw AICardStatus */
+export enum AICardStatus {
+  PROCESSING = "PROCESSING",  // Created, waiting for first content
+  INPUTING   = "INPUTING",    // Streaming in progress
+  FINISHED   = "FINISHED",    // Finalized (isFinalize=true sent)
+  FAILED     = "FAILED",      // Error, do not attempt further updates
+}
+
 interface AICardInstance {
   outTrackId: string;
   cardInstanceId: string;
   templateKey: string;
+  /** Current access token — refreshed automatically when near expiry */
+  accessToken: string;
+  /** Fetches a fresh access token (closure over credentials — avoids storing appSecret) */
+  refreshToken: () => Promise<string>;
+  /** Conversation ID for proactive fallback delivery */
+  conversationId: string;
+  isGroup: boolean;
+  createdAt: number;
+  lastUpdated: number;
+  state: AICardStatus;
+  /** Last successfully streamed content — used for reconnect recovery */
+  lastStreamedContent?: string;
 }
 
 // ─── DingTalk API helpers ─────────────────────────────────────────────────────
@@ -264,10 +287,22 @@ async function uploadMediaV1(
   }
 }
 
+// ─── Card content formatting ──────────────────────────────────────────────────
+
+const THINKING_TRUNCATE = 500;
+
+function formatThinkingForCard(thinking: string): string {
+  const tail = thinking.length > THINKING_TRUNCATE
+    ? thinking.slice(-THINKING_TRUNCATE)
+    : thinking;
+  const quoted = tail.split("\n").map((l) => `> ${l}`).join("\n");
+  return `**正在思考...**\n${quoted}`;
+}
+
 // ─── Web utilities ────────────────────────────────────────────────────────────
 
-/** Strip HTML tags and decode common HTML entities */
 async function createAICard(
+  refreshTokenFn: () => Promise<string>,
   accessToken: string,
   robotCode: string,
   templateId: string,
@@ -277,27 +312,29 @@ async function createAICard(
 ): Promise<AICardInstance> {
   const outTrackId = randomUUID();
   const isGroup = msg.conversationType === "2";
+  const conversationId = isGroup
+    ? (msg.conversationId ?? "")
+    : (msg.senderStaffId ?? msg.senderId ?? "");
 
-  let openSpaceId: string;
-  let openSpaceModel: Record<string, unknown>;
-
-  if (isGroup && msg.conversationId) {
-    openSpaceId = `dtv1.card//IM_GROUP.${msg.conversationId}`;
-    openSpaceModel = { imGroupOpenSpaceModel: { supportForward: true } };
-  } else {
-    openSpaceId = `dtv1.card//IM_ROBOT.${msg.chatbotUserId ?? robotCode}`;
-    openSpaceModel = { imRobotOpenSpaceModel: { spaceType: "IM_ROBOT" } };
-  }
+  const openSpaceId = isGroup
+    ? `dtv1.card//IM_GROUP.${conversationId}`
+    : `dtv1.card//IM_ROBOT.${conversationId}`;
 
   const payload = {
     cardTemplateId: templateId,
     outTrackId,
     openSpaceId,
-    ...openSpaceModel,
+    callbackType: "STREAM",
+    imGroupOpenSpaceModel: { supportForward: true },
+    imRobotOpenSpaceModel: { supportForward: true },
+    imGroupOpenDeliverModel: isGroup
+      ? { robotCode }
+      : undefined,
+    imRobotOpenDeliverModel: !isGroup
+      ? { spaceType: "IM_ROBOT", robotCode }
+      : undefined,
     cardData: { cardParamMap: { [templateKey]: initialContent } },
-    userIdType: 0,
-    robotCode,
-    pullStrategy: false,
+    userIdType: 1,
   };
 
   const resp = await fetch(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, {
@@ -314,37 +351,106 @@ async function createAICard(
     throw new Error(`Card create failed HTTP ${resp.status}: ${text.slice(0, 200)}`);
   }
 
-  const data = (await resp.json()) as { result?: { cardInstanceId: string } };
-  if (!data.result?.cardInstanceId) throw new Error("Card create: missing cardInstanceId");
-
-  return { outTrackId, cardInstanceId: data.result.cardInstanceId, templateKey };
+  return {
+    outTrackId,
+    cardInstanceId: outTrackId,
+    templateKey,
+    accessToken,
+    refreshToken: refreshTokenFn,
+    conversationId,
+    isGroup,
+    createdAt: Date.now(),
+    lastUpdated: Date.now(),
+    state: AICardStatus.PROCESSING,
+  };
 }
+
+/** Token age threshold before proactive refresh (90 minutes, matching Openclaw) */
+const CARD_TOKEN_REFRESH_THRESHOLD_MS = 90 * 60 * 1000;
 
 async function streamAICard(
   card: AICardInstance,
-  accessToken: string,
   content: string,
   isFinalize: boolean,
 ): Promise<void> {
-  const resp = await fetch(`${DINGTALK_API}/v1.0/card/streaming`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      "x-acs-dingtalk-access-token": accessToken,
-    },
-    body: JSON.stringify({
-      outTrackId: card.outTrackId,
-      guid: card.cardInstanceId,
-      key: card.templateKey,
-      content,
-      isFull: true,
-      isFinalize,
-      isError: false,
-    }),
-  });
-  if (!resp.ok) {
-    console.error(`[DingTalk] Card stream update failed: HTTP ${resp.status}`);
+  // Skip if already in terminal state
+  if (card.state === AICardStatus.FINISHED || card.state === AICardStatus.FAILED) {
+    return;
   }
+
+  // Proactively refresh token if it's near expiry (90-minute threshold)
+  if (Date.now() - card.createdAt > CARD_TOKEN_REFRESH_THRESHOLD_MS) {
+    try {
+      card.accessToken = await card.refreshToken();
+      card.createdAt = Date.now();
+    } catch (e) {
+      console.warn("[DingTalk] Card token refresh failed:", (e as Error).message);
+    }
+  }
+
+  const body = JSON.stringify({
+    outTrackId: card.outTrackId,
+    guid: randomUUID(),
+    key: card.templateKey,
+    content,
+    isFull: true,
+    isFinalize,
+    isError: false,
+  });
+
+  const doRequest = async (token: string): Promise<Response> =>
+    fetch(`${DINGTALK_API}/v1.0/card/streaming`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
+      body,
+    });
+
+  let resp = await doRequest(card.accessToken);
+
+  // 401: refresh token and retry once (Openclaw pattern)
+  if (resp.status === 401) {
+    console.warn("[DingTalk] Card stream 401, refreshing token and retrying...");
+    try {
+      card.accessToken = await card.refreshToken();
+      resp = await doRequest(card.accessToken);
+    } catch (e) {
+      console.error("[DingTalk] Card token refresh after 401 failed:", (e as Error).message);
+      card.state = AICardStatus.FAILED;
+      card.lastUpdated = Date.now();
+      throw e;
+    }
+  }
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    card.state = AICardStatus.FAILED;
+    card.lastUpdated = Date.now();
+    throw new Error(`Card stream update failed HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+
+  card.lastStreamedContent = content;
+  card.lastUpdated = Date.now();
+  if (isFinalize) {
+    card.state = AICardStatus.FINISHED;
+  } else if (card.state === AICardStatus.PROCESSING) {
+    card.state = AICardStatus.INPUTING;
+  }
+}
+
+// ─── Inflight task registry ───────────────────────────────────────────────────
+
+/**
+ * Tracks an in-progress AI generation so it can be recovered after a WebSocket
+ * reconnect. Stored per-connection, keyed by msgId.
+ */
+interface InflightTask {
+  /** Pre-created card instance (null for markdown mode) */
+  card: AICardInstance | null;
+  /** Accumulated AI content so far — updated during streaming */
+  accumulatedContent: string;
+  /** Original DingTalk message for fallback webhook / proactive delivery */
+  msg: DingtalkMessage;
+  startedAt: number;
 }
 
 /** Download a media file from DingTalk and save to a temp file; returns the local path */
@@ -734,7 +840,7 @@ export function getAnyConnectedDingtalkAssistantId(): string | null {
 /** Update runtime config of a running bot without restarting the connection. */
 export function updateDingtalkBotConfig(
   assistantId: string,
-  updates: Partial<Pick<DingtalkBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd">>,
+  updates: Partial<Pick<DingtalkBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd" | "messageType" | "cardTemplateId" | "cardTemplateKey" | "dmPolicy" | "groupPolicy" | "allowFrom">>,
 ): void {
   const conn = pool.get(assistantId);
   if (!conn) return;
@@ -1159,30 +1265,7 @@ async function updateBotSessionTitle(
   }
 }
 
-// ─── Anthropic client cache (used only for card streaming mode) ───────────────
-
-/** Per-assistantId client cache; cleared when API settings change */
-const anthropicClients = new Map<string, { client: Anthropic; apiKey: string; baseURL: string }>();
-
-function getAnthropicClient(assistantId: string): Anthropic {
-  const settings = loadUserSettings();
-  const apiKey =
-    settings.anthropicAuthToken ||
-    process.env.ANTHROPIC_API_KEY ||
-    process.env.ANTHROPIC_AUTH_TOKEN ||
-    "";
-  const baseURL = settings.anthropicBaseUrl || "";
-
-  const cached = anthropicClients.get(assistantId);
-  if (cached && cached.apiKey === apiKey && cached.baseURL === baseURL) {
-    return cached.client;
-  }
-
-  if (!apiKey) throw new Error("未配置 Anthropic API Key，请在设置中填写。");
-  const client = new Anthropic({ apiKey, baseURL: baseURL || undefined });
-  anthropicClients.set(assistantId, { client, apiKey, baseURL });
-  return client;
-}
+// (Anthropic client cache removed — Card mode now uses Agent SDK via runClaudeCard)
 
 // ─── Claude session ID registry (for query() resume) ─────────────────────────
 
@@ -1216,6 +1299,18 @@ class DingtalkConnection {
   /** Inbound message counters for observability */
   private inboundStats = { received: 0, processed: 0, skipped: 0 };
 
+  /** Active health check interval — detects silent disconnects */
+  private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private consecutiveUnhealthy = 0;
+  /** Timestamp of last received WebSocket frame (PING/CALLBACK). DingTalk sends PINGs ~20s. */
+  private lastFrameTime = 0;
+
+  /** Maps sessionKey → pending lock promise for per-conversation serialization */
+  private sessionLocks = new Map<string, Promise<void>>();
+
+  /** In-progress AI tasks — enables reconnect recovery */
+  private inflightTasks = new Map<string, InflightTask>();
+
   constructor(public opts: DingtalkBotOptions) {}
 
   getOptions(): DingtalkBotOptions {
@@ -1245,6 +1340,7 @@ class DingtalkConnection {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHealthCheck();
     if (this.ws) {
       try { this.ws.close(); } catch { /* ignore */ }
       this.ws = null;
@@ -1311,6 +1407,19 @@ class DingtalkConnection {
         this.status = "connected";
         emit(this.opts.assistantId, "connected");
         console.log(`[DingTalk] Connected: assistant=${this.opts.assistantId}`);
+
+        // Pre-warm access token for Card API
+        getAccessToken(this.opts.appKey, this.opts.appSecret)
+          .catch((e) => console.warn("[DingTalk] Token pre-warm failed:", (e as Error).message));
+
+        // Start active health check
+        this.startHealthCheck();
+
+        // Drain any tasks that were pending before reconnect
+        this.drainInflightTasks().catch((e) =>
+          console.warn("[DingTalk] Drain inflight failed:", (e as Error).message),
+        );
+
         resolve();
       };
 
@@ -1332,6 +1441,7 @@ class DingtalkConnection {
 
       ws.on("close", (code: number) => {
         console.log(`[DingTalk] WebSocket closed (code=${code})`);
+        this.stopHealthCheck();
         this.ws = null;
         if (!this.stopped && this.everConnected) {
           this.status = "error";
@@ -1353,7 +1463,7 @@ class DingtalkConnection {
   // ── Exponential backoff reconnect ────────────────────────────────────────────
 
   private scheduleReconnect(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.reconnectTimer) return;
 
     const maxAttempts = this.opts.maxConnectionAttempts ?? 10;
     if (this.reconnectAttempts >= maxAttempts) {
@@ -1387,9 +1497,114 @@ class DingtalkConnection {
     }, delay);
   }
 
+  // ── Health check ─────────────────────────────────────────────────────────────
+
+  /** DingTalk PING intervals vary (30-60s+); 90s silence is a safe threshold. */
+  private static readonly FRAME_SILENCE_THRESHOLD_MS = 90_000;
+
+  private startHealthCheck(): void {
+    this.stopHealthCheck();
+    this.consecutiveUnhealthy = 0;
+    this.lastFrameTime = Date.now();
+    this.healthCheckInterval = setInterval(() => {
+      if (this.stopped) return;
+
+      const wsOpen = this.ws?.readyState === WebSocket.OPEN;
+      const frameFresh = this.lastFrameTime > 0
+        && (Date.now() - this.lastFrameTime) < DingtalkConnection.FRAME_SILENCE_THRESHOLD_MS;
+
+      if (!wsOpen || !frameFresh) {
+        this.consecutiveUnhealthy++;
+        const reason = !wsOpen ? "WebSocket not open" : `no frame for 90s (silent disconnect)`;
+        console.warn(`[DingTalk] Health check unhealthy: ${reason} (${this.consecutiveUnhealthy}/3)`);
+        if (this.consecutiveUnhealthy >= 3) {
+          console.warn("[DingTalk] Health check failed — triggering reconnect");
+          this.stopHealthCheck();
+          const ws = this.ws;
+          this.ws = null;
+          try { ws?.terminate(); } catch { /* ignore */ }
+          if (this.status !== "error") {
+            this.status = "error";
+            emit(this.opts.assistantId, "error", "连接健康检查失败，正在重连…");
+          }
+          this.scheduleReconnect();
+        }
+      } else {
+        this.consecutiveUnhealthy = 0;
+      }
+    }, 15_000);
+  }
+
+  private stopHealthCheck(): void {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+    }
+    this.consecutiveUnhealthy = 0;
+  }
+
+  // ── Reconnect-recovery: drain pending inflight tasks ─────────────────────────
+
+  private async drainInflightTasks(): Promise<void> {
+    if (this.inflightTasks.size === 0) return;
+    console.log(`[DingTalk] Draining ${this.inflightTasks.size} inflight task(s) after reconnect`);
+
+    // Pre-refresh token so card / proactive delivery has a valid token
+    try {
+      await getAccessToken(this.opts.appKey, this.opts.appSecret);
+    } catch (e) {
+      console.warn("[DingTalk] Drain: token pre-refresh failed:", (e as Error).message);
+    }
+
+    for (const [key, task] of this.inflightTasks) {
+      if (!task.accumulatedContent) continue;
+      // Refresh card's token if card exists (it may have expired during disconnect)
+      if (task.card && task.card.state !== AICardStatus.FINISHED && task.card.state !== AICardStatus.FAILED) {
+        try {
+          task.card.accessToken = await task.card.refreshToken();
+        } catch {
+          task.card.state = AICardStatus.FAILED;
+        }
+      }
+      try {
+        await this.deliverWithFallback(task.accumulatedContent, task.msg, task.card);
+        this.inflightTasks.delete(key);
+        console.log(`[DingTalk] Inflight task ${key} delivered after reconnect`);
+      } catch (err) {
+        console.error(`[DingTalk] Failed to drain inflight task ${key}:`, (err as Error).message);
+      }
+    }
+  }
+
+  // ── Per-session serialization lock ───────────────────────────────────────────
+
+  private static readonly SESSION_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+
+  private async acquireSessionLock(key: string): Promise<() => void> {
+    const deadline = Date.now() + DingtalkConnection.SESSION_LOCK_TIMEOUT_MS;
+    while (this.sessionLocks.has(key)) {
+      if (Date.now() > deadline) {
+        console.warn(`[DingTalk] Session lock timeout for ${key}, force-releasing stale lock`);
+        this.sessionLocks.delete(key);
+        break;
+      }
+      const raceTimeout = new Promise<void>((r) => setTimeout(r, 30_000));
+      await Promise.race([this.sessionLocks.get(key), raceTimeout]);
+    }
+    let release!: () => void;
+    const promise = new Promise<void>((r) => { release = r; });
+    this.sessionLocks.set(key, promise);
+    return () => {
+      this.sessionLocks.delete(key);
+      release();
+    };
+  }
+
   // ── Frame handling ───────────────────────────────────────────────────────────
 
   private async handleFrame(raw: string): Promise<void> {
+    this.lastFrameTime = Date.now();
+
     let frame: StreamFrame;
     try {
       frame = JSON.parse(raw) as StreamFrame;
@@ -1476,7 +1691,31 @@ class DingtalkConnection {
       Date.now() > msg.sessionWebhookExpiredTime
     ) {
       console.warn("[DingTalk] sessionWebhook expired, skipping message");
+      if (dedupKey) this.inflight.delete(dedupKey);
       return;
+    }
+
+    // ── Create card BEFORE extractContent for immediate "思考中" feedback ──────
+    // Only in card mode (messageType="card" + cardTemplateId configured).
+    // Markdown mode: no card, no interim "思考中" (cleaner than a permanent garbage msg).
+    const useCardMode = this.opts.messageType === "card" && !!this.opts.cardTemplateId;
+    let preCreatedCard: AICardInstance | null = null;
+    if (useCardMode) {
+      try {
+        const refreshTokenFn = () => getAccessToken(this.opts.appKey, this.opts.appSecret);
+        const token = await refreshTokenFn();
+        preCreatedCard = await createAICard(
+          refreshTokenFn,
+          token,
+          this.opts.robotCode ?? this.opts.appKey,
+          this.opts.cardTemplateId!,
+          this.opts.cardTemplateKey ?? "content",
+          msg,
+          "🤔 正在思考…",
+        );
+      } catch (err) {
+        console.warn("[DingTalk] Early card creation failed:", (err as Error).message);
+      }
     }
 
     // ── Extract text/media content ─────────────────────────────────────────────
@@ -1488,7 +1727,13 @@ class DingtalkConnection {
       extracted = { text: "[消息处理失败]" };
     }
 
-    if (!extracted.text) return;
+    if (!extracted.text) {
+      if (preCreatedCard) {
+        streamAICard(preCreatedCard, "（无法处理此消息）", true).catch(() => {});
+      }
+      if (dedupKey) this.inflight.delete(dedupKey);
+      return;
+    }
 
     // Append file paths and reading instruction so Claude knows to use read_document tool.
     if (extracted.filePaths && extracted.filePaths.length > 0) {
@@ -1499,24 +1744,30 @@ class DingtalkConnection {
     console.log(`[DingTalk] Message (${msg.msgtype}): ${extracted.text.slice(0, 100)}`);
 
     // ── Built-in /myid command (only exact-match commands stay hardcoded) ──────
-    // Everything else (screenshot, find file, etc.) is handled via Claude tool_use.
     const cmdText = extracted.text.trim();
 
     if (cmdText === "/myid" || cmdText === "/我的id" || cmdText === "/我的ID") {
       const staffId = msg.senderStaffId ?? msg.senderId ?? "（未知）";
       const convId = msg.conversationId ?? "（未知）";
-      const isGroup = msg.conversationType === "2";
+      const isGroupCmd = msg.conversationType === "2";
       const reply = [
         "**你的钉钉 ID 信息**",
         "",
         `- **staffId**（填入 ownerStaffIds）：\`${staffId}\``,
-        isGroup ? `- **群 conversationId**（群推送用）：\`${convId}\`` : "",
+        isGroupCmd ? `- **群 conversationId**（群推送用）：\`${convId}\`` : "",
         "",
         "复制上方 ID 填入 Bot 配置 → 高级设置 → 我的 StaffId，即可接收主动推送。",
-      ].filter((l) => l !== undefined && !(isGroup === false && l.includes("群"))).join("\n");
+      ].filter((l) => l !== undefined && !(isGroupCmd === false && l.includes("群"))).join("\n");
       await this.sendMarkdown(msg.sessionWebhook, reply).catch((e) => console.warn("[DingTalk] Failed to send markdown:", e));
+      if (dedupKey) this.inflight.delete(dedupKey);
       return;
     }
+
+    // ── Acquire per-session lock (serializes concurrent messages in same conversation) ──
+    const sessionKey = isGroup
+      ? `${this.opts.assistantId}:${msg.conversationId}`
+      : `${this.opts.assistantId}:${msg.senderStaffId ?? msg.senderId}`;
+    const releaseSessionLock = await this.acquireSessionLock(sessionKey);
 
     // ── Generate and deliver reply ─────────────────────────────────────────────
     this.inboundStats.processed++;
@@ -1524,17 +1775,19 @@ class DingtalkConnection {
       `[DingTalk][${this.opts.assistantName}] Processing (rcv=${this.inboundStats.received} proc=${this.inboundStats.processed} skip=${this.inboundStats.skipped})`,
     );
     const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
+
     try {
-      await this.generateAndDeliver(msg, extracted.text, hasFiles);
+      // No standalone "思考中" markdown — the pre-created card (方案C) handles feedback.
+      // If no card template is configured, the user simply waits silently (better than
+      // a permanent garbage message in the chat history).
+      await this.generateAndDeliver(msg, extracted.text, hasFiles, preCreatedCard);
     } catch (err) {
       console.error("[DingTalk] Reply generation error:", err);
-      if (!msg.sessionWebhookExpiredTime || Date.now() <= msg.sessionWebhookExpiredTime) {
-        await this.sendMarkdown(
-          msg.sessionWebhook,
-          "抱歉，处理您的消息时遇到了问题，请稍后再试。",
-        ).catch((e) => console.warn("[DingTalk] Failed to send error message:", e));
-      }
+      const errorText = "抱歉，处理您的消息时遇到了问题，请稍后再试。";
+      await this.deliverWithFallback(errorText, msg, preCreatedCard)
+        .catch((e) => console.warn("[DingTalk] Failed to send error message:", e));
     } finally {
+      releaseSessionLock();
       if (dedupKey) this.inflight.delete(dedupKey);
     }
   }
@@ -1556,10 +1809,12 @@ class DingtalkConnection {
   private async generateAndDeliver(
     msg: DingtalkMessage,
     userText: string,
-    hasFiles?: boolean,
+    hasFiles: boolean,
+    preCreatedCard: AICardInstance | null,
   ): Promise<void> {
     const history = getHistory(this.opts.assistantId);
     const provider = this.opts.provider ?? "claude";
+    const useCard = this.opts.messageType === "card" && !!this.opts.cardTemplateId && !!preCreatedCard;
 
     const sessionId = getBotSession(
       this.opts.assistantId,
@@ -1581,37 +1836,50 @@ class DingtalkConnection {
     const nowStr = new Date(msgNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）\n创建定时任务时，若需要相对时间（如"X分钟后"），请使用 delay_minutes 参数，服务器会自动计算。`;
 
-    // Non-file messages resume an existing session and benefit from recent history.
-    // File messages start a fresh session — injecting previous file analyses causes
-    // content mix-ups (Claude blends details from the old file into the new reply).
+    // File messages must not resume previous session context
     const historySection = (!hasFiles && history.length > 1)
       ? buildHistoryContextDt(history.slice(0, -1), this.opts.assistantId)
       : undefined;
 
     const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, historySection);
 
-    let replyText: string;
+    // Register inflight task for reconnect recovery
+    const inflightKey = msg.msgId ?? `${Date.now()}-${Math.random()}`;
+    const inflightTask: InflightTask = { card: preCreatedCard, accumulatedContent: "", msg, startedAt: Date.now() };
+    this.inflightTasks.set(inflightKey, inflightTask);
 
-    if (provider === "codex") {
-      replyText = await this.runCodexSession(system, history, userText);
-    } else {
-      // Card streaming mode — direct Anthropic SDK, no tools, streaming display
-      if (this.opts.messageType === "card" && this.opts.cardTemplateId) {
-        const cardResult = await this.runClaudeCard(system, history, userText, msg, sessionId);
-        if (cardResult === "__CARD_DELIVERED__") return;
-        replyText = cardResult;
+    try {
+      let replyText: string;
+      let cardDelivered = false;
+
+      if (provider === "codex") {
+        replyText = await this.runCodexSession(system, history, userText);
+      } else if (useCard && preCreatedCard) {
+        const result = await this.runClaudeCard(system, userText, msg, preCreatedCard, inflightTask, hasFiles);
+        if (result === "__CARD_DELIVERED__") {
+          cardDelivered = true;
+          replyText = inflightTask.accumulatedContent;
+        } else {
+          replyText = result;
+        }
       } else {
-        // Agent SDK query() path — shared MCP (tools) + per-session MCP (send_message/send_file)
         replyText = await this.runClaudeQuery(system, userText, msg, hasFiles);
       }
+
+      // Update inflight with final content
+      inflightTask.accumulatedContent = replyText || inflightTask.accumulatedContent;
+
+      history.push({ role: "assistant", content: inflightTask.accumulatedContent });
+      this.persistReply(sessionId, inflightTask.accumulatedContent, userText);
+      updateBotSessionTitle(sessionId, history, `[钉钉]`).catch((e) => console.warn("[DingTalk] Failed to update session title:", e));
+
+      // Deliver via fallback chain unless card already self-delivered
+      if (!cardDelivered) {
+        await this.deliverWithFallback(inflightTask.accumulatedContent, msg, preCreatedCard);
+      }
+    } finally {
+      this.inflightTasks.delete(inflightKey);
     }
-
-    history.push({ role: "assistant", content: replyText });
-    this.persistReply(sessionId, replyText, userText);
-
-    updateBotSessionTitle(sessionId, history, `[钉钉]`).catch((e) => console.warn("[DingTalk] Failed to update session title:", e));
-
-    await this.sendMarkdown(msg.sessionWebhook, replyText);
   }
 
   /** Claude query() path via Agent SDK with shared MCP + per-session MCP */
@@ -1689,75 +1957,137 @@ class DingtalkConnection {
     return createSdkMcpServer({ name: "dingtalk-session", tools: [sendMessageTool, sendFileTool] });
   }
 
-  /** Card streaming mode — direct Anthropic SDK, no tools */
+  /**
+   * Card streaming mode — Agent SDK + shared MCP tools + real-time card updates.
+   * Mirrors Telegram's runClaudeQuery streaming pattern.
+   * Returns "__CARD_DELIVERED__" when card was fully finalized, or plain text for fallback.
+   */
   private async runClaudeCard(
     system: string,
-    history: ConvMessage[],
     userText: string,
     msg: DingtalkMessage,
-    sessionId: string,
+    card: AICardInstance,
+    inflightTask: InflightTask,
+    hasFiles?: boolean,
   ): Promise<string> {
-    const client = getAnthropicClient(this.opts.assistantId);
-    const model = this.opts.model || "claude-opus-4-5";
+    const sessionMcp = this.createSessionMcp(msg);
+    const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
+    const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(this.opts.assistantId);
+    const claudeCodePath = getClaudeCodePath();
 
-    const messages: Anthropic.MessageParam[] = history.slice(0, -1).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-    messages.push({ role: "user", content: userText });
+    let finalText = "";
+    let accum = "";
+    let lastUpdate = 0;
+    const THROTTLE_MS = 500;
+
+    const q = query({
+      prompt: userText,
+      options: {
+        systemPrompt: system,
+        resume: claudeSessionId,
+        cwd: this.opts.defaultCwd ?? homedir(),
+        mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
+        permissionMode: "bypassPermissions",
+        includePartialMessages: true,
+        allowDangerouslySkipPermissions: true,
+        maxTurns: 300,
+        settingSources: getSettingSources(),
+        pathToClaudeCodeExecutable: claudeCodePath,
+        env: buildQueryEnv(),
+      },
+    });
 
     try {
-      const accessToken = await getAccessToken(this.opts.appKey, this.opts.appSecret);
-      const card = await createAICard(
-        accessToken,
-        this.opts.robotCode ?? this.opts.appKey,
-        this.opts.cardTemplateId!,
-        this.opts.cardTemplateKey ?? "msgContent",
-        msg,
-        "🤔 正在思考…",
-      );
+      let thinkingAccum = "";
+      let thinkingRevealed = 0;
+      let isThinking = false;
+      let revealTimer: ReturnType<typeof setTimeout> | null = null;
 
-      let accum = "";
-      let lastUpdate = 0;
-      const THROTTLE_MS = 500;
+      const REVEAL_INTERVAL = 400;
+      const REVEAL_CHARS = 40;
 
-      const stream = client.messages.stream({
-        model,
-        max_tokens: 2048,
-        system,
-        messages,
-      });
+      const revealTick = () => {
+        revealTimer = null;
+        if (!isThinking || thinkingRevealed >= thinkingAccum.length) return;
+        thinkingRevealed = Math.min(thinkingRevealed + REVEAL_CHARS, thinkingAccum.length);
+        lastUpdate = Date.now();
+        streamAICard(card, formatThinkingForCard(thinkingAccum.slice(0, thinkingRevealed)), false).catch((e) =>
+          console.warn("[DingTalk] Card thinking update failed:", (e as Error).message),
+        );
+        if (thinkingRevealed < thinkingAccum.length) {
+          revealTimer = setTimeout(revealTick, REVEAL_INTERVAL);
+        }
+      };
 
-      for await (const event of stream as AsyncIterable<Anthropic.MessageStreamEvent>) {
-        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-          accum += event.delta.text;
+      const stopReveal = () => {
+        if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+      };
+
+      for await (const message of q) {
+        const msgData = message as Record<string, unknown>;
+        if (msgData.type === "result" && msgData.subtype === "success") {
+          finalText = msgData.result as string;
+          setBotClaudeSessionId(this.opts.assistantId, msgData.session_id as string);
+          stopReveal();
+          continue;
+        }
+
+        // Thinking phase: progressive reveal of thinking content on the card
+        if (msgData.type === "stream_event") {
+          const event = (msgData as any).event;
+          if (event?.type === "content_block_start") {
+            if (event.content_block?.type === "thinking") {
+              isThinking = true;
+              thinkingAccum = "";
+              thinkingRevealed = 0;
+              stopReveal();
+            } else if (event.content_block?.type === "text") {
+              isThinking = false;
+              stopReveal();
+            }
+          }
+          if (event?.type === "content_block_delta" && isThinking && event.delta?.type === "thinking_delta") {
+            thinkingAccum += event.delta.thinking ?? "";
+            if (!revealTimer) {
+              revealTimer = setTimeout(revealTick, REVEAL_INTERVAL);
+            }
+          }
+          if (event?.type === "content_block_stop" && isThinking) {
+            isThinking = false;
+            stopReveal();
+          }
+          continue;
+        }
+
+        // Text phase: extract accumulated text from assistant messages
+        const partial = extractPartialText(msgData);
+        if (partial && partial.length > accum.length) {
+          accum = partial;
+          inflightTask.accumulatedContent = accum;
           const now = Date.now();
           if (now - lastUpdate >= THROTTLE_MS) {
             lastUpdate = now;
-            await streamAICard(card, accessToken, accum, false).catch((e) => console.warn("[DingTalk] Failed to stream AI card:", e));
+            streamAICard(card, accum, false).catch((e) =>
+              console.warn("[DingTalk] Card stream update failed:", (e as Error).message),
+            );
           }
         }
       }
 
-      const finalText = accum.trim() || "抱歉，无法生成回复。";
-      await streamAICard(card, accessToken, finalText, true).catch((e) => console.warn("[DingTalk] Failed to stream final AI card:", e));
+      const text = (finalText || accum).trim() || "抱歉，无法生成回复。";
+      inflightTask.accumulatedContent = text;
 
-      history.push({ role: "assistant", content: finalText });
-      this.persistReply(sessionId, finalText, userText);
-      updateBotSessionTitle(sessionId, history, `[钉钉]`).catch((e) => console.warn("[DingTalk] Failed to update session title:", e));
+      // Final card update
+      await streamAICard(card, text, true).catch((e) =>
+        console.warn("[DingTalk] Card finalize failed:", (e as Error).message),
+      );
 
       return "__CARD_DELIVERED__";
     } catch (err) {
-      console.error("[DingTalk] Card mode failed, falling back to markdown:", err);
-      // Fall through — caller will use the return value as replyText
-      const response = await client.messages.create({
-        model,
-        max_tokens: 4096,
-        system,
-        messages,
-      });
-      const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-      return textBlock?.text ?? "抱歉，无法生成回复。";
+      console.error("[DingTalk] Card mode (Agent SDK) failed:", (err as Error).message);
+      const text = (finalText || accum).trim() || "抱歉，无法生成回复。";
+      inflightTask.accumulatedContent = text;
+      return text; // Caller (generateAndDeliver) will use deliverWithFallback
     }
   }
 
@@ -1799,6 +2129,53 @@ class DingtalkConnection {
       }
     }
     return textParts.join("").trim() || "抱歉，无法生成回复。";
+  }
+
+  /**
+   * Three-level fallback delivery chain (Openclaw pattern):
+   *   1. Card streaming finalize (if card exists and not terminal)
+   *   2. sessionWebhook (if not expired)
+   *   3. Proactive API (last resort)
+   */
+  private async deliverWithFallback(
+    text: string,
+    msg: DingtalkMessage,
+    card: AICardInstance | null,
+  ): Promise<void> {
+    // 1. Try card finalize
+    if (card && card.state !== AICardStatus.FINISHED && card.state !== AICardStatus.FAILED) {
+      try {
+        await streamAICard(card, text, true);
+        return;
+      } catch (err) {
+        console.warn("[DingTalk] Card delivery failed, falling back:", (err as Error).message);
+        card.state = AICardStatus.FAILED;
+      }
+    }
+
+    // 2. Try sessionWebhook
+    const webhookExpired = msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
+    if (!webhookExpired && msg.sessionWebhook) {
+      try {
+        await this.sendMarkdown(msg.sessionWebhook, text);
+        return;
+      } catch (err) {
+        console.warn("[DingTalk] sessionWebhook fallback failed:", (err as Error).message);
+      }
+    }
+
+    // 3. Try proactive API
+    const isGroup = msg.conversationType === "2";
+    const target = isGroup
+      ? (msg.conversationId ?? "")
+      : (msg.senderStaffId ?? msg.senderId ?? "");
+    if (target) {
+      try {
+        await sendProactiveToTarget(this.opts, target, text, this.opts.assistantName);
+      } catch (err) {
+        console.error("[DingTalk] All delivery methods failed:", (err as Error).message);
+      }
+    }
   }
 
   /** File upload and send via DingTalk — extracted from old ToolRegistry send_file */

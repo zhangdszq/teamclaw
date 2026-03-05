@@ -26,6 +26,8 @@ import {
   writeWorkingMemory,
   readWorkingMemory,
   appendDailyMemory,
+  writeLongTermMemory,
+  readLongTermMemory,
   ScopedMemory,
 } from "./memory-store.js";
 import {
@@ -39,6 +41,7 @@ import { sendProactiveTelegramMessage, getTelegramBotStatus, getAnyConnectedTele
 import { sendProactiveFeishuMessage, getFeishuBotStatus, getAnyConnectedFeishuAssistantId } from "./feishu-bot.js";
 import { appendNotified } from "./notification-log.js";
 import { loadAssistantsConfig } from "./assistants-config.js";
+import { loadUserSettings } from "./user-settings.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -824,6 +827,57 @@ function createReadWorkingMemoryTool(assistantId?: string) {
   );
 }
 
+// ── Save Memory (scoped — private by default) ──────────────────────────────
+
+function createSaveMemoryTool(assistantId?: string) {
+  return tool(
+    "save_memory",
+    "保存长期记忆条目。默认写入你的专属记忆（仅你可见），只有团队级信息才设 scope 为 shared。\n\n" +
+      "专属记忆（scope: private）：你与用户的交互偏好、项目决策、技术方案、环境配置\n" +
+      "共享记忆（scope: shared）：用户身份变更、团队级决策、用户明确要求所有助理知道的信息\n\n" +
+      "格式：[P0] 永久 / [P1|expire:YYYY-MM-DD] 90天 / [P2|expire:YYYY-MM-DD] 30天",
+    {
+      content: z.string().describe("记忆条目内容，需包含 [P0]/[P1|expire:...]/[P2|expire:...] 标签"),
+      scope: z.enum(["private", "shared"]).default("private").describe("写入范围：private（专属，默认）或 shared（团队共享）"),
+    },
+    async (input) => {
+      try {
+        const content = String(input.content ?? "").trim();
+        if (!content) return ok("content 不能为空");
+
+        const taggedMemoryPattern = /^\s*(?:[-*]\s*)?\[(?:P0|P1\|expire:\d{4}-\d{2}-\d{2}|P2\|expire:\d{4}-\d{2}-\d{2})\]\s+/m;
+        if (!taggedMemoryPattern.test(content)) {
+          return ok("保存失败：content 必须包含合法标签（[P0] / [P1|expire:YYYY-MM-DD] / [P2|expire:YYYY-MM-DD]）。");
+        }
+
+        const settings = loadUserSettings();
+        const memoryIsolation = settings.memoryIsolationV3 !== false; // default: on
+        const requestedScope = input.scope ?? "private";
+        const scope = memoryIsolation ? requestedScope : "shared";
+
+        if (scope === "shared") {
+          const existing = readLongTermMemory();
+          const newContent = existing.trim() ? existing.trimEnd() + "\n" + content : content;
+          writeLongTermMemory(newContent);
+          if (!memoryIsolation && requestedScope === "private") {
+            return ok("memoryIsolationV3 已关闭，private 写入已自动回退到共享 MEMORY.md。");
+          }
+          return ok(`已写入团队共享记忆 (MEMORY.md)。所有助理将在下次会话中看到此条目。`);
+        }
+
+        if (!assistantId) {
+          return ok("保存失败：scope=private 需要 assistantId。请重试并携带 assistantId，或显式使用 scope=\"shared\"。");
+        }
+
+        new ScopedMemory(assistantId).appendLongTermMemory(content);
+        return ok("已写入你的专属记忆。仅你可见，不会影响其他助理。");
+      } catch (err) {
+        return ok(`保存记忆失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
 // ── Memory Distillation ─────────────────────────────────────────────────────
 
 const distillMemoryTool = tool(
@@ -839,12 +893,15 @@ const distillMemoryTool = tool(
 
     return ok(
       `[记忆蒸馏启动]${sopSection}\n` +
-      `请回顾本次任务，按以下规则提取信息：\n\n` +
-      `1. **环境事实**（路径/凭证/配置）→ 写入 MEMORY.md，标注 [P1|expire:90天后日期]\n` +
-      `2. **用户偏好/决策** → 写入 MEMORY.md，标注 [P0]\n` +
-      `3. **复杂任务流程**（多步骤、有踩坑点）→ 用 save_sop 保存\n` +
-      `4. **本次会话摘要** → 追加到 daily/今日.md\n` +
-      `5. **未完成任务/下次需继续的上下文** → 用 save_working_memory 保存\n\n` +
+      `请回顾本次任务，用 save_memory 工具按以下规则提取信息：\n\n` +
+      `1. **环境事实**（路径/凭证/配置）→ save_memory(scope:"private") [P1|expire:90天后日期]\n` +
+      `2. **用户在你领域的偏好/决策** → save_memory(scope:"private") [P0]\n` +
+      `3. **用户身份变更/团队级决策** → save_memory(scope:"shared") [P0]\n` +
+      `4. **复杂任务流程**（多步骤、有踩坑点）→ 用 save_sop 保存\n` +
+      `5. **本次会话摘要** → 追加到 daily/今日.md\n` +
+      `6. **未完成任务/下次需继续的上下文** → 用 save_working_memory 保存\n\n` +
+      `━━ 分流判断 ━━\n` +
+      `默认写专属记忆（private）。只有当信息对所有助理都有用时才写共享（shared）。\n\n` +
       `━━ 禁止记忆 ━━\n` +
       `- 临时变量、具体推理过程\n` +
       `- 未经验证的猜测\n` +
@@ -1744,6 +1801,8 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       // Working Memory (scoped to assistant if ID provided)
       createSaveWorkingMemoryTool(assistantId),
       createReadWorkingMemoryTool(assistantId),
+      // Long-term Memory (scoped — private by default)
+      createSaveMemoryTool(assistantId),
       // Memory Distillation
       distillMemoryTool,
       // Atomic Power Tools

@@ -839,7 +839,16 @@ app.on("ready", async () => {
                 defaultCwd: assistant.defaultCwd,
                 skillNames: assistant.skillNames,
             };
-            updateDingtalkBotConfig(assistant.id, updates);
+            const dingtalk = assistant.bots?.dingtalk as DingtalkBotConfig | undefined;
+            updateDingtalkBotConfig(assistant.id, {
+                ...updates,
+                messageType: dingtalk?.messageType,
+                cardTemplateId: dingtalk?.cardTemplateId,
+                cardTemplateKey: dingtalk?.cardTemplateKey,
+                dmPolicy: dingtalk?.dmPolicy,
+                groupPolicy: dingtalk?.groupPolicy,
+                allowFrom: dingtalk?.allowFrom,
+            });
             updateTelegramBotConfig(assistant.id, updates);
             updateFeishuBotConfig(assistant.id, updates);
         }

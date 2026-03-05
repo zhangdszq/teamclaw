@@ -239,3 +239,18 @@ export function markProcessed(key: string, store: Map<string, number>): void {
     }
   }
 }
+
+// ─── extractPartialText ───────────────────────────────────────────────────────
+
+/**
+ * Extract the accumulated partial text from a Claude Agent SDK streaming message.
+ * Used by all bot implementations (Telegram, DingTalk) for real-time preview.
+ */
+export function extractPartialText(message: Record<string, unknown>): string | null {
+  const msg = message?.message as Record<string, unknown> | undefined;
+  if (!msg?.content || !Array.isArray(msg.content)) return null;
+  const texts = (msg.content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b.type === "text" && b.text)
+    .map((b) => b.text!);
+  return texts.length > 0 ? texts.join("") : null;
+}

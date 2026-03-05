@@ -439,6 +439,12 @@ function App() {
     refreshSkills();
   }, [refreshAssistantsList, refreshSkills]);
 
+  useEffect(() => {
+    return window.electron.onAssistantsConfigChanged(() => {
+      refreshAssistantsList();
+    });
+  }, [refreshAssistantsList]);
+
   // Save defaultCwd for the currently selected assistant
   const saveAssistantDefaultCwd = useCallback(async (path: string) => {
     const currentId = useAppStore.getState().selectedAssistantId;

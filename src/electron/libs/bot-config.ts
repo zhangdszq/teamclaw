@@ -55,7 +55,7 @@ export type DingtalkBotConfig = {
   messageType?: "markdown" | "card";
   /** Required when messageType="card" */
   cardTemplateId?: string;
-  /** Card template content field key — defaults to "msgContent" */
+  /** Card template content field key — defaults to "content" */
   cardTemplateKey?: string;
   /** Private chat policy */
   dmPolicy?: "open" | "allowlist";

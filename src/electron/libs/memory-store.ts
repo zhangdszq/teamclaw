@@ -7,13 +7,18 @@
  *
  * ~/.vk-cowork/memory/
  * ├── .abstract              L0 root index (auto-generated manifest)
- * ├── MEMORY.md              long-term memory (P0/P1/P2 lifecycle tags)
- * ├── SESSION-STATE.md       working buffer (cross-session context handoff)
- * ├── daily/                 L2 raw logs (append-only, one file per day)
- * ├── insights/              L1 monthly distillation
+ * ├── MEMORY.md              team-shared long-term memory (P0/P1/P2 lifecycle tags)
+ * ├── SESSION-STATE.md       working buffer (legacy, migrated to per-assistant)
+ * ├── daily/                 L2 shared daily logs (one file per day)
+ * ├── insights/              L1 monthly distillation (shared, legacy)
  * ├── lessons/               L1 structured lessons
- * ├── sops/                  self-growing SOPs (Standard Operating Procedures)
- * └── archive/               expired P1/P2 items
+ * ├── sops/                  self-growing SOPs (shared across all assistants)
+ * ├── archive/               expired P1/P2 items
+ * └── assistants/{id}/
+ *     ├── MEMORY.md           per-assistant private long-term memory
+ *     ├── SESSION-STATE.md    per-assistant working memory
+ *     ├── daily/              per-assistant conversation logs
+ *     └── insights/           per-assistant monthly distillation
  */
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
@@ -84,10 +89,12 @@ const SEED_MEMORY_MANAGEMENT_SOP = `# Memory Management SOP
 - [ ] 是否已有类似记录？（优先更新，避免重复）
 - [ ] 生命周期标签是否正确？（P0 永久 / P1 90天 / P2 30天）
 
-## MEMORY.md 写入规则
-- P0: 用户明确表达的偏好、核心工作原则
+## 记忆写入规则
+默认用 save_memory 写入专属记忆（scope: "private"）：
+- P0: 你与用户的交互偏好、业务上下文（永久）
 - P1: 项目架构决策、技术方案选型、环境配置（90天后过期）
-- P2: 临时测试地址、一次性配置、短期任务信息（30天后过期）
+- P2: 临时测试地址、一次性配置（30天后过期）
+仅团队级信息（用户身份、全员决策）写入共享记忆（scope: "shared"）
 - 格式: \`- [P0] 内容\` 或 \`- [P1|expire:YYYY-MM-DD] 内容\`
 
 ## SOP 写入规则
@@ -263,6 +270,7 @@ export function readLongTermMemory(): string {
 export function writeLongTermMemory(content: string): void {
   ensureDirs();
   atomicWrite(LONG_TERM_FILE, content);
+  try { refreshRootAbstract(); } catch { /* non-blocking */ }
 }
 
 // ─── Session state buffer (SESSION-STATE.md) ─────────────────
@@ -404,7 +412,7 @@ export function refreshRootAbstract(assistantId?: string): void {
   lines.push("");
 
   // Long-term memory sections
-  lines.push("### 长期记忆 (MEMORY.md)");
+  lines.push("### 团队共享记忆 (MEMORY.md)");
   if (topicLines.length) {
     topicLines.forEach(l => lines.push(l));
   } else {
@@ -415,6 +423,15 @@ export function refreshRootAbstract(assistantId?: string): void {
   // Per-assistant section
   if (scoped) {
     lines.push(`## 你的记忆 (${assistantId})`, "");
+
+    // Per-assistant private MEMORY.md
+    const privateLt = scoped.readLongTermMemory();
+    const privateTagged = (privateLt.match(/^[-*]\s+\[P[012][^\]]*\].{0,60}/gm) ?? []).slice(0, 8);
+    if (privateTagged.length) {
+      lines.push(`### 专属长期记忆 — 路径: assistants/${assistantId}/MEMORY.md`);
+      privateTagged.forEach(l => lines.push(l));
+      lines.push("");
+    }
 
     const assistantDailies = scoped.listDailies().slice(0, 10);
     if (assistantDailies.length) {
@@ -483,12 +500,12 @@ export function listDailyMemories(): MemoryFileInfo[] {
     .sort((a, b) => b.date.localeCompare(a.date));
 }
 
-export function getMemorySummary(): { longTermSize: number; dailyCount: number; totalSize: number } {
+export function getMemorySummary(): { longTermSize: number; privateLongTermSize: number; dailyCount: number; totalSize: number } {
   const lt = readLongTermMemory();
   const dailies = listDailyMemories();
   const dailyTotalSize = dailies.reduce((sum, d) => sum + d.size, 0);
   const ltSize = Buffer.byteLength(lt, "utf8");
-  return { longTermSize: ltSize, dailyCount: dailies.length, totalSize: ltSize + dailyTotalSize };
+  return { longTermSize: ltSize, privateLongTermSize: 0, dailyCount: dailies.length, totalSize: ltSize + dailyTotalSize };
 }
 
 // ─── SOP (Standard Operating Procedures) ─────────────────────
@@ -695,12 +712,41 @@ export class ScopedMemory {
     this.writeSessionState(lines.join("\n"));
   }
 
-  getMemorySummary(): { longTermSize: number; dailyCount: number; totalSize: number } {
+  // ── Per-assistant long-term memory (private MEMORY.md) ──
+
+  private _longTermPath(): string { return join(this.root, "MEMORY.md"); }
+
+  readLongTermMemory(): string {
+    const p = this._longTermPath();
+    if (!existsSync(p)) return "";
+    return readFileSync(p, "utf8");
+  }
+
+  async readLongTermMemoryAsync(): Promise<string> {
+    return readFileOrEmpty(this._longTermPath());
+  }
+
+  writeLongTermMemory(content: string): void {
+    atomicWrite(this._longTermPath(), content);
+    try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
+  }
+
+  appendLongTermMemory(entry: string): void {
+    const p = this._longTermPath();
+    const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
+    const newContent = existing.trim() ? existing.trimEnd() + "\n" + entry : entry;
+    atomicWrite(p, newContent);
+    try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
+  }
+
+  getMemorySummary(): { longTermSize: number; privateLongTermSize: number; dailyCount: number; totalSize: number } {
     const lt = readLongTermMemory();
+    const plt = this.readLongTermMemory();
     const dailies = this.listDailies();
     const dailyTotalSize = dailies.reduce((sum, d) => sum + d.size, 0);
     const ltSize = Buffer.byteLength(lt, "utf8");
-    return { longTermSize: ltSize, dailyCount: dailies.length, totalSize: ltSize + dailyTotalSize };
+    const pltSize = Buffer.byteLength(plt, "utf8");
+    return { longTermSize: ltSize, privateLongTermSize: pltSize, dailyCount: dailies.length, totalSize: ltSize + pltSize + dailyTotalSize };
   }
 
   /**
@@ -808,83 +854,65 @@ export function runMemoryJanitor(): { archived: number; cleaned: string[] } {
 
 const MEMORY_PROTOCOL = `
 [记忆系统规则]
-你拥有跨会话的持久记忆能力。上面 <memory> 标签内包含目录索引和核心记忆。
-记忆系统分为三层：共享用户层、共享知识层、你的独立经历层。
+你拥有跨会话的持久记忆能力。<memory> 标签内包含目录索引和核心记忆。
+你有两层长期记忆：团队共享记忆（所有助理可见）和你的专属记忆（只有你能看到）。
 
-━━ 三层记忆架构 ━━
+━━ 记忆架构 ━━
 
-1. 共享用户层（所有助理共用）：
-   - ~/.vk-cowork/memory/MEMORY.md         关于用户的长期记忆 (P0/P1)
-   - 写入规则：[P0] 用户偏好/核心原则（永久），[P1|expire:YYYY-MM-DD] 项目决策/技术方案（90天）
+1. 团队共享层（所有助理可见）：
+   - ~/.vk-cowork/memory/MEMORY.md         团队级信息（用户身份、全员决策）
+   - ~/.vk-cowork/memory/sops/*.md          可复用操作流程
+   - ~/.vk-cowork/memory/daily/*.md         共享大事件摘要
 
-2. 共享知识层（所有助理共用）：
-   - ~/.vk-cowork/memory/sops/*.md          可复用操作流程（自主生长）
-   - ~/.vk-cowork/memory/daily/*.md         共享大事件摘要（标记来源助理）
-
-3. 你的独立记忆（只属于你）：
+2. 你的专属层（只有你能看到）：
+   - ~/.vk-cowork/memory/assistants/{你的ID}/MEMORY.md          你的长期记忆
    - ~/.vk-cowork/memory/assistants/{你的ID}/SESSION-STATE.md   工作记忆
-   - ~/.vk-cowork/memory/assistants/{你的ID}/daily/*.md         详细对话日志
+   - ~/.vk-cowork/memory/assistants/{你的ID}/daily/*.md         对话日志
    - ~/.vk-cowork/memory/assistants/{你的ID}/insights/*.md      月度提炼
 
-━━ 按需加载规则（重要）━━
-<memory> 中只包含目录索引、MEMORY.md、工作记忆和今日笔记。
-如需更多历史信息，根据目录索引中的摘要判断相关性，主动用文件读取工具加载：
-- 看到相关 SOP 名称 → 读取 ~/.vk-cowork/memory/sops/{名称}.md
-- 看到共享日志相关日期 → 读取 ~/.vk-cowork/memory/daily/{日期}.md
-- 看到你的对话日志日期 → 读取对应的 assistants/{ID}/daily/{日期}.md
-- 看到知识文档标题 → 读取 ~/.vk-cowork/knowledge/docs/{id}.md
-- 看到 insights 条目 → 读取对应路径
-执行任务前先检查索引中的知识文档和 SOP 列表，看是否有相关经验可参考。
-不要猜测记忆内容，先读取再行动。按需加载比盲目搜索更高效。
+━━ 写入规则（重要）━━
+默认使用 save_memory 工具写入你的专属记忆（scope: "private"）：
+  [P0]                    你与用户的交互偏好、业务上下文（永久）
+  [P1|expire:YYYY-MM-DD]  项目决策、技术方案、环境配置（90天后过期）
+  [P2|expire:YYYY-MM-DD]  临时信息（30天后过期）
+
+仅以下信息写入团队共享记忆（scope: "shared"）：
+  - 用户身份信息（姓名、职位、联系方式变更）
+  - 团队级决策（影响所有助理的规则或约定）
+  - 用户明确要求"所有助理都要知道"的内容
+
+判断标准：只对你和用户在你的业务领域有用 → 写专属。其他助理也需要知道 → 写共享。
+
+━━ 按需加载规则 ━━
+<memory> 中只包含索引和核心记忆。如需更多信息，根据索引摘要判断相关性，主动加载：
+- SOP → ~/.vk-cowork/memory/sops/{名称}.md
+- 共享日志 → ~/.vk-cowork/memory/daily/{日期}.md
+- 你的日志 → assistants/{ID}/daily/{日期}.md
+- 知识文档 → ~/.vk-cowork/knowledge/docs/{id}.md
+执行任务前先检查索引中的 SOP 和知识列表。不要猜测，先读取再行动。
 
 ━━ 知识库 ━━
-如果上方 <memory> 中包含"相关知识（语义检索）"，这些是系统根据你的任务自动检索到的经验文档。
-知识库路径: ~/.vk-cowork/knowledge/（experience/ 经验候选，docs/ 知识文档）
-会话完成后系统会自动从对话中抽取经验候选，无需手动操作。
+<memory> 中的"相关知识（语义检索）"是系统自动检索到的经验文档。
+路径: ~/.vk-cowork/knowledge/（experience/ 候选，docs/ 文档）
 
-━━ 写入规则 ━━
-写入共享 MEMORY.md（关于用户的信息）：
-  [P0]                    用户偏好、核心原则（永久，所有助理可见）
-  [P1|expire:YYYY-MM-DD]  活跃项目决策和技术方案（90 天后过期，所有助理可见）
-  [P2|expire:YYYY-MM-DD]  临时信息如测试地址、配置（30 天后过期）
-
-你的详细对话和操作过程会自动记录到你的独立日志中，无需手动写入。
-
-━━ SOP 自进化规则（重要）━━
-SOP 是所有助理共享的知识库。当你完成一个复杂任务时，用 save_sop 工具沉淀为 SOP：
-- SOP 应记录：前置条件、关键步骤、踩坑点、验证方法
-- 只记录经过实践验证的流程，不要记录未验证的猜测
-- SOP 名称用简短的任务描述（如 "部署-nextjs-到-vercel"、"配置-github-actions"）
-- 如果已有相关 SOP，优先更新而非新建
-- 执行新任务前先检查目录索引中的 SOP 列表，避免重复劳动
+━━ SOP 规则 ━━
+SOP 是所有助理共享的知识库。完成复杂任务后用 save_sop 沉淀：
+- 记录：前置条件、关键步骤、踩坑点、验证方法
+- 只记录经过验证的流程。已有相关 SOP 则优先更新。
 
 ━━ Working Memory 规则 ━━
-执行长任务时，用 save_working_memory 工具保存关键上下文（保存到你的独立目录）：
-- 当前任务目标和进展
-- 关键中间结果和决策
-- 相关 SOP 名称（方便下次快速回忆）
-这些信息会在下次会话中自动加载，确保跨会话连续性。
-
-━━ 共享日志中的助理标签 ━━
-共享日志中每条记录带有 [渠道/助理名] 标签，例如 [钉钉/小助理]。
-如果你需要了解"某个话题之前跟哪个助理讨论过"，查看共享日志中的标签即可定位。
+执行长任务时，用 save_working_memory 保存关键上下文到你的专属目录。
 
 ━━ 执行纪律 ━━
-- 如果连续 5 次以上工具调用都在处理同一个错误，必须停下来切换策略：
-  1. 重新审视问题本质，检查是否遗漏了前置条件
-  2. 搜索相关 SOP 看是否有已知解法
-  3. 如果仍无进展，用 AskUserQuestion 请求用户协助
+- 连续 5 次以上工具调用处理同一错误 → 切换策略或用 AskUserQuestion 求助
 - 禁止对同一个失败操作无脑重试超过 3 次
-- 执行复杂任务时，每完成一个关键阶段就用 save_working_memory 保存进度
+- 复杂任务每完成一个关键阶段就保存进度
 
-━━ 会话结束前的责任（重要）━━
-每次完成用户最后一个任务后，调用 distill_memory 工具触发结构化记忆蒸馏，
-或手动完成以下操作，不要等用户提醒：
-1. 把新的用户偏好/决策写入 MEMORY.md，按 [P0]/[P1]/[P2] 标注
-2. 如有未完成任务或下次需继续的上下文，用 save_working_memory 更新工作记忆
-3. 如果解决了复杂任务，用 save_sop 将流程沉淀为可复用 SOP
-
-过期的 P1/P2 条目会被后台 janitor 自动归档，无需手动处理。
+━━ 会话结束前的责任 ━━
+完成最后一个任务后，调用 distill_memory 触发记忆蒸馏，或手动：
+1. 用 save_memory 写入新发现的偏好/决策（默认写专属，团队级写共享）
+2. 如有未完成任务，用 save_working_memory 更新工作记忆
+3. 如果解决了复杂任务，用 save_sop 沉淀为 SOP
 `.trim();
 
 // ─── Pre-flight knowledge retrieval ──────────────────────────
@@ -1194,9 +1222,10 @@ export async function buildSmartMemoryContext(
   const todayDate = localDateStr();
 
   // Parallel async reads — avoids sequential blocking I/O
-  const [abstract, longTerm, sharedToday, sessionState, assistantToday, settings] = await Promise.all([
+  const [abstract, longTerm, privateLongTerm, sharedToday, sessionState, assistantToday, settings] = await Promise.all([
     readFileOrEmpty(join(MEMORY_ROOT, ".abstract")),
     readFileOrEmpty(LONG_TERM_FILE),
+    scoped ? scoped.readLongTermMemoryAsync() : Promise.resolve(""),
     readFileOrEmpty(dailyPath(todayDate)),
     scoped ? scoped.readSessionStateAsync() : readFileOrEmpty(SESSION_STATE_FILE),
     scoped ? scoped.readDailyAsync(todayDate) : Promise.resolve(""),
@@ -1226,11 +1255,20 @@ export async function buildSmartMemoryContext(
     parts.push(abstractTrimmed);
     parts.push("");
   }
+  const memoryIsolation = settings.memoryIsolationV3 !== false; // default: on
   const longTermTrimmed = longTerm.trim();
   if (longTermTrimmed) {
-    parts.push("## 共享长期记忆 (MEMORY.md)");
+    parts.push(memoryIsolation ? "## 团队共享记忆 (MEMORY.md)" : "## 共享长期记忆 (MEMORY.md)");
     parts.push(longTermTrimmed);
     parts.push("");
+  }
+  if (memoryIsolation) {
+    const privateLongTermTrimmed = privateLongTerm.trim();
+    if (privateLongTermTrimmed) {
+      parts.push("## 你的专属记忆 (private MEMORY.md)");
+      parts.push(privateLongTermTrimmed);
+      parts.push("");
+    }
   }
   const sessionStateTrimmed = sessionState.trim();
   if (sessionStateTrimmed) {

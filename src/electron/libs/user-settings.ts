@@ -49,6 +49,8 @@ export interface UserSettings {
   alertDingtalkWebhook?: string;
   // Optional signing secret for the DingTalk custom robot
   alertDingtalkSecret?: string;
+  // Memory isolation V3: per-assistant private MEMORY.md (default: true)
+  memoryIsolationV3?: boolean;
 }
 
 // Custom error class for validation errors

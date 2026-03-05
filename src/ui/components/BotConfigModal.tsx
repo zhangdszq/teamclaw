@@ -128,7 +128,7 @@ function buildDefaultForm(): FormState {
       robotCode: "",
       messageType: "markdown",
       cardTemplateId: "",
-      cardTemplateKey: "msgContent",
+      cardTemplateKey: "content",
       dmPolicy: "open",
       groupPolicy: "open",
       allowFrom: "",
@@ -172,7 +172,7 @@ function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): 
       robotCode: dt.robotCode ?? "",
       messageType: dt.messageType ?? "markdown",
       cardTemplateId: dt.cardTemplateId ?? "",
-      cardTemplateKey: dt.cardTemplateKey ?? "msgContent",
+      cardTemplateKey: dt.cardTemplateKey ?? "content",
       dmPolicy: dt.dmPolicy ?? "open",
       groupPolicy: dt.groupPolicy ?? "open",
       allowFrom: (dt.allowFrom ?? []).join(","),
@@ -908,8 +908,8 @@ export function BotConfigModal({
                               <input className={INPUT_CLASS} placeholder="xxxxx-xxxxx-xxxxx.schema"
                                 value={form.dingtalk.cardTemplateId} onChange={(e) => updateDingtalk({ cardTemplateId: e.target.value })} />
                             </FormField>
-                            <FormField label="Card Template Key" hint="（默认 msgContent）">
-                              <input className={INPUT_CLASS} placeholder="msgContent"
+                            <FormField label="Card Template Key" hint="（默认 content）">
+                              <input className={INPUT_CLASS} placeholder="content"
                                 value={form.dingtalk.cardTemplateKey} onChange={(e) => updateDingtalk({ cardTemplateKey: e.target.value })} />
                             </FormField>
                           </>

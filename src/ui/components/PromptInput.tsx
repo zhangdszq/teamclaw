@@ -553,6 +553,9 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
     onAutoSelectSkill: setActiveToolbarSkill,
   });
 
+  // Enter compact chat layout as soon as a run starts, even before first message arrives.
+  const hasConversationStarted = hasMessages || isRunning;
+
   // Native DOM listeners — React synthetic events are unreliable in Electron for file drops
   useEffect(() => {
     const el = cardEl;
@@ -1049,7 +1052,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
       {/* Textarea */}
       <div className="px-4 pt-4 pb-2">
         <textarea
-          rows={hasMessages ? 1 : 3}
+          rows={hasConversationStarted ? 1 : 3}
           className="w-full resize-none bg-transparent text-sm text-ink-800 placeholder:text-ink-400/60 focus:outline-none leading-relaxed"
           placeholder={attachments.length > 0 ? "为附件添加说明（可选）..." : "帮我把这个想法变成一个技术方案"}
           value={prompt}
@@ -1193,13 +1196,13 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
     <section
       ref={sectionRef}
       className={
-        hasMessages
+        hasConversationStarted
           ? "fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface-cream via-surface-cream to-transparent pb-6 px-4 lg:pb-8 pt-12"
           : "fixed inset-0 flex flex-col items-center justify-center px-4 pointer-events-none"
       }
       style={{ marginLeft: `${sidebarWidth}px`, marginRight: `${rightPanelWidth}px`, transition: "margin 0.2s ease" }}
     >
-      {hasMessages ? (
+      {hasConversationStarted ? (
         <div className="mx-auto w-full max-w-full lg:max-w-3xl relative">
           {skillsDropdown}
           {toolbarSkillPickerDropdown}

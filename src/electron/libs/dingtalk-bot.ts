@@ -40,6 +40,7 @@ import {
   parseReplySegments,
   extractPartialText,
 } from "./bot-base.js";
+import { savePendingTask, removePendingTask, loadPendingTasks } from "./pending-tasks.js";
 
 function getLocalIp(): string {
   const nets = networkInterfaces();
@@ -421,11 +422,23 @@ async function streamAICard(
     }
   }
 
+  const respBody = await resp.text().catch(() => "");
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
     card.state = AICardStatus.FAILED;
     card.lastUpdated = Date.now();
-    throw new Error(`Card stream update failed HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+    throw new Error(`Card stream update failed HTTP ${resp.status}: ${respBody.slice(0, 200)}`);
+  }
+
+  // Check response body for silent errors
+  try {
+    const parsed = JSON.parse(respBody);
+    if (parsed.errcode && parsed.errcode !== 0) {
+      console.warn(`[DingTalk] Card stream accepted but errcode=${parsed.errcode}: ${parsed.errmsg ?? respBody.slice(0, 200)}`);
+    }
+  } catch { /* non-JSON body is fine */ }
+
+  if (isFinalize) {
+    console.log(`[DingTalk] Card finalized: ${card.outTrackId} (${content.length} chars)`);
   }
 
   card.lastStreamedContent = content;
@@ -1302,14 +1315,19 @@ class DingtalkConnection {
   /** Active health check interval — detects silent disconnects */
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private consecutiveUnhealthy = 0;
-  /** Timestamp of last received WebSocket frame (PING/CALLBACK). DingTalk sends PINGs ~20s. */
+  /** Timestamp of last received WebSocket frame (PING/CALLBACK/pong). */
   private lastFrameTime = 0;
+  /** Client-side keepalive timer — sends WebSocket pings to prevent NAT/proxy timeout */
+  private keepaliveInterval: ReturnType<typeof setInterval> | null = null;
 
   /** Maps sessionKey → pending lock promise for per-conversation serialization */
   private sessionLocks = new Map<string, Promise<void>>();
 
   /** In-progress AI tasks — enables reconnect recovery */
   private inflightTasks = new Map<string, InflightTask>();
+
+  /** True after the first successful connect has recovered persisted tasks */
+  private hasRecoveredPersistedTasks = false;
 
   constructor(public opts: DingtalkBotOptions) {}
 
@@ -1420,6 +1438,14 @@ class DingtalkConnection {
           console.warn("[DingTalk] Drain inflight failed:", (e as Error).message),
         );
 
+        // On first connect after app start, recover persisted pending tasks
+        if (!this.hasRecoveredPersistedTasks) {
+          this.hasRecoveredPersistedTasks = true;
+          this.recoverPersistedTasks().catch((e) =>
+            console.warn("[DingTalk] Persisted task recovery failed:", (e as Error).message),
+          );
+        }
+
         resolve();
       };
 
@@ -1438,6 +1464,11 @@ class DingtalkConnection {
           console.error("[DingTalk] Frame handling error:", err);
         }
       });
+
+      // DingTalk may use WebSocket-level ping frames for keepalive;
+      // update lastFrameTime so health check doesn't false-trigger.
+      ws.on("ping", () => { this.lastFrameTime = Date.now(); });
+      ws.on("pong", () => { this.lastFrameTime = Date.now(); });
 
       ws.on("close", (code: number) => {
         console.log(`[DingTalk] WebSocket closed (code=${code})`);
@@ -1506,6 +1537,17 @@ class DingtalkConnection {
     this.stopHealthCheck();
     this.consecutiveUnhealthy = 0;
     this.lastFrameTime = Date.now();
+
+    // Client-side keepalive: send WebSocket ping every 30s to prevent NAT/proxy timeout.
+    // DingTalk server may not send application-level PINGs frequently;
+    // pong responses update lastFrameTime so health check stays green.
+    this.keepaliveInterval = setInterval(() => {
+      if (this.stopped) return;
+      try {
+        if (this.ws?.readyState === WebSocket.OPEN) this.ws.ping();
+      } catch { /* ignore */ }
+    }, 30_000);
+
     this.healthCheckInterval = setInterval(() => {
       if (this.stopped) return;
 
@@ -1540,6 +1582,10 @@ class DingtalkConnection {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+      this.keepaliveInterval = null;
+    }
     this.consecutiveUnhealthy = 0;
   }
 
@@ -1572,6 +1618,33 @@ class DingtalkConnection {
         console.log(`[DingTalk] Inflight task ${key} delivered after reconnect`);
       } catch (err) {
         console.error(`[DingTalk] Failed to drain inflight task ${key}:`, (err as Error).message);
+      }
+    }
+  }
+
+  // ── Restart-recovery: re-process persisted pending tasks ─────────────────────
+
+  private async recoverPersistedTasks(): Promise<void> {
+    const tasks = loadPendingTasks("dingtalk", this.opts.assistantId);
+    if (tasks.length === 0) return;
+    console.log(`[DingTalk] Recovering ${tasks.length} persisted pending task(s) for ${this.opts.assistantName}`);
+
+    for (const task of tasks) {
+      const msg = task.msg as DingtalkMessage;
+      const age = Date.now() - task.createdAt;
+      console.log(`[DingTalk] Recovering task ${task.id} (age=${Math.round(age / 1000)}s, text=${task.userText.slice(0, 60)})`);
+
+      try {
+        // Card mode unavailable after restart — always use markdown fallback
+        await this.generateAndDeliver(msg, task.userText, task.hasFiles, null);
+        console.log(`[DingTalk] Recovered task ${task.id} successfully`);
+      } catch (err) {
+        console.error(`[DingTalk] Recovery failed for task ${task.id}:`, (err as Error).message);
+        const errorText = "抱歉，应用重启期间您的消息处理中断，重新处理时遇到了问题。请重新发送。";
+        await this.deliverWithFallback(errorText, msg, null)
+          .catch((e) => console.warn("[DingTalk] Failed to send recovery error:", (e as Error).message));
+      } finally {
+        removePendingTask(task.id);
       }
     }
   }
@@ -1758,9 +1831,16 @@ class DingtalkConnection {
         "",
         "复制上方 ID 填入 Bot 配置 → 高级设置 → 我的 StaffId，即可接收主动推送。",
       ].filter((l) => l !== undefined && !(isGroupCmd === false && l.includes("群"))).join("\n");
-      await this.sendMarkdown(msg.sessionWebhook, reply).catch((e) => console.warn("[DingTalk] Failed to send markdown:", e));
+      await this.sendMarkdown(msg.sessionWebhook, reply, msg).catch((e) => console.warn("[DingTalk] Failed to send markdown:", e));
       if (dedupKey) this.inflight.delete(dedupKey);
       return;
+    }
+
+    // In markdown mode there is no "thinking" card, so send an immediate ack
+    // to let the user know the bot has received the message.
+    if (!useCardMode) {
+      await this.sendMarkdownRaw(msg.sessionWebhook, "✅ 已收到，正在处理，请稍等…")
+        .catch((e) => console.warn("[DingTalk] Failed to send quick ack:", e));
     }
 
     // ── Acquire per-session lock (serializes concurrent messages in same conversation) ──
@@ -1776,10 +1856,19 @@ class DingtalkConnection {
     );
     const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
 
+    // Persist task to WAL so it survives an app crash / restart
+    const pendingId = msg.msgId ?? `dt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    savePendingTask({
+      id: pendingId,
+      platform: "dingtalk",
+      assistantId: this.opts.assistantId,
+      msg,
+      userText: extracted.text,
+      hasFiles,
+      createdAt: Date.now(),
+    });
+
     try {
-      // No standalone "思考中" markdown — the pre-created card (方案C) handles feedback.
-      // If no card template is configured, the user simply waits silently (better than
-      // a permanent garbage message in the chat history).
       await this.generateAndDeliver(msg, extracted.text, hasFiles, preCreatedCard);
     } catch (err) {
       console.error("[DingTalk] Reply generation error:", err);
@@ -1787,6 +1876,7 @@ class DingtalkConnection {
       await this.deliverWithFallback(errorText, msg, preCreatedCard)
         .catch((e) => console.warn("[DingTalk] Failed to send error message:", e));
     } finally {
+      removePendingTask(pendingId);
       releaseSessionLock();
       if (dedupKey) this.inflight.delete(dedupKey);
     }
@@ -1937,7 +2027,7 @@ class DingtalkConnection {
       async (input) => {
         const text = String(input.text ?? "").trim();
         if (!text) return { content: [{ type: "text" as const, text: "消息内容为空" }] };
-        await self.sendMarkdown(msg.sessionWebhook, text).catch((e) => console.warn("[DingTalk] Failed to send markdown:", e));
+        await self.sendMarkdown(msg.sessionWebhook, text, msg).catch((e) => console.warn("[DingTalk] Failed to send markdown:", e));
         return { content: [{ type: "text" as const, text: "消息已发送" }] };
       },
     );
@@ -2157,7 +2247,7 @@ class DingtalkConnection {
     const webhookExpired = msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
     if (!webhookExpired && msg.sessionWebhook) {
       try {
-        await this.sendMarkdown(msg.sessionWebhook, text);
+        await this.sendMarkdown(msg.sessionWebhook, text, msg);
         return;
       } catch (err) {
         console.warn("[DingTalk] sessionWebhook fallback failed:", (err as Error).message);
@@ -2277,38 +2367,8 @@ class DingtalkConnection {
       return `媒体上传失败，请检查应用权限（oapi.dingtalk.com）`;
     }
 
-    // Try sessionWebhook first
-    const webhookExpired = msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
-    if (!webhookExpired && msg.sessionWebhook) {
-      try {
-        const webhookToken = await getAccessToken(this.opts.appKey, this.opts.appSecret);
-        const body = sendMediaType === "image"
-          ? { msgtype: "image", image: { media_id: mediaId } }
-          : sendMediaType === "voice"
-          ? { msgtype: "voice", voice: { media_id: mediaId, duration: 1 } }
-          : { msgtype: "file", file: { media_id: mediaId } };
-
-        const resp = await fetch(msg.sessionWebhook, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-acs-dingtalk-access-token": webhookToken,
-          },
-          body: JSON.stringify(body),
-        });
-        const respText = await resp.text();
-        if (resp.ok) {
-          console.log(`[DingTalk][send_file] webhook ok: ${path.basename(sendPath)}`);
-          cleanup();
-          return `文件已发送: ${path.basename(sendPath)}`;
-        }
-        console.error(`[DingTalk][send_file] webhook fail (${resp.status}): ${respText}`);
-      } catch (err) {
-        console.error("[DingTalk][send_file] webhook error:", err);
-      }
-    }
-
-    // Fallback: proactive API
+    // sessionWebhook only supports text/markdown — file/image/voice/video must use Proactive API
+    // (DingTalk returns HTTP 200 but silently drops unsupported msgtype through webhook)
     const robotCode = this.opts.robotCode ?? this.opts.appKey;
     const sender = msg.senderStaffId ?? msg.senderId ?? "";
     const isGroup = msg.conversationType === "2";
@@ -2345,10 +2405,15 @@ class DingtalkConnection {
       });
       const respText = await resp.text();
       cleanup();
-      if (resp.ok) return `文件已发送: ${path.basename(sendPath)}`;
+      if (resp.ok) {
+        console.log(`[DingTalk][send_file] proactive API ok: ${path.basename(sendPath)} → ${isGroup ? "group" : "user"}:${resolvedTarget}`);
+        return `文件已发送: ${path.basename(sendPath)}`;
+      }
+      console.error(`[DingTalk][send_file] proactive API fail (${resp.status}): ${respText.slice(0, 300)}`);
       return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
     } catch (err) {
       cleanup();
+      console.error(`[DingTalk][send_file] proactive API error:`, err instanceof Error ? err.message : err);
       return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
@@ -2398,8 +2463,16 @@ class DingtalkConnection {
       }),
     });
 
+    const respBody = await resp.text();
     if (!resp.ok) {
-      console.error(`[DingTalk] Reply failed: HTTP ${resp.status} ${await resp.text()}`);
+      console.error(`[DingTalk] Reply failed: HTTP ${resp.status} ${respBody}`);
+    } else {
+      try {
+        const parsed = JSON.parse(respBody);
+        if (parsed.errcode && parsed.errcode !== 0) {
+          console.warn(`[DingTalk] Reply accepted but errcode=${parsed.errcode}: ${parsed.errmsg ?? respBody}`);
+        }
+      } catch { /* non-JSON body is fine */ }
     }
   }
 
@@ -2408,7 +2481,7 @@ class DingtalkConnection {
    * Images are uploaded to DingTalk media server and sent as separate image messages;
    * surrounding text is sent as Markdown.  Falls back to plain Markdown if no local images found.
    */
-  private async sendMarkdown(webhook: string, text: string): Promise<void> {
+  private async sendMarkdown(webhook: string, text: string, msg?: DingtalkMessage): Promise<void> {
     const segments = parseReplySegments(text);
     const hasImages = segments.some((s) => s.kind === "image");
 
@@ -2423,30 +2496,15 @@ class DingtalkConnection {
         await this.sendMarkdownRaw(webhook, trimmed).catch((e) =>
           console.warn("[DingTalk] Text segment send failed:", e),
         );
-      } else {
-        // Upload the local image and send as msgtype:"image"
-        try {
-          const mediaId = await uploadMediaV1(
-            this.opts.appKey,
-            this.opts.appSecret,
-            seg.path,
-            "image",
-          );
-          if (!mediaId) throw new Error("upload returned null media_id");
-
-          const resp = await fetch(webhook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ msgtype: "image", image: { media_id: mediaId } }),
-          });
-          if (!resp.ok) {
-            console.error(`[DingTalk] Image send failed: HTTP ${resp.status} ${await resp.text()}`);
-          }
-        } catch (err) {
+      } else if (msg) {
+        // sessionWebhook only supports text/markdown — images must use Proactive API
+        await this.doSendFile(seg.path, msg).catch((err) => {
           console.error("[DingTalk] Image segment send error:", err);
-          // Fallback: mention path as text
-          await this.sendMarkdownRaw(webhook, `[图片: ${seg.path}]`).catch(() => {});
-        }
+          this.sendMarkdownRaw(webhook, `[图片: ${seg.path}]`).catch(() => {});
+        });
+      } else {
+        console.warn("[DingTalk] Cannot send image without msg context, skipping:", seg.path);
+        await this.sendMarkdownRaw(webhook, `[图片: ${seg.path}]`).catch(() => {});
       }
     }
   }

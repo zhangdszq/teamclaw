@@ -336,6 +336,9 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === 'session.history') {
+    // Ensure newly queued messages (e.g. stream.user_prompt) are persisted
+    // before reading history to avoid race-based empty history overwrite.
+    sessions.flushQueuedMessages();
     const history = sessions.getSessionHistory(event.payload.sessionId);
     if (!history) {
       emit({
@@ -353,7 +356,6 @@ export async function handleClientEvent(event: ClientEvent) {
         toolName: p.toolName,
         input: p.input
       })) : [];
-
     emit({
       type: 'session.history',
       payload: {
@@ -470,7 +472,6 @@ export async function handleClientEvent(event: ClientEvent) {
         type: 'stream.user_prompt',
         payload: { sessionId: session.id, prompt: event.payload.prompt },
       });
-
       if (provider === 'codex') {
         runCodex({
           prompt: effectivePrompt,
@@ -606,7 +607,6 @@ export async function handleClientEvent(event: ClientEvent) {
         type: 'stream.user_prompt',
         payload: { sessionId: session.id, prompt: event.payload.prompt },
       });
-
       if (sessionProvider === 'codex') {
         runCodex({
           prompt: event.payload.prompt, // IMAGE_INLINE_RULE is appended inside codex-runner

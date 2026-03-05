@@ -461,6 +461,30 @@ export function refreshRootAbstract(assistantId?: string): void {
     }
   }
 
+  // Other assistants' memory topics (for cross-assistant discovery)
+  if (assistantId) {
+    const otherIds = listAssistantIds().filter(id => id !== assistantId);
+    const otherTopics: string[] = [];
+    for (const id of otherIds) {
+      const other = new ScopedMemory(id);
+      const otherLt = other.readLongTermMemory();
+      const tags = (otherLt.match(/^[-*]\s+\[P[012][^\]]*\]\s*.{0,40}/gm) ?? []).length;
+      if (tags > 0) {
+        const topicSample = (otherLt.match(/^[-*]\s+\[P0\]\s*(.{0,50})/gm) ?? [])
+          .slice(0, 3)
+          .map(l => l.replace(/^[-*]\s+\[P0\]\s*/, "").trim())
+          .filter(Boolean);
+        const topicStr = topicSample.length ? topicSample.join("、") : "(无 P0 条目)";
+        otherTopics.push(`- ${id}: ${tags} 条记忆 | ${topicStr}`);
+      }
+    }
+    if (otherTopics.length) {
+      lines.push("## 其他助理记忆主题（可用 query_team_memory 查询详情）");
+      otherTopics.forEach(l => lines.push(l));
+      lines.push("");
+    }
+  }
+
   // Shared insights (legacy)
   const insightFiles = existsSync(INSIGHTS_DIR)
     ? readdirSync(INSIGHTS_DIR).filter(f => f.endsWith(".md")).sort().reverse().slice(0, 5)
@@ -750,11 +774,39 @@ export class ScopedMemory {
   }
 
   /**
-   * Run janitor for this assistant's archive directory.
-   * (Shared MEMORY.md janitor is run separately via runMemoryJanitor.)
+   * Scan this assistant's private MEMORY.md for expired P1/P2 items,
+   * archive them to assistants/{id}/archive/YYYY-MM.md.
    */
   runJanitor(): { archived: number; cleaned: string[] } {
-    return { archived: 0, cleaned: [] };
+    const lt = this.readLongTermMemory();
+    if (!lt) return { archived: 0, cleaned: [] };
+
+    const today = localDateStr();
+    const lines = lt.split("\n");
+    const kept: string[] = [];
+    const expired: string[] = [];
+
+    for (const line of lines) {
+      const m = line.match(LIFECYCLE_RE);
+      if (m && m[1] < today) {
+        expired.push(line);
+      } else {
+        kept.push(line);
+      }
+    }
+
+    if (expired.length === 0) return { archived: 0, cleaned: [] };
+
+    const archiveDir = this._archiveDir();
+    if (!existsSync(archiveDir)) mkdirSync(archiveDir, { recursive: true });
+    const archiveFile = join(archiveDir, `${localMonthStr()}.md`);
+    const existing = existsSync(archiveFile) ? readFileSync(archiveFile, "utf8") : "";
+    atomicWrite(archiveFile, existing + `\n## Archived ${today}\n` + expired.join("\n") + "\n");
+
+    this.writeLongTermMemory(kept.join("\n"));
+    console.log(`[MemoryJanitor] Archived ${expired.length} expired item(s) from ${this.assistantId} private MEMORY.md.`);
+
+    return { archived: expired.length, cleaned: expired };
   }
 }
 
@@ -837,17 +889,18 @@ export function runMemoryJanitor(): { archived: number; cleaned: string[] } {
 
   console.log(`[MemoryJanitor] Archived ${expired.length} expired item(s) from shared MEMORY.md.`);
 
-  // Also clean up per-assistant archive directories (future-proofing)
+  // Clean up per-assistant private MEMORY.md (P1/P2 lifecycle)
+  let totalArchived = expired.length;
   try {
     for (const aid of listAssistantIds()) {
-      // Currently assistants don't have their own MEMORY.md with P1/P2,
-      // but this loop ensures we handle it if added later.
-      const aArchiveDir = join(getAssistantMemoryRoot(aid), "archive");
-      if (!existsSync(aArchiveDir)) mkdirSync(aArchiveDir, { recursive: true });
+      const scoped = new ScopedMemory(aid);
+      const result = scoped.runJanitor();
+      totalArchived += result.archived;
+      expired.push(...result.cleaned);
     }
   } catch { /* non-blocking */ }
 
-  return { archived: expired.length, cleaned: expired };
+  return { archived: totalArchived, cleaned: expired };
 }
 
 // ─── Context assembly ─────────────────────────────────────────

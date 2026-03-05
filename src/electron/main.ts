@@ -1159,6 +1159,7 @@ app.on("ready", async () => {
     ipcMainHandle("memory-read", async (_: any, target: string, date?: string, assistantId?: string) => {
         const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         if (target === "long-term") return { content: readLongTermMemory() };
+        if (target === "assistant-long-term") return { content: scoped ? scoped.readLongTermMemory() : "" };
         if (target === "daily") return { content: readDailyMemory(date ?? new Date().toISOString().slice(0, 10)) };
         if (target === "assistant-daily") return { content: scoped ? scoped.readDaily(date ?? new Date().toISOString().slice(0, 10)) : "" };
         if (target === "context") return { content: await buildMemoryContext() };
@@ -1170,6 +1171,7 @@ app.on("ready", async () => {
     ipcMainHandle("memory-write", (_: any, target: string, content: string, date?: string, assistantId?: string) => {
         const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         if (target === "long-term") { writeLongTermMemory(content); return { success: true }; }
+        if (target === "assistant-long-term") { scoped?.writeLongTermMemory(content); return { success: true }; }
         if (target === "daily-append") { appendDailyMemory(content, date); return { success: true }; }
         if (target === "daily") { writeDailyMemory(content, date ?? new Date().toISOString().slice(0, 10)); return { success: true }; }
         if (target === "assistant-daily-append") { scoped?.appendDaily(content, date); return { success: true }; }

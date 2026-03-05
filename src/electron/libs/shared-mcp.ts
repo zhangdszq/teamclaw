@@ -28,6 +28,7 @@ import {
   appendDailyMemory,
   writeLongTermMemory,
   readLongTermMemory,
+  listAssistantIds,
   ScopedMemory,
 } from "./memory-store.js";
 import {
@@ -873,6 +874,60 @@ function createSaveMemoryTool(assistantId?: string) {
         return ok("已写入你的专属记忆。仅你可见，不会影响其他助理。");
       } catch (err) {
         return ok(`保存记忆失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
+// ── Query Team Memory (read-only cross-assistant search) ────────────────────
+
+function createQueryTeamMemoryTool(assistantId?: string) {
+  return tool(
+    "query_team_memory",
+    "跨助理搜索记忆（只读）。搜索其他助理的专属记忆中与关键词匹配的条目。\n" +
+      "用途：当你在共享日志或索引中发现其他助理处理过相关话题时，用此工具获取详细上下文。\n" +
+      "注意：只返回匹配的条目，不会修改任何记忆。",
+    {
+      query: z.string().describe("搜索关键词（支持多个词，空格分隔，任一匹配即返回）"),
+      target_assistant_id: z.string().optional().describe("指定搜索某个助理的记忆（可选，不指定则搜索所有其他助理）"),
+    },
+    async (input) => {
+      try {
+        const query = String(input.query ?? "").trim();
+        if (!query) return ok("query 不能为空");
+
+        const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+        const { assistants } = loadAssistantsConfig();
+        const nameMap = new Map(assistants.map(a => [a.id, a.name]));
+
+        const allIds = listAssistantIds();
+        const targetIds = input.target_assistant_id
+          ? allIds.filter(id => id === input.target_assistant_id)
+          : allIds.filter(id => id !== assistantId);
+
+        if (targetIds.length === 0) return ok("未找到匹配的助理。");
+
+        const results: string[] = [];
+        for (const id of targetIds) {
+          const scoped = new ScopedMemory(id);
+          const lt = scoped.readLongTermMemory();
+          if (!lt.trim()) continue;
+
+          const matchedLines = lt.split("\n").filter(line => {
+            const lower = line.toLowerCase();
+            return terms.some(t => lower.includes(t));
+          });
+
+          if (matchedLines.length > 0) {
+            const name = nameMap.get(id) ?? id;
+            results.push(`### ${name} (${id})\n${matchedLines.slice(0, 10).join("\n")}`);
+          }
+        }
+
+        if (results.length === 0) return ok(`未找到与"${query}"相关的团队记忆。`);
+        return ok(`**团队记忆搜索结果（关键词: ${query}）**\n\n${results.join("\n\n")}`);
+      } catch (err) {
+        return ok(`搜索团队记忆失败: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
   );
@@ -1803,6 +1858,8 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       createReadWorkingMemoryTool(assistantId),
       // Long-term Memory (scoped — private by default)
       createSaveMemoryTool(assistantId),
+      // Cross-assistant memory search (read-only)
+      createQueryTeamMemoryTool(assistantId),
       // Memory Distillation
       distillMemoryTool,
       // Atomic Power Tools

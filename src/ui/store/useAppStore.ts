@@ -172,7 +172,6 @@ export const useAppStore = create<AppState>((set, get) => ({
             updatedAt: session.updatedAt
           };
         }
-
         set({ sessions: nextSessions, sessionsLoaded: true });
 
         const visibleSessions = event.payload.sessions.filter(s => !s.background);

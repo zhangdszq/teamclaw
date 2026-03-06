@@ -10,13 +10,16 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import os from "os";
+import { parse as parseToml } from "smol-toml";
 import { app } from "electron";
 import {
   addScheduledTask,
   loadScheduledTasks,
   deleteScheduledTask,
+  updateScheduledTask,
 } from "./scheduler.js";
 import {
   readSop,
@@ -549,6 +552,93 @@ const deleteScheduledTaskTool = tool(
     }
   },
 );
+
+// ─── register_sop_schedule ────────────────────────────────────────────────────
+// Helper: find sopId (folder name) by matching sop name from HAND.toml files.
+function findSopIdByName(sopName: string): string | null {
+  const handsDir = join(os.homedir(), ".vk-cowork", "hands");
+  if (!existsSync(handsDir)) return null;
+  try {
+    for (const entry of readdirSync(handsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const tomlPath = join(handsDir, entry.name, "HAND.toml");
+      if (!existsSync(tomlPath)) continue;
+      try {
+        const data = parseToml(readFileSync(tomlPath, "utf8")) as Record<string, unknown>;
+        const name = typeof data.name === "string" ? data.name : "";
+        if (name === sopName || entry.name === sopName) return entry.name;
+      } catch {
+        // skip malformed HAND.toml
+      }
+    }
+  } catch {
+    // ignore fs errors
+  }
+  return null;
+}
+
+function createRegisterSopScheduleTool(workflowSopId?: string) {
+  return tool(
+    "register_sop_schedule",
+    "为指定 SOP 设置或更新定时调度（幂等：同 SOP 已有调度则更新，否则新建）。调度为隐藏任务，不显示在日历中。",
+    {
+      sop_name: z.string().describe("SOP 名称（HAND.toml 中的 name 字段，或文件夹名）"),
+      schedule_type: z.enum(["daily", "interval"]).describe("调度类型：daily=每日固定时刻，interval=固定间隔"),
+      daily_time: z.string().optional().describe("schedule_type=daily 时必填，格式 HH:MM"),
+      daily_days: z.array(z.number().int().min(0).max(6)).optional().describe("每周执行的天（0=周日…6=周六），不填=每天"),
+      interval_value: z.number().optional().describe("schedule_type=interval 时必填，间隔数量"),
+      interval_unit: z.enum(["minutes", "hours", "days"]).optional().describe("间隔单位"),
+    },
+    async (input) => {
+      try {
+        const sopName = String(input.sop_name ?? "").trim();
+        if (!sopName) return ok("sop_name 不能为空");
+
+        const sopId = findSopIdByName(sopName);
+        if (!sopId) return ok(`未找到名为「${sopName}」的 SOP，请确认名称是否正确`);
+
+        const scheduleType = input.schedule_type as "daily" | "interval";
+
+        if (scheduleType === "daily" && !input.daily_time) {
+          return ok("schedule_type=daily 时必须提供 daily_time（格式 HH:MM）");
+        }
+        if (scheduleType === "interval" && !input.interval_value) {
+          return ok("schedule_type=interval 时必须提供 interval_value");
+        }
+
+        const updates = {
+          scheduleType,
+          dailyTime: input.daily_time,
+          dailyDays: input.daily_days,
+          intervalValue: input.interval_value,
+          intervalUnit: input.interval_unit,
+        } as const;
+
+        // Idempotent: find existing SOP-level schedule (no stageId)
+        const existing = loadScheduledTasks().find(
+          (t) => t.sopId === sopId && !t.stageId
+        );
+
+        if (existing) {
+          await updateScheduledTask(existing.id, updates);
+          return ok(`已更新 SOP「${sopName}」的定时调度（任务 ID：${existing.id}）`);
+        } else {
+          const task = await addScheduledTask({
+            name: `SOP: ${sopName}`,
+            enabled: true,
+            prompt: "",
+            sopId,
+            hidden: true,
+            ...updates,
+          });
+          return ok(`已为 SOP「${sopName}」创建定时调度（任务 ID：${task.id}）`);
+        }
+      } catch (err) {
+        return ok(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
 
 const webSearchTool = tool(
   "web_search",
@@ -1900,9 +1990,11 @@ export interface ToolCatalogEntry {
  */
 export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
   // Scheduler — SOP scheduling is managed by the framework (sop.setSopSchedule); excluded from SOP generation prompts
-  { name: "create_scheduled_task", category: "调度", description: "创建一次性或周期性定时任务，到期自动启动 AI 会话执行", sopExclude: true },
-  { name: "list_scheduled_tasks",  category: "调度", description: "列出当前所有定时任务及其状态", sopExclude: true },
-  { name: "delete_scheduled_task", category: "调度", description: "删除指定定时任务", sopExclude: true },
+  { name: "create_scheduled_task",  category: "调度", description: "创建一次性或周期性定时任务，到期自动启动 AI 会话执行", sopExclude: true },
+  { name: "list_scheduled_tasks",   category: "调度", description: "列出当前所有定时任务及其状态", sopExclude: true },
+  { name: "delete_scheduled_task",  category: "调度", description: "删除指定定时任务", sopExclude: true },
+  // register_sop_schedule — for conversational use only; excluded from SOP generation prompts (framework manages SOP schedules)
+  { name: "register_sop_schedule",  category: "调度", description: "为指定 SOP 设置或更新定时调度（幂等，隐藏任务）", sopExclude: true },
   // Web & Documents
   { name: "web_search",   category: "网络", description: "通过 DuckDuckGo 搜索网络，返回 top 结果" },
   { name: "web_fetch",    category: "网络", description: "抓取指定 URL 内容并以纯文本返回" },
@@ -1955,6 +2047,7 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       createScheduledTaskTool(workflowSopId),
       listScheduledTasksTool,
       deleteScheduledTaskTool,
+      createRegisterSopScheduleTool(workflowSopId),
       // Web & Documents
       webSearchTool,
       webFetchTool,

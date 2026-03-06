@@ -6,7 +6,7 @@
 
 [![Release](https://img.shields.io/github/v/release/zhangdszq/teamclaw?style=flat-square)](https://github.com/zhangdszq/teamclaw/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](#quick-start)
-[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)](LICENSE)
 
 [简体中文](README_ZH.md)
 
@@ -25,23 +25,7 @@ It is fully compatible with [Claude Code](https://docs.anthropic.com/en/docs/cla
 **Download a release:**
 [github.com/zhangdszq/teamclaw/releases](https://github.com/zhangdszq/teamclaw/releases)
 
-**Or build from source:**
-
-```bash
-git clone https://github.com/zhangdszq/teamclaw.git && cd teamclaw
-bun install
-bun run dev
-```
-
-Build for production:
-
-```bash
-bun run dist:mac      # macOS (arm64)
-bun run dist:win      # Windows (x64)
-bun run dist:linux    # Linux (x64)
-```
-
-Prerequisites: [Bun](https://bun.sh/) or Node.js 18+, [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed.
+Prerequisites: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed.
 
 ---
 
@@ -201,25 +185,8 @@ Same API keys, base URL, models, MCP servers, and skills. Also supports OpenAI C
 
 ---
 
-## Development
-
-```bash
-bun run dev       # Dev server with hot reload
-bun run build     # Type check and build
-bun run lint      # Lint
-```
-
----
-
-## Contributing
-
-1. Fork this repository
-2. Create your feature branch
-3. Commit your changes
-4. Open a Pull Request
-
----
-
 ## License
 
-MIT
+Copyright (c) 2025 Teamclaw. All Rights Reserved.
+
+This software is proprietary and confidential. See [LICENSE](LICENSE) for details.

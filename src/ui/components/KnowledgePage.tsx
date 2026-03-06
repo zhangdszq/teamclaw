@@ -145,19 +145,19 @@ export function KnowledgePage({ onClose, titleBarHeight = 0, onNavigateToSession
         <div className="flex items-center gap-1 rounded-xl bg-ink-900/5 p-1 w-fit">
           <button
             onClick={() => setTab("candidates")}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "candidates" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "candidates" ? "bg-surface text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
           >
             经验
           </button>
           <button
             onClick={() => setTab("docs")}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "docs" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "docs" ? "bg-surface text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
           >
             知识库
           </button>
           <button
             onClick={() => setTab("memory")}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "memory" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${tab === "memory" ? "bg-surface text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"}`}
           >
             记忆
           </button>
@@ -328,7 +328,7 @@ export function KnowledgePage({ onClose, titleBarHeight = 0, onNavigateToSession
                   setShowNewDoc(true);
                 }}
                 className="rounded-lg px-3 py-1.5 text-xs font-medium text-white shadow-soft"
-                style={{ background: '#2C5F2F' }}
+                style={{ background: 'var(--color-accent)' }}
               >
                 新建文档
               </button>
@@ -341,14 +341,14 @@ export function KnowledgePage({ onClose, titleBarHeight = 0, onNavigateToSession
                   placeholder="文档标题"
                   value={docTitle}
                   onChange={(e) => setDocTitle(e.target.value)}
-                  className="rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-800 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                  className="rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-800 focus:outline-none focus:ring-1 focus:ring-accent/30"
                 />
                 <textarea
                   placeholder="Markdown 内容..."
                   value={docContent}
                   onChange={(e) => setDocContent(e.target.value)}
                   rows={8}
-                  className="rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-800 font-mono focus:outline-none focus:ring-1 focus:ring-accent/30 resize-y"
+                  className="rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-800 font-mono focus:outline-none focus:ring-1 focus:ring-accent/30 resize-y"
                 />
                 <div className="flex gap-2">
                   <button
@@ -361,7 +361,7 @@ export function KnowledgePage({ onClose, titleBarHeight = 0, onNavigateToSession
                       await refresh();
                     }}
                     className="rounded-lg px-3 py-1.5 text-xs font-medium text-white shadow-soft"
-                    style={{ background: '#2C5F2F' }}
+                    style={{ background: 'var(--color-accent)' }}
                   >
                     保存
                   </button>
@@ -382,13 +382,13 @@ export function KnowledgePage({ onClose, titleBarHeight = 0, onNavigateToSession
                   type="text"
                   value={docTitle}
                   onChange={(e) => setDocTitle(e.target.value)}
-                  className="rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-800 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                  className="rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-800 focus:outline-none focus:ring-1 focus:ring-accent/30"
                 />
                 <textarea
                   value={docContent}
                   onChange={(e) => setDocContent(e.target.value)}
                   rows={8}
-                  className="rounded-lg border border-ink-900/10 bg-white px-3 py-2 text-sm text-ink-800 font-mono focus:outline-none focus:ring-1 focus:ring-accent/30 resize-y"
+                  className="rounded-lg border border-ink-900/10 bg-surface px-3 py-2 text-sm text-ink-800 font-mono focus:outline-none focus:ring-1 focus:ring-accent/30 resize-y"
                 />
                 <div className="flex gap-2">
                   <button
@@ -399,7 +399,7 @@ export function KnowledgePage({ onClose, titleBarHeight = 0, onNavigateToSession
                       await refresh();
                     }}
                     className="rounded-lg px-3 py-1.5 text-xs font-medium text-white shadow-soft"
-                    style={{ background: '#2C5F2F' }}
+                    style={{ background: 'var(--color-accent)' }}
                   >
                     保存
                   </button>

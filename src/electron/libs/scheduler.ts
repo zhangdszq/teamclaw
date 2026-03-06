@@ -103,6 +103,10 @@ export interface ScheduledTask {
   hookFilter?: ScheduledTaskHookFilter;
   lastRun?: string;  // ISO date string
   nextRun?: string;  // ISO date string
+  // SOP association — populated when task is created from a SOP schedule config
+  sopId?: string;
+  stageId?: string;   // set when task triggers a specific stage; absent = trigger whole SOP
+  hidden?: boolean;   // true = not shown in calendar UI, but still executes normally
   // Metadata
   createdAt: string;
   updatedAt: string;
@@ -118,6 +122,24 @@ let sessionRunner: SessionRunner | null = null;
 
 export function setSchedulerSessionRunner(fn: SessionRunner): void {
   sessionRunner = fn;
+}
+
+// ─── SOP workflow runners ─────────────────────────────────────
+// Called when a SOP-linked scheduled task fires.
+// sopId only   → trigger whole SOP (workflow.execute equivalent)
+// sopId+stageId → trigger single stage (workflow.execute-stage equivalent)
+type SopRunner = (sopId: string, scheduledTaskId: string) => void;
+type SopStageRunner = (sopId: string, stageId: string, scheduledTaskId: string) => void;
+
+let sopRunner: SopRunner | null = null;
+let sopStageRunner: SopStageRunner | null = null;
+
+export function setSopRunner(fn: SopRunner): void {
+  sopRunner = fn;
+}
+
+export function setSopStageRunner(fn: SopStageRunner): void {
+  sopStageRunner = fn;
 }
 
 // File path
@@ -231,6 +253,18 @@ export async function deleteScheduledTask(id: string): Promise<boolean> {
   return true;
 }
 
+// Delete all tasks associated with a SOP
+export async function deleteScheduledTasksBySopId(sopId: string): Promise<number> {
+  const tasks = loadScheduledTasks();
+  const filtered = tasks.filter(t => t.sopId !== sopId);
+  const removed = tasks.length - filtered.length;
+  if (removed > 0) {
+    await saveScheduledTasks(filtered);
+    console.log(`[Scheduler] Removed ${removed} task(s) for SOP: ${sopId}`);
+  }
+  return removed;
+}
+
 // Calculate next run time
 export function calculateNextRun(task: ScheduledTask): string | undefined {
   if (!task.enabled) return undefined;
@@ -331,6 +365,26 @@ function runScheduledTask(task: ScheduledTask): void {
     updates.enabled = false;
   }
   updateScheduledTask(task.id, updates);
+
+  // SOP-linked task: route to dedicated SOP runner instead of generic session
+  if (task.sopId) {
+    if (task.stageId) {
+      if (sopStageRunner) {
+        console.log(`[Scheduler] Triggering SOP stage: ${task.sopId}/${task.stageId}`);
+        sopStageRunner(task.sopId, task.stageId, task.id);
+      } else {
+        console.warn(`[Scheduler] sopStageRunner not set, cannot run SOP stage task: ${task.name}`);
+      }
+    } else {
+      if (sopRunner) {
+        console.log(`[Scheduler] Triggering whole SOP: ${task.sopId}`);
+        sopRunner(task.sopId, task.id);
+      } else {
+        console.warn(`[Scheduler] sopRunner not set, cannot run SOP task: ${task.name}`);
+      }
+    }
+    return;
+  }
 
   if (!sessionRunner) {
     console.warn(`[Scheduler] sessionRunner not set, cannot run task: ${task.name}`);

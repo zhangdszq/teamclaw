@@ -57,25 +57,25 @@ export function WorkspacePicker({ currentCwd, onSelect }: WorkspacePickerProps) 
                   onClick={() => onSelect(path)}
                   className={`w-full flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-left transition-colors ${
                     currentCwd === path
-                      ? "bg-[#2C5F2E]/10 border border-[#2C5F2E]/20"
-                      : "bg-white border border-ink-900/8 hover:bg-surface-secondary"
+                      ? "bg-accent/10 border border-accent/20"
+                      : "bg-surface border border-ink-900/8 hover:bg-surface-secondary"
                   }`}
                 >
                   <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                    currentCwd === path ? "bg-[#2C5F2E]/15" : "bg-surface-tertiary"
+                    currentCwd === path ? "bg-accent/15" : "bg-surface-tertiary"
                   }`}>
-                    <svg viewBox="0 0 24 24" className={`h-4 w-4 ${currentCwd === path ? "text-[#2C5F2E]" : "text-ink-500"}`} fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                    <svg viewBox="0 0 24 24" className={`h-4 w-4 ${currentCwd === path ? "text-accent" : "text-ink-500"}`} fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
                     </svg>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className={`text-sm font-medium truncate ${currentCwd === path ? "text-[#2C5F2E]" : "text-ink-800"}`}>
+                    <div className={`text-sm font-medium truncate ${currentCwd === path ? "text-accent" : "text-ink-800"}`}>
                       {formatPath(path)}
                     </div>
                     <div className="text-xs text-ink-400 truncate">{getPathParent(path)}</div>
                   </div>
                   {currentCwd === path && (
-                    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-[#2C5F2E]" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-accent" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M20 6L9 17l-5-5" />
                     </svg>
                   )}
@@ -88,7 +88,7 @@ export function WorkspacePicker({ currentCwd, onSelect }: WorkspacePickerProps) 
         {/* Add workspace button */}
         <button
           onClick={handleSelectDirectory}
-          className="flex items-center gap-2 rounded-xl bg-[#2C5F2E] px-6 py-3 text-sm font-medium text-white shadow-soft hover:bg-[#2C5F2E]/90 transition-colors w-full justify-center"
+          className="flex items-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors w-full justify-center"
         >
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 5v14M5 12h14" />

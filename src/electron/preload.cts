@@ -65,6 +65,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("open-privacy-settings"),
     openPath: (targetPath: string) => 
         ipcInvoke("open-path", targetPath),
+    showItemInFolder: (targetPath: string) =>
+        ipcInvoke("show-item-in-folder", targetPath),
     openExternalUrl: (url: string) =>
         ipcInvoke("open-external-url", url),
     installClaudeCLI: () => 
@@ -220,6 +222,13 @@ electron.contextBridge.exposeInMainWorld("electron", {
         electron.ipcRenderer.on("scheduler:run-task", cb);
         return () => electron.ipcRenderer.off("scheduler:run-task", cb);
     },
+    // SOP schedule management
+    sopSetSopSchedule: (params: any) =>
+        ipcInvoke("sop.setSopSchedule", params),
+    sopGetSopSchedules: (sopId: string, stageId?: string) =>
+        ipcInvoke("sop.getSopSchedules", sopId, stageId),
+    sopRemoveSopSchedule: (taskId: string) =>
+        ipcInvoke("sop.removeSopSchedule", taskId),
     // Plan table
     getPlanItems: () =>
         ipcInvoke("get-plan-items"),
@@ -297,6 +306,28 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("sop.list"),
     sopGenerate: (description: string) =>
         ipcInvoke("sop.generate", description),
+    sopGenerateCancel: () =>
+        ipcInvoke("sop.generate.cancel"),
+    sopDelete: (sopId: string) =>
+        ipcInvoke("sop.delete", sopId),
+    sopRename: (sopId: string, newName: string) =>
+        ipcInvoke("sop.rename", sopId, newName),
+    // Workflow runs
+    workflowGetRun: (sopId: string) =>
+        ipcInvoke("workflow.get-run", sopId),
+    workflowExecute: (sopId: string) =>
+        ipcInvoke("workflow.execute", sopId),
+    workflowExecuteStage: (sopId: string, stageId: string) =>
+        ipcInvoke("workflow.execute-stage", sopId, stageId),
+    workflowRetryStage: (sopId: string, stageId: string) =>
+        ipcInvoke("workflow.retry-stage", sopId, stageId),
+    workflowStageComplete: (payload: { sopId: string; stageId: string; output: string; abstract: string; sessionId?: string; error?: string }) =>
+        electron.ipcRenderer.send("workflow-stage-complete", payload),
+    onWorkflowRunChanged: (callback: (sopId: string) => void) => {
+        const cb = (_: Electron.IpcRendererEvent, sopId: string) => callback(sopId);
+        electron.ipcRenderer.on("workflow-run-changed", cb);
+        return () => electron.ipcRenderer.off("workflow-run-changed", cb);
+    },
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

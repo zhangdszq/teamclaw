@@ -436,7 +436,7 @@ export function usePromptActions(
   }, [activeSessionId, sendEvent]);
 
   // handleStartFromModal can be called with optional params (for scheduled tasks)
-  const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string; assistantId?: string }) => {
+  const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string; assistantId?: string; workflowSopId?: string; scheduledTaskId?: string }) => {
     const effectiveCwd = params?.cwd || cwd.trim();
     const effectivePrompt = params?.prompt || prompt.trim();
     const effectiveTitle = params?.title;
@@ -467,6 +467,8 @@ export function usePromptActions(
           ...(assistantModel ? { model: assistantModel } : {}),
           ...(effectiveAssistantId ? { assistantId: effectiveAssistantId } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),
+          ...(params.workflowSopId ? { workflowSopId: params.workflowSopId } : {}),
+          ...(params.scheduledTaskId ? { scheduledTaskId: params.scheduledTaskId } : {}),
         }
       });
       return;
@@ -966,10 +968,10 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
   const inputCard = (
     <div
       ref={inputCardRef}
-      className={`w-full rounded-2xl border bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06),0_1px_3px_rgba(0,0,0,0.04)] transition-colors ${
+      className={`w-full rounded-2xl border bg-surface shadow-[0_2px_12px_rgba(0,0,0,0.06),0_1px_3px_rgba(0,0,0,0.04)] transition-colors ${
         isDragOver
           ? "border-accent/60 bg-accent/[0.02] shadow-[0_0_0_2px_rgba(var(--color-accent-rgb),0.15)]"
-          : "border-black/[0.07]"
+          : "border-ink-900/[0.07]"
       }`}
     >
       {/* Attachments Preview */}
@@ -1066,7 +1068,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
       </div>
 
       {/* Divider */}
-      <div className="h-px bg-black/[0.05] mx-3" />
+      <div className="h-px bg-ink-900/[0.08] mx-3" />
 
       {/* Toolbar */}
       <div className="flex items-center justify-between px-2.5 py-2">
@@ -1173,7 +1175,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
               isRunning
                 ? "bg-error text-white hover:bg-error/90"
                 : (prompt.trim() || attachments.length > 0)
-                  ? "bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90 shadow-sm"
+                  ? "bg-accent text-white hover:bg-accent-hover shadow-sm"
                   : "bg-ink-900/8 text-ink-300 cursor-default"
             }`}
             onClick={isRunning ? handleStop : handleSend}
@@ -1235,7 +1237,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
             {selectedAssistantSkillTags.length > 0 ? (
               <>
                 <button
-                  className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90 transition-all"
+                  className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium bg-accent text-white hover:bg-accent-hover transition-all"
                   onClick={() => { promptRef.current?.focus(); }}
                 >
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1263,7 +1265,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
                   key={action.id}
                   className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all ${
                     action.id === "guide"
-                      ? "bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90"
+                      ? "bg-accent text-white hover:bg-accent-hover"
                       : "bg-surface-secondary text-ink-800 hover:bg-surface-tertiary border border-ink-900/[0.08]"
                   }`}
                   onClick={() => {

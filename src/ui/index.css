@@ -50,6 +50,73 @@
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.08);
   --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.12);
+
+  /* Toggle off track color */
+  --color-toggle-off: rgba(26, 25, 21, 0.2);
+}
+
+html.dark {
+  --color-surface: #1C1C20;
+  --color-surface-secondary: #242428;
+  --color-surface-tertiary: #2C2C30;
+  --color-surface-cream: #161619;
+
+  --color-ink-900: #E4E4DF;
+  --color-ink-800: #CCCCC7;
+  --color-ink-700: #AEAEA9;
+  --color-ink-600: #8E8E89;
+  --color-ink-500: #7A7A75;
+  --color-ink-400: #5A5A55;
+
+  --color-muted: #8B8B86;
+  --color-muted-light: #6B6B66;
+
+  --color-accent: #4CA750;
+  --color-accent-hover: #5DBF61;
+  --color-accent-light: #1E3D1F;
+  --color-accent-subtle: #1A2E1B;
+
+  --color-green: #4CA750;
+  --color-green-hover: #5DBF61;
+  --color-green-light: #1E3D1F;
+
+  --color-error: #EF4444;
+  --color-error-light: #3B1515;
+  --color-success: #22C55E;
+  --color-success-light: #14301E;
+  --color-info: #3B82F6;
+  --color-info-light: #172340;
+
+  --color-bg-000: #1C1C20;
+  --color-bg-100: #1E1E22;
+  --color-bg-200: #242428;
+  --color-bg-300: #2C2C30;
+  --color-bg-400: #343438;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  --color-toggle-off: rgba(255, 255, 255, 0.2);
+
+  color-scheme: dark;
+}
+
+html.dark body {
+  background-color: var(--color-surface-cream);
+  color: var(--color-ink-900);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #4A4A50;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #666670;
+}
+
+html.dark hr {
+  background-color: var(--color-ink-400);
 }
 
 pre code.hljs {
@@ -81,6 +148,18 @@ body {
   color: var(--color-ink-900);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Allow text selection in conversation area, inputs, and code blocks */
+.select-text,
+input,
+textarea,
+pre,
+code {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 hr {

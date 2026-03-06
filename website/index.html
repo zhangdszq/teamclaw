@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teamclaw — 你的桌面 AI 团队</title>
+  <meta name="description" content="Teamclaw 是一款桌面应用，让你拥有一支永不休息的 AI 团队。多助手协作、IM 机器人集成、智能记忆、自动化调度。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --green-600: #2d7a4f;
+      --green-500: #38955f;
+      --green-400: #4caf6e;
+      --green-100: #e8f5ed;
+      --green-50: #f0faf3;
+      --coral: #d97757;
+      --coral-light: #f0a888;
+      --cream: #faf8f5;
+      --cream-dark: #f3f0eb;
+      --ink-900: #1a1a2e;
+      --ink-700: #333;
+      --ink-500: #666;
+      --ink-400: #888;
+      --ink-300: #aaa;
+      --ink-200: #ccc;
+      --ink-100: #e8e8e8;
+      --radius: 16px;
+      --radius-sm: 10px;
+      --shadow-soft: 0 2px 16px rgba(0,0,0,0.06);
+      --shadow-card: 0 4px 24px rgba(0,0,0,0.08);
+      --shadow-elevated: 0 8px 40px rgba(0,0,0,0.12);
+      --max-w: 1200px;
+      --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--cream);
+      color: var(--ink-700);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ===== NAV ===== */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      backdrop-filter: blur(20px) saturate(1.5);
+      -webkit-backdrop-filter: blur(20px) saturate(1.5);
+      background: rgba(250, 248, 245, 0.85);
+      border-bottom: 1px solid rgba(0,0,0,0.05);
+      transition: var(--transition);
+    }
+    nav.scrolled { box-shadow: 0 1px 12px rgba(0,0,0,0.06); }
+    .nav-inner {
+      max-width: var(--max-w); margin: 0 auto;
+      padding: 0 32px; height: 64px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 18px; font-weight: 700; color: var(--ink-900);
+      text-decoration: none;
+    }
+    .nav-logo-icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--green-500), var(--green-600));
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-size: 16px; font-weight: 800;
+    }
+    .nav-links { display: flex; align-items: center; gap: 8px; }
+    .nav-links a {
+      text-decoration: none; color: var(--ink-500);
+      font-size: 14px; font-weight: 500;
+      padding: 8px 16px; border-radius: 8px;
+      transition: var(--transition);
+    }
+    .nav-links a:hover { color: var(--ink-900); background: rgba(0,0,0,0.04); }
+    .nav-cta {
+      background: var(--green-600) !important; color: white !important;
+      font-weight: 600 !important;
+      box-shadow: 0 2px 8px rgba(45,122,79,0.25);
+    }
+    .nav-cta:hover { background: var(--green-500) !important; transform: translateY(-1px); }
+
+    .mobile-menu-btn {
+      display: none; background: none; border: none; cursor: pointer;
+      width: 40px; height: 40px; border-radius: 8px;
+      align-items: center; justify-content: center;
+    }
+    .mobile-menu-btn svg { width: 22px; height: 22px; color: var(--ink-700); }
+    .mobile-menu {
+      display: none; position: fixed; top: 64px; left: 0; right: 0;
+      background: rgba(250, 248, 245, 0.98);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(0,0,0,0.05);
+      padding: 16px 24px; flex-direction: column; gap: 4px;
+    }
+    .mobile-menu.open { display: flex; }
+    .mobile-menu a {
+      text-decoration: none; color: var(--ink-700);
+      font-size: 15px; font-weight: 500;
+      padding: 12px 16px; border-radius: 10px;
+      transition: var(--transition);
+    }
+    .mobile-menu a:hover { background: rgba(0,0,0,0.04); }
+
+    /* ===== HERO ===== */
+    .hero {
+      padding: 100px 32px 0;
+      max-width: var(--max-w); margin: 0 auto;
+      text-align: center;
+      position: relative;
+    }
+    .hero-text { position: relative; z-index: 2; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--green-100); color: var(--green-600);
+      font-size: 13px; font-weight: 600;
+      padding: 6px 16px; border-radius: 100px;
+      margin-bottom: 24px;
+    }
+    .hero-badge span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green-500); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .hero h1 {
+      font-size: clamp(42px, 6vw, 72px);
+      font-weight: 800; line-height: 1.1;
+      color: var(--ink-900);
+      letter-spacing: -0.03em;
+      margin-bottom: 20px;
+    }
+    .hero h1 .accent {
+      background: linear-gradient(135deg, var(--green-600), var(--green-400));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero-sub {
+      font-size: 18px; color: var(--ink-500);
+      max-width: 560px; margin: 0 auto 32px;
+      line-height: 1.8;
+    }
+    .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 15px; font-weight: 600;
+      padding: 14px 28px; border-radius: 12px;
+      text-decoration: none; cursor: pointer;
+      border: none; transition: all 0.25s ease;
+    }
+    .btn-primary {
+      background: var(--green-600); color: white;
+      box-shadow: 0 4px 16px rgba(45,122,79,0.3);
+    }
+    .btn-primary:hover { background: var(--green-500); transform: translateY(-2px); box-shadow: 0 6px 24px rgba(45,122,79,0.35); }
+    .btn-secondary {
+      background: white; color: var(--ink-700);
+      box-shadow: var(--shadow-soft);
+      border: 1px solid var(--ink-100);
+    }
+    .btn-secondary:hover { background: var(--cream-dark); transform: translateY(-2px); box-shadow: var(--shadow-card); }
+    .btn svg { width: 18px; height: 18px; }
+    .hero-platforms {
+      margin-top: 20px; display: flex; align-items: center; gap: 12px;
+      font-size: 13px; color: var(--ink-400);
+      justify-content: center;
+    }
+    .platform-icons { display: flex; gap: 6px; }
+    .platform-icons span {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 30px; height: 30px; border-radius: 8px;
+      background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      color: var(--ink-400);
+      transition: all 0.2s ease;
+    }
+    .platform-icons span:hover { color: var(--ink-700); box-shadow: 0 2px 8px rgba(0,0,0,0.1); transform: translateY(-1px); }
+    .platform-icons svg { width: 16px; height: 16px; }
+
+    .hero-visual {
+      position: relative;
+      margin-top: 56px;
+      padding-bottom: 40px;
+    }
+    .hero-visual::before {
+      content: '';
+      position: absolute;
+      width: 600px; height: 600px;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(45,122,79,0.1) 0%, transparent 70%);
+      z-index: 0;
+      pointer-events: none;
+    }
+    .hero-image {
+      position: relative; z-index: 1;
+      max-width: 780px; margin: 0 auto;
+    }
+    .hero-image img {
+      width: 100%; border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.04);
+    }
+
+    .hero-tags {
+      position: absolute; z-index: 2;
+      inset: 0; pointer-events: none;
+    }
+    .hero-tag {
+      position: absolute;
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 13px; font-weight: 600;
+      padding: 8px 16px; border-radius: 100px;
+      background: white;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      white-space: nowrap;
+      animation: float 6s ease-in-out infinite;
+      pointer-events: auto;
+    }
+    .hero-tag .tag-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .ht-1 { top: 12%; left: -4%; animation-delay: 0s; }
+    .ht-2 { top: 8%; right: -2%; animation-delay: 1.5s; }
+    .ht-3 { bottom: 25%; left: -6%; animation-delay: 3s; }
+    .ht-4 { bottom: 18%; right: -4%; animation-delay: 4.5s; }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+
+    /* ===== SECTION COMMON ===== */
+    section { padding: 100px 32px; }
+    .section-inner { max-width: var(--max-w); margin: 0 auto; }
+    .section-label {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 13px; font-weight: 600; color: var(--green-600);
+      text-transform: uppercase; letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: clamp(28px, 4vw, 42px);
+      font-weight: 800; color: var(--ink-900);
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+      line-height: 1.25;
+    }
+    .section-desc {
+      font-size: 17px; color: var(--ink-500);
+      max-width: 600px; line-height: 1.8;
+    }
+    .section-desc.center { margin: 0 auto; text-align: center; }
+    .text-center { text-align: center; }
+
+    /* ===== FEATURES GRID ===== */
+    .features { background: white; }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 24px; margin-top: 56px;
+    }
+    .feature-card {
+      padding: 32px; border-radius: var(--radius);
+      background: var(--cream);
+      border: 1px solid transparent;
+      transition: all 0.3s ease;
+      cursor: default;
+    }
+    .feature-card:hover {
+      border-color: var(--green-100);
+      box-shadow: var(--shadow-card);
+      transform: translateY(-4px);
+    }
+    .feature-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; margin-bottom: 20px;
+    }
+    .feature-icon.green { background: var(--green-100); }
+    .feature-icon.coral { background: #fde8de; }
+    .feature-icon.blue { background: #e3eeff; }
+    .feature-icon.purple { background: #f0e5ff; }
+    .feature-icon.amber { background: #fff3d6; }
+    .feature-icon.teal { background: #dff5f0; }
+    .feature-card h3 {
+      font-size: 17px; font-weight: 700;
+      color: var(--ink-900); margin-bottom: 10px;
+    }
+    .feature-card p {
+      font-size: 14px; color: var(--ink-500); line-height: 1.7;
+    }
+
+    /* ===== SHOWCASE (image + text alternating) ===== */
+    .showcase-row {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 80px; align-items: center;
+      margin-top: 80px;
+    }
+    .showcase-row.reverse { direction: rtl; }
+    .showcase-row.reverse > * { direction: ltr; }
+    .showcase-img img {
+      width: 100%; border-radius: var(--radius);
+      box-shadow: var(--shadow-card);
+      transition: transform 0.4s ease;
+    }
+    .showcase-img:hover img { transform: scale(1.03); }
+    .showcase-content { }
+    .showcase-tag {
+      display: inline-block;
+      font-size: 12px; font-weight: 600;
+      color: var(--green-600); background: var(--green-100);
+      padding: 4px 12px; border-radius: 100px;
+      margin-bottom: 16px;
+    }
+    .showcase-content h3 {
+      font-size: clamp(24px, 3vw, 32px);
+      font-weight: 800; color: var(--ink-900);
+      margin-bottom: 16px; line-height: 1.3;
+    }
+    .showcase-content p {
+      font-size: 16px; color: var(--ink-500); line-height: 1.8;
+      margin-bottom: 24px;
+    }
+    .showcase-list {
+      list-style: none; display: flex; flex-direction: column; gap: 12px;
+    }
+    .showcase-list li {
+      display: flex; align-items: flex-start; gap: 10px;
+      font-size: 14px; color: var(--ink-700);
+    }
+    .showcase-list li::before {
+      content: '✓'; display: inline-flex;
+      align-items: center; justify-content: center;
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--green-100); color: var(--green-600);
+      font-size: 12px; font-weight: 700;
+      flex-shrink: 0; margin-top: 1px;
+    }
+
+    /* ===== STATS ===== */
+    .stats {
+      background: linear-gradient(135deg, var(--green-600), #1a5c3a);
+      color: white; text-align: center;
+    }
+    .stats .section-label { color: var(--green-100); }
+    .stats .section-title { color: white; }
+    .stats .section-desc { color: rgba(255,255,255,0.75); }
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 32px; margin-top: 56px;
+    }
+    .stat-item { }
+    .stat-num {
+      font-size: 48px; font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #fff, rgba(255,255,255,0.7));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .stat-label {
+      font-size: 14px; color: rgba(255,255,255,0.6);
+      margin-top: 8px;
+    }
+
+    /* ===== CASES PREVIEW ===== */
+    .cases-preview { background: white; }
+    .cases-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 24px; margin-top: 56px;
+    }
+    .case-card {
+      padding: 28px; border-radius: var(--radius);
+      background: var(--cream);
+      border: 1px solid transparent;
+      transition: all 0.3s ease;
+      text-decoration: none; color: inherit;
+      display: block;
+    }
+    .case-card:hover {
+      border-color: var(--green-100);
+      box-shadow: var(--shadow-card);
+      transform: translateY(-4px);
+    }
+    .case-avatar {
+      width: 48px; height: 48px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; margin-bottom: 20px;
+    }
+    .case-card h3 {
+      font-size: 17px; font-weight: 700;
+      color: var(--ink-900); margin-bottom: 6px;
+    }
+    .case-role {
+      font-size: 13px; color: var(--ink-400);
+      margin-bottom: 16px;
+    }
+    .case-card blockquote {
+      font-size: 14px; color: var(--ink-500); line-height: 1.7;
+      font-style: italic;
+      border-left: 3px solid var(--green-100);
+      padding-left: 16px;
+    }
+    .case-see-all {
+      text-align: center; margin-top: 40px;
+    }
+
+    /* ===== CTA ===== */
+    .cta {
+      text-align: center;
+      background: var(--cream);
+    }
+    .cta-box {
+      max-width: 720px; margin: 0 auto;
+      padding: 64px 48px; border-radius: 24px;
+      background: white;
+      box-shadow: var(--shadow-elevated);
+      position: relative; overflow: hidden;
+    }
+    .cta-box::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 4px;
+      background: linear-gradient(90deg, var(--green-500), var(--coral));
+    }
+    .cta-box .section-title { margin-bottom: 12px; }
+    .cta-box .section-desc { margin-bottom: 32px; }
+    .cta-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+    /* ===== FOOTER ===== */
+    footer {
+      padding: 48px 32px 32px;
+      border-top: 1px solid var(--ink-100);
+    }
+    .footer-inner {
+      max-width: var(--max-w); margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .footer-left {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 14px; color: var(--ink-400);
+    }
+    .footer-links { display: flex; gap: 24px; }
+    .footer-links a {
+      font-size: 14px; color: var(--ink-400);
+      text-decoration: none; transition: var(--transition);
+    }
+    .footer-links a:hover { color: var(--ink-700); }
+
+    /* ===== SCROLL ANIM ===== */
+    .fade-up {
+      opacity: 0; transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .fade-up.visible { opacity: 1; transform: translateY(0); }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 1024px) {
+      .showcase-row, .showcase-row.reverse { grid-template-columns: 1fr; gap: 40px; direction: ltr; }
+      .features-grid { grid-template-columns: repeat(2, 1fr); }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .cases-grid { grid-template-columns: repeat(2, 1fr); }
+      .hero-tags { display: none; }
+      .hero-image { max-width: 600px; }
+    }
+    @media (max-width: 640px) {
+      section { padding: 60px 16px; }
+      .nav-inner { padding: 0 16px; }
+      .nav-links { display: none; }
+      .mobile-menu-btn { display: flex; }
+
+      .hero { padding: 80px 16px 0; }
+      .hero h1 { font-size: 32px; letter-spacing: -0.02em; }
+      .hero-sub { font-size: 15px; margin-bottom: 24px; }
+      .hero-badge { font-size: 12px; padding: 5px 12px; margin-bottom: 16px; }
+      .hero-actions { flex-direction: column; align-items: center; gap: 10px; }
+      .hero-actions .btn { width: 100%; max-width: 280px; justify-content: center; }
+      .hero-platforms { flex-wrap: wrap; justify-content: center; gap: 8px; font-size: 12px; margin-top: 16px; }
+      .hero-visual { margin-top: 32px; padding-bottom: 24px; }
+      .hero-visual::before { width: 300px; height: 300px; }
+      .hero-image img { border-radius: 14px; }
+
+      .section-title { font-size: 24px; }
+      .section-desc { font-size: 15px; }
+      .section-label { font-size: 12px; }
+
+      .features-grid { grid-template-columns: 1fr; gap: 16px; margin-top: 32px; }
+      .feature-card { padding: 24px; }
+      .feature-card h3 { font-size: 16px; }
+      .feature-card p { font-size: 13px; }
+
+      .showcase-row, .showcase-row.reverse { gap: 28px; margin-top: 48px; }
+      .showcase-content h3 { font-size: 22px; }
+      .showcase-content p { font-size: 14px; }
+      .showcase-list li { font-size: 13px; }
+      .showcase-img img { border-radius: 12px; }
+
+      .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 32px; }
+      .stat-num { font-size: 32px; }
+      .stat-label { font-size: 12px; }
+
+      .cases-grid { grid-template-columns: 1fr; gap: 16px; margin-top: 32px; }
+      .case-card { padding: 20px; }
+      .case-card blockquote { font-size: 13px; }
+
+      .cta-box { padding: 32px 20px; border-radius: 16px; }
+      .cta-box .section-title { font-size: 22px; }
+      .cta-box .section-desc { font-size: 14px; }
+      .cta-actions { flex-direction: column; align-items: center; }
+      .cta-actions .btn { width: 100%; max-width: 280px; justify-content: center; }
+
+      .footer-inner { flex-direction: column; gap: 16px; text-align: center; }
+      .footer-links { gap: 16px; }
+      footer { padding: 32px 16px 24px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav id="nav">
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo">
+      <div class="nav-logo-icon">T</div>
+      Teamclaw
+    </a>
+    <div class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#showcase">亮点</a>
+      <a href="cases.html">用户案例</a>
+      <a href="https://github.com/zhangdszq/teamclaw" target="_blank">GitHub</a>
+      <a href="https://github.com/zhangdszq/teamclaw/releases" class="nav-cta">下载</a>
+    </div>
+    <button class="mobile-menu-btn" onclick="toggleMenu()" aria-label="菜单">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+    </button>
+  </div>
+  <div class="mobile-menu" id="mobileMenu">
+    <a href="#features" onclick="closeMenu()">功能</a>
+    <a href="#showcase" onclick="closeMenu()">亮点</a>
+    <a href="cases.html">用户案例</a>
+    <a href="https://github.com/zhangdszq/teamclaw" target="_blank">GitHub</a>
+    <a href="https://github.com/zhangdszq/teamclaw/releases">下载</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-text fade-up">
+    <div class="hero-badge">
+      <span></span> 开源免费 · MIT License
+    </div>
+    <h1>你的桌面 <span class="accent">AI 团队</span></h1>
+    <p class="hero-sub">多位 AI 助手各司其职，拥有独立人格、记忆和技能。<br>接入钉钉、飞书、Telegram，全天候自主运转。</p>
+    <div class="hero-actions">
+      <a href="https://github.com/zhangdszq/teamclaw/releases" class="btn btn-primary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        免费下载
+      </a>
+      <a href="https://github.com/zhangdszq/teamclaw" class="btn btn-secondary" target="_blank">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+        GitHub
+      </a>
+    </div>
+    <div class="hero-platforms">
+      <div class="platform-icons">
+        <span title="macOS"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83"/><path d="M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11"/></svg></span>
+        <span title="Windows"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 12V6.5l8-1.1V12H3zm0 .5h8v6.6l-8-1.1V12.5zM11.5 5.3l9.5-1.3v8h-9.5V5.3zM11.5 12.5H21v8l-9.5-1.3v-6.7z"/></svg></span>
+        <span title="Linux"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 2c-1.6 0-2.9 1.8-2.9 4 0 .7.1 1.4.4 2-.8.6-1.4 1.4-1.4 2.3 0 .5.1 1 .4 1.4-.7.5-1.2 1.1-1.4 1.8-.5.1-.9.3-1.3.5C5.2 14.7 4 15.7 4 17c0 1.7 2.2 3 5 3h6c2.8 0 5-1.3 5-3 0-1.3-1.2-2.3-2.3-2.9-.4-.2-.8-.4-1.3-.5-.2-.7-.7-1.3-1.4-1.8.3-.4.4-.9.4-1.4 0-.9-.6-1.7-1.4-2.3.3-.6.4-1.3.4-2 0-2.2-1.3-4-2.9-4zm-1.2 4c0-1.3.5-2.5 1.2-2.5s1.2 1.2 1.2 2.5-.5 2.5-1.2 2.5-1.2-1.2-1.2-2.5zm-1.7 4.3c0-.6.6-1.2 1.5-1.5.3.2.7.3 1.1.3h.6c.4 0 .8-.1 1.1-.3.9.3 1.5.9 1.5 1.5s-.6 1.2-1.5 1.5c-.5-.2-1-.3-1.6-.3s-1.1.1-1.6.3c-.9-.3-1.1-.9-1.1-1.5zm2.9 8.2c-3.1 0-3.5-1.1-3.5-1.5 0-.9 1.2-1.8 3.5-1.8s3.5.9 3.5 1.8c0 .4-.4 1.5-3.5 1.5z"/></svg></span>
+      </div>
+      支持 macOS · Windows · Linux
+    </div>
+  </div>
+  <div class="hero-visual fade-up" style="transition-delay: 0.15s;">
+    <div class="hero-image">
+      <img src="assets/splash-1.jpg" alt="Teamclaw AI 团队" loading="eager">
+    </div>
+    <div class="hero-tags">
+      <div class="hero-tag ht-1"><span class="tag-dot" style="background:#2d7a4f;"></span> 多助手协作</div>
+      <div class="hero-tag ht-2"><span class="tag-dot" style="background:#d97757;"></span> IM 机器人</div>
+      <div class="hero-tag ht-3"><span class="tag-dot" style="background:#3b6fd4;"></span> 智能记忆</div>
+      <div class="hero-tag ht-4"><span class="tag-dot" style="background:#7c4dff;"></span> 定时调度</div>
+    </div>
+  </div>
+</div>
+
+<!-- FEATURES -->
+<section class="features" id="features">
+  <div class="section-inner text-center">
+    <div class="section-label fade-up">核心能力</div>
+    <h2 class="section-title fade-up">一站式 AI 协作平台</h2>
+    <p class="section-desc center fade-up">六大核心能力，让 AI 团队从"能用"到"好用"</p>
+
+    <div class="features-grid">
+      <div class="feature-card fade-up">
+        <div class="feature-icon green"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2d7a4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+        <h3>多助手系统</h3>
+        <p>每位 AI 助手拥有独立人格、头像、价值观和认知风格。自由分配技能和 MCP 工具，各司其职。</p>
+      </div>
+      <div class="feature-card fade-up">
+        <div class="feature-icon coral"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01"/><path d="M12 10h.01"/><path d="M16 10h.01"/></svg></div>
+        <h3>IM 机器人集成</h3>
+        <p>一键接入钉钉、飞书、Telegram。支持私聊/群聊、AI 流式卡片、主动推送，真正融入工作流。</p>
+      </div>
+      <div class="feature-card fade-up">
+        <div class="feature-icon blue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3b6fd4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/><path d="M9 21h6"/><path d="M10 17v4"/><path d="M14 17v4"/></svg></div>
+        <h3>多层记忆体系</h3>
+        <p>从每日日志到长期洞察的六层记忆架构，AI 越用越懂你，跨会话保持上下文连续性。</p>
+      </div>
+      <div class="feature-card fade-up">
+        <div class="feature-icon purple"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7c4dff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+        <h3>SOP 工作流</h3>
+        <p>用 ReactFlow 可视化编辑多阶段工作流，每个阶段可配置目标、检查项、工具和 MCP。</p>
+      </div>
+      <div class="feature-card fade-up">
+        <div class="feature-icon amber"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c48a1a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+        <h3>定时调度</h3>
+        <p>单次、周期、每日、心跳和 Hook 五种触发方式。你休息时，AI 团队继续运转。</p>
+      </div>
+      <div class="feature-card fade-up">
+        <div class="feature-icon teal"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a9a7a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg></div>
+        <h3>知识库</h3>
+        <p>自动从会话中提取经验知识，AI 帮你结构化整理。支持草稿 → 验证 → 归档工作流。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SHOWCASE -->
+<section id="showcase">
+  <div class="section-inner">
+    <div class="text-center">
+      <div class="section-label fade-up">产品亮点</div>
+      <h2 class="section-title fade-up">每个细节，都为效率而设计</h2>
+    </div>
+
+    <!-- Row 1: IM Integration -->
+    <div class="showcase-row fade-up">
+      <div class="showcase-img">
+        <img src="assets/splash-2.jpg" alt="跨平台连接" loading="lazy">
+      </div>
+      <div class="showcase-content">
+        <div class="showcase-tag">IM 集成</div>
+        <h3>随时随地，跨平台连接</h3>
+        <p>无论你在哪里，通过手机上的钉钉、飞书或 Telegram 就能和 AI 团队沟通。</p>
+        <ul class="showcase-list">
+          <li>钉钉：私聊群聊 + AI 流式卡片 + 白名单策略</li>
+          <li>Telegram：@提及控制 + 代理支持</li>
+          <li>飞书：群聊 + 主动推送 + 自动重连</li>
+          <li>继承助手的人格、技能和记忆</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Row 2: Memory -->
+    <div class="showcase-row reverse fade-up">
+      <div class="showcase-img">
+        <img src="assets/splash-3.jpg" alt="智能记忆" loading="lazy">
+      </div>
+      <div class="showcase-content">
+        <div class="showcase-tag">记忆系统</div>
+        <h3>越用越懂你</h3>
+        <p>六层结构化记忆体系，从抽象索引到每日日志，让 AI 真正理解你的工作习惯。</p>
+        <ul class="showcase-list">
+          <li>L0 抽象索引：快速检索关键上下文</li>
+          <li>L1 月度洞察：自动提炼经验教训</li>
+          <li>MEMORY.md：P0/P1/P2 生命周期管理</li>
+          <li>每位助手独立记忆空间</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Row 3: Planning -->
+    <div class="showcase-row fade-up">
+      <div class="showcase-img">
+        <img src="assets/splash-4.jpg" alt="协同规划" loading="lazy">
+      </div>
+      <div class="showcase-content">
+        <div class="showcase-tag">协同规划</div>
+        <h3>AI 帮你拆解目标</h3>
+        <p>定义长期目标，AI 自动拆解为可执行任务，跨会话追踪进度，连续失败自动暂停。</p>
+        <ul class="showcase-list">
+          <li>长期目标：可配置重试间隔和最大运行次数</li>
+          <li>会话级进度日志 + 下一步建议</li>
+          <li>Plan 看板：pending/进行/完成/失败四态</li>
+          <li>ReactFlow 可视化工作流编辑器</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Row 4: Automation -->
+    <div class="showcase-row reverse fade-up">
+      <div class="showcase-img">
+        <img src="assets/splash-5.jpg" alt="自动化调度" loading="lazy">
+      </div>
+      <div class="showcase-content">
+        <div class="showcase-tag">自动化</div>
+        <h3>你休息，AI 不打烊</h3>
+        <p>五种调度模式覆盖所有场景。配置好定时任务后，安心去做你想做的事。</p>
+        <ul class="showcase-list">
+          <li>单次执行：指定时间精准触发</li>
+          <li>周期任务：每 N 分钟/小时/天/周重复</li>
+          <li>心跳检查：自适应间隔的健康监测</li>
+          <li>Hook 触发：startup / session.complete 事件驱动</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section class="stats">
+  <div class="section-inner text-center">
+    <div class="section-label fade-up">技术实力</div>
+    <h2 class="section-title fade-up">精心打造的桌面体验</h2>
+    <p class="section-desc center fade-up">基于现代技术栈，兼顾性能与开发者体验</p>
+
+    <div class="stats-grid">
+      <div class="stat-item fade-up">
+        <div class="stat-num">30+</div>
+        <div class="stat-label">内置 MCP 工具</div>
+      </div>
+      <div class="stat-item fade-up">
+        <div class="stat-num">3</div>
+        <div class="stat-label">IM 平台集成</div>
+      </div>
+      <div class="stat-item fade-up">
+        <div class="stat-num">6</div>
+        <div class="stat-label">记忆层级</div>
+      </div>
+      <div class="stat-item fade-up">
+        <div class="stat-num">5</div>
+        <div class="stat-label">调度模式</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CASES PREVIEW -->
+<section class="cases-preview" id="cases">
+  <div class="section-inner text-center">
+    <div class="section-label fade-up">用户故事</div>
+    <h2 class="section-title fade-up">他们正在用 Teamclaw</h2>
+    <p class="section-desc center fade-up">看看不同角色的用户如何利用 AI 团队提升效率</p>
+
+    <div class="cases-grid">
+      <a href="cases.html#case-developer" class="case-card fade-up">
+        <div class="case-avatar" style="background: var(--green-100);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2d7a4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 10l3 3 7-7"/></svg></div>
+        <h3>Alex · 独立开发者</h3>
+        <div class="case-role">全栈开发 · 一人公司</div>
+        <blockquote>「我配了 3 个 AI 助手分别处理代码审查、文档撰写和客户支持。现在一个人也能像团队一样运转了。」</blockquote>
+      </a>
+      <a href="cases.html#case-creator" class="case-card fade-up">
+        <div class="case-avatar" style="background: #fde8de;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div>
+        <h3>小雨 · 内容创作者</h3>
+        <div class="case-role">自媒体运营 · 多平台内容</div>
+        <blockquote>「定时任务帮我每天早上自动抓取热点，AI 助手分析完直接推送到钉钉群。灵感再也不断档。」</blockquote>
+      </a>
+      <a href="cases.html#case-ops" class="case-card fade-up">
+        <div class="case-avatar" style="background: #e3eeff;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3b6fd4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
+        <h3>Jason · 运维工程师</h3>
+        <div class="case-role">SRE · 基础设施管理</div>
+        <blockquote>「用心跳任务监控服务状态，异常时自动通过 Telegram 推送告警。半夜出问题也不怕了。」</blockquote>
+      </a>
+    </div>
+
+    <div class="case-see-all fade-up">
+      <a href="cases.html" class="btn btn-secondary">
+        查看全部案例
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta">
+  <div class="section-inner">
+    <div class="cta-box fade-up">
+      <h2 class="section-title">开始组建你的 AI 团队</h2>
+      <p class="section-desc center">开源免费，支持 macOS、Windows 和 Linux。<br>兼容 Claude Code 配置，几分钟即可上手。</p>
+      <div class="cta-actions">
+        <a href="https://github.com/zhangdszq/teamclaw/releases" class="btn btn-primary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          立即下载
+        </a>
+        <a href="https://github.com/zhangdszq/teamclaw" class="btn btn-secondary" target="_blank">
+          查看源码
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <div class="nav-logo-icon" style="width:24px;height:24px;font-size:12px;border-radius:6px;">T</div>
+      Teamclaw · MIT License
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/zhangdszq/teamclaw" target="_blank">GitHub</a>
+      <a href="https://github.com/zhangdszq/teamclaw/releases" target="_blank">Releases</a>
+      <a href="cases.html">用户案例</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+function toggleMenu() {
+  document.getElementById('mobileMenu').classList.toggle('open');
+}
+function closeMenu() {
+  document.getElementById('mobileMenu').classList.remove('open');
+}
+
+window.addEventListener('scroll', () => {
+  document.getElementById('nav').classList.toggle('scrolled', window.scrollY > 20);
+});
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>

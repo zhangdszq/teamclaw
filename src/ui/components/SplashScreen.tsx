@@ -103,7 +103,7 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
     >
       {/* Full-screen 16:9 container */}
       <div
-        className="relative flex flex-col overflow-hidden bg-white"
+        className="relative flex flex-col overflow-hidden bg-surface"
         style={{ width: "100vw", height: "100vh" }}
       >
         {/* Top: Image (≈60%) */}

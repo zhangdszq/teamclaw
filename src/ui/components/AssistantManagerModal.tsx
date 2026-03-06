@@ -676,7 +676,7 @@ export function AssistantManagerModal({
                                     <div className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${
                                       checked
                                         ? "border-accent bg-accent"
-                                        : "border-ink-900/20 bg-white"
+                                        : "border-ink-900/20 bg-surface"
                                     }`}>
                                       {checked && (
                                         <svg viewBox="0 0 24 24" className="h-2.5 w-2.5 text-white" fill="none" stroke="currentColor" strokeWidth="3">
@@ -750,7 +750,7 @@ export function AssistantManagerModal({
                 <button
                   onClick={() => setManagerTab("dashboard")}
                   className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    managerTab === "dashboard" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
+                    managerTab === "dashboard" ? "bg-surface text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
                   }`}
                 >
                   团队看板
@@ -758,7 +758,7 @@ export function AssistantManagerModal({
                 <button
                   onClick={() => setManagerTab("members")}
                   className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    managerTab === "members" ? "bg-white text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
+                    managerTab === "members" ? "bg-surface text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
                   }`}
                 >
                   成员管理

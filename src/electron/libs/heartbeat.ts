@@ -50,14 +50,19 @@ let pendingCompactKey = "";
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
+function localDateStr(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function getTodayMemoryPath(): string {
-  const today = new Date().toISOString().slice(0, 10);
-  return join(MEMORY_ROOT, "daily", `${today}.md`);
+  return join(MEMORY_ROOT, "daily", `${localDateStr()}.md`);
 }
 
 function getAssistantDailyPath(assistantId: string, date?: string): string {
-  const today = date ?? new Date().toISOString().slice(0, 10);
-  return join(MEMORY_ROOT, "assistants", assistantId, "daily", `${today}.md`);
+  return join(MEMORY_ROOT, "assistants", assistantId, "daily", `${date ?? localDateStr()}.md`);
 }
 
 // ── ISO week helpers ──────────────────────────────────────────────────────────

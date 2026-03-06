@@ -392,102 +392,109 @@ const twitterSearchTool = tool(
   },
 );
 
-const createScheduledTaskTool = tool(
-  "create_scheduled_task",
-  "创建一个定时任务。任务到期时会自动启动 AI 会话执行 prompt。\n\n" +
-    "scheduleType 选择规则（必须严格遵守）：\n" +
-    "- once：用户说「X 分钟/小时后」「明天 X 点」「X 号 X 点」等一次性时间 → 单次执行\n" +
-    "- interval：用户说「每隔 X 分钟/小时」「每 X 分钟重复」等周期性 → 间隔重复，必填 intervalValue + intervalUnit\n" +
-    "- daily：用户说「每天 X 点」「每周一/三/五 X 点」→ 每日固定时间，必填 dailyTime\n\n" +
-    "once 类型时间填写规则（二选一）：\n" +
-    "- 相对时间（推荐）：填 delay_minutes（相对现在的分钟数），服务器自动计算准确时间。「5分钟后」→ delay_minutes=5，「2小时后」→ delay_minutes=120\n" +
-    "- 绝对时间：填 scheduledTime，格式 'YYYY-MM-DDTHH:MM:SS'（本地时间，不加Z）\n\n" +
-    "示例：\n" +
-    "「2分钟后提醒我」→ once，delay_minutes=2\n" +
-    "「每2分钟检查邮件」→ interval，intervalValue=2，intervalUnit=minutes\n" +
-    "「每天早上9点汇报」→ daily，dailyTime='09:00'",
-  {
-    name: z.string().describe("任务名称，简短描述任务用途"),
-    prompt: z.string().describe("任务执行时发送给 AI 的指令内容"),
-    scheduleType: z
-      .enum(["once", "interval", "daily"])
-      .describe("调度类型：once=单次、interval=间隔重复、daily=每日固定时间"),
-    delay_minutes: z
-      .number()
-      .optional()
-      .describe("【once 类型专用，推荐使用】从现在起延迟执行的分钟数，服务器自动换算为准确时间。优先级高于 scheduledTime。"),
-    scheduledTime: z
-      .string()
-      .optional()
-      .describe("单次执行的本地绝对时间，格式 'YYYY-MM-DDTHH:MM:SS'（不加 Z），仅当无法用 delay_minutes 表达时才填"),
-    intervalValue: z.number().optional().describe("间隔数值，scheduleType=interval 时必填"),
-    intervalUnit: z
-      .enum(["minutes", "hours", "days", "weeks"])
-      .optional()
-      .describe("间隔单位，scheduleType=interval 时必填"),
-    dailyTime: z.string().optional().describe("每日执行时间，格式 HH:MM，scheduleType=daily 时必填"),
-    dailyDays: z
-      .array(z.number())
-      .optional()
-      .describe("指定星期几执行（0=周日，1=周一…6=周六），不填则每天执行，scheduleType=daily 时可选"),
-    assistantId: z.string().optional().describe("指定执行任务的助理 ID（可选）"),
-    cwd: z.string().optional().describe("任务执行时的工作目录（可选）"),
-  },
-  async (input) => {
-    try {
-      const scheduleType = input.scheduleType;
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const refNow = Date.now();
+function createScheduledTaskTool(workflowSopId?: string) {
+  return tool(
+    "create_scheduled_task",
+    "创建一个定时任务。任务到期时会自动启动 AI 会话执行 prompt。\n\n" +
+      (workflowSopId
+        ? "【注意】当前在 SOP 工作流中，创建的定时任务将自动关联到该 SOP（hidden=true，不显示在日历中）。\n\n"
+        : "") +
+      "scheduleType 选择规则（必须严格遵守）：\n" +
+      "- once：用户说「X 分钟/小时后」「明天 X 点」「X 号 X 点」等一次性时间 → 单次执行\n" +
+      "- interval：用户说「每隔 X 分钟/小时」「每 X 分钟重复」等周期性 → 间隔重复，必填 intervalValue + intervalUnit\n" +
+      "- daily：用户说「每天 X 点」「每周一/三/五 X 点」→ 每日固定时间，必填 dailyTime\n\n" +
+      "once 类型时间填写规则（二选一）：\n" +
+      "- 相对时间（推荐）：填 delay_minutes（相对现在的分钟数），服务器自动计算准确时间。「5分钟后」→ delay_minutes=5，「2小时后」→ delay_minutes=120\n" +
+      "- 绝对时间：填 scheduledTime，格式 'YYYY-MM-DDTHH:MM:SS'（本地时间，不加Z）\n\n" +
+      "示例：\n" +
+      "「2分钟后提醒我」→ once，delay_minutes=2\n" +
+      "「每2分钟检查邮件」→ interval，intervalValue=2，intervalUnit=minutes\n" +
+      "「每天早上9点汇报」→ daily，dailyTime='09:00'",
+    {
+      name: z.string().describe("任务名称，简短描述任务用途"),
+      prompt: z.string().describe("任务执行时发送给 AI 的指令内容"),
+      scheduleType: z
+        .enum(["once", "interval", "daily"])
+        .describe("调度类型：once=单次、interval=间隔重复、daily=每日固定时间"),
+      delay_minutes: z
+        .number()
+        .optional()
+        .describe("【once 类型专用，推荐使用】从现在起延迟执行的分钟数，服务器自动换算为准确时间。优先级高于 scheduledTime。"),
+      scheduledTime: z
+        .string()
+        .optional()
+        .describe("单次执行的本地绝对时间，格式 'YYYY-MM-DDTHH:MM:SS'（不加 Z），仅当无法用 delay_minutes 表达时才填"),
+      intervalValue: z.number().optional().describe("间隔数值，scheduleType=interval 时必填"),
+      intervalUnit: z
+        .enum(["minutes", "hours", "days", "weeks"])
+        .optional()
+        .describe("间隔单位，scheduleType=interval 时必填"),
+      dailyTime: z.string().optional().describe("每日执行时间，格式 HH:MM，scheduleType=daily 时必填"),
+      dailyDays: z
+        .array(z.number())
+        .optional()
+        .describe("指定星期几执行（0=周日，1=周一…6=周六），不填则每天执行，scheduleType=daily 时可选"),
+      assistantId: z.string().optional().describe("指定执行任务的助理 ID（可选）"),
+      cwd: z.string().optional().describe("任务执行时的工作目录（可选）"),
+    },
+    async (input) => {
+      try {
+        const scheduleType = input.scheduleType;
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const refNow = Date.now();
 
-      let scheduledTime: string | undefined;
-      if (scheduleType === "once") {
-        if (input.delay_minutes != null && Number(input.delay_minutes) > 0) {
-          scheduledTime = new Date(refNow + Number(input.delay_minutes) * 60 * 1000).toISOString();
-        } else if (input.scheduledTime) {
-          const parsed = new Date(String(input.scheduledTime));
-          if (isNaN(parsed.getTime())) {
-            return ok(
-              `创建失败：scheduledTime 格式无效（${input.scheduledTime}）。请改用 delay_minutes 指定延迟分钟数。`,
-            );
+        let scheduledTime: string | undefined;
+        if (scheduleType === "once") {
+          if (input.delay_minutes != null && Number(input.delay_minutes) > 0) {
+            scheduledTime = new Date(refNow + Number(input.delay_minutes) * 60 * 1000).toISOString();
+          } else if (input.scheduledTime) {
+            const parsed = new Date(String(input.scheduledTime));
+            if (isNaN(parsed.getTime())) {
+              return ok(
+                `创建失败：scheduledTime 格式无效（${input.scheduledTime}）。请改用 delay_minutes 指定延迟分钟数。`,
+              );
+            }
+            if (parsed.getTime() <= refNow) {
+              const nowStr = new Date(refNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
+              return ok(
+                `创建失败：指定时间 ${parsed.toLocaleString("zh-CN", { timeZone: tz, hour12: false })} 已经过去（当前时间：${nowStr}）。\n请改用 delay_minutes 参数指定从现在起延迟的分钟数，例如 delay_minutes=2 表示2分钟后。`,
+              );
+            }
+            scheduledTime = parsed.toISOString();
+          } else {
+            return ok(`创建失败：once 类型必须提供 delay_minutes（推荐）或 scheduledTime。`);
           }
-          if (parsed.getTime() <= refNow) {
-            const nowStr = new Date(refNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
-            return ok(
-              `创建失败：指定时间 ${parsed.toLocaleString("zh-CN", { timeZone: tz, hour12: false })} 已经过去（当前时间：${nowStr}）。\n请改用 delay_minutes 参数指定从现在起延迟的分钟数，例如 delay_minutes=2 表示2分钟后。`,
-            );
-          }
-          scheduledTime = parsed.toISOString();
-        } else {
-          return ok(`创建失败：once 类型必须提供 delay_minutes（推荐）或 scheduledTime。`);
         }
+
+        const task = await addScheduledTask({
+          name: String(input.name ?? ""),
+          prompt: String(input.prompt ?? ""),
+          enabled: true,
+          scheduleType,
+          assistantId: input.assistantId,
+          cwd: input.cwd ? String(input.cwd) : undefined,
+          scheduledTime,
+          intervalValue: input.intervalValue ? Number(input.intervalValue) : undefined,
+          intervalUnit: input.intervalUnit ?? undefined,
+          dailyTime: input.dailyTime ? String(input.dailyTime) : undefined,
+          dailyDays: Array.isArray(input.dailyDays) ? input.dailyDays : undefined,
+          // Auto-inject SOP context when running inside a workflow — hides task from calendar
+          ...(workflowSopId ? { sopId: workflowSopId, hidden: true } : {}),
+        });
+
+        const nextRunStr = task.nextRun
+          ? new Date(task.nextRun).toLocaleString("zh-CN", { timeZone: tz, hour12: false })
+          : "未知";
+
+        return ok(
+          `定时任务已创建！\n- 名称：${task.name}\n- 类型：${task.scheduleType}\n- 下次执行：${nextRunStr}\n- 任务 ID：${task.id}`,
+        );
+      } catch (err) {
+        return ok(`创建失败: ${err instanceof Error ? err.message : String(err)}`);
       }
-
-      const task = await addScheduledTask({
-        name: String(input.name ?? ""),
-        prompt: String(input.prompt ?? ""),
-        enabled: true,
-        scheduleType,
-        assistantId: input.assistantId,
-        cwd: input.cwd ? String(input.cwd) : undefined,
-        scheduledTime,
-        intervalValue: input.intervalValue ? Number(input.intervalValue) : undefined,
-        intervalUnit: input.intervalUnit ?? undefined,
-        dailyTime: input.dailyTime ? String(input.dailyTime) : undefined,
-        dailyDays: Array.isArray(input.dailyDays) ? input.dailyDays : undefined,
-      });
-
-      const nextRunStr = task.nextRun
-        ? new Date(task.nextRun).toLocaleString("zh-CN", { timeZone: tz, hour12: false })
-        : "未知";
-
-      return ok(
-        `定时任务已创建！\n- 名称：${task.name}\n- 类型：${task.scheduleType}\n- 下次执行：${nextRunStr}\n- 任务 ID：${task.id}`,
-      );
-    } catch (err) {
-      return ok(`创建失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
+    },
+  );
+}
 
 const listScheduledTasksTool = tool(
   "list_scheduled_tasks",
@@ -836,19 +843,35 @@ function createSaveMemoryTool(assistantId?: string) {
     "保存长期记忆条目。默认写入你的专属记忆（仅你可见），只有团队级信息才设 scope 为 shared。\n\n" +
       "专属记忆（scope: private）：你与用户的交互偏好、项目决策、技术方案、环境配置\n" +
       "共享记忆（scope: shared）：用户身份变更、团队级决策、用户明确要求所有助理知道的信息\n\n" +
-      "格式：[P0] 永久 / [P1|expire:YYYY-MM-DD] 90天 / [P2|expire:YYYY-MM-DD] 30天",
+      "格式（每条必须以 '- ' 或 '* ' 开头）：\n" +
+      "  - [P0] 永久条目\n" +
+      "  - [P1|expire:YYYY-MM-DD] 90天条目\n" +
+      "  - [P2|expire:YYYY-MM-DD] 30天条目\n" +
+      "禁止使用 XML 闭合标签（如 [/P0]）",
     {
-      content: z.string().describe("记忆条目内容，需包含 [P0]/[P1|expire:...]/[P2|expire:...] 标签"),
+      content: z.string().describe("记忆条目，每行以 '- [P0]' / '- [P1|expire:YYYY-MM-DD]' / '- [P2|expire:YYYY-MM-DD]' 或 '* ' 开头，禁止 [/P0] 等闭合标签"),
       scope: z.enum(["private", "shared"]).default("private").describe("写入范围：private（专属，默认）或 shared（团队共享）"),
     },
     async (input) => {
       try {
-        const content = String(input.content ?? "").trim();
+        let content = String(input.content ?? "").trim();
         if (!content) return ok("content 不能为空");
 
-        const taggedMemoryPattern = /^\s*(?:[-*]\s*)?\[(?:P0|P1\|expire:\d{4}-\d{2}-\d{2}|P2\|expire:\d{4}-\d{2}-\d{2})\]\s+/m;
+        // Auto-fix: strip XML-style closing tags (e.g. [/P0], [/P1|expire:...])
+        content = content.replace(/\[\/P[012][^\]]*\]/g, "").replace(/\s+$/, "");
+
+        // Auto-fix: ensure lines with lifecycle tags start with "- "
+        content = content.split("\n").map(line => {
+          const stripped = line.trimStart();
+          if (/^\[P[012][\]|]/.test(stripped) && !/^[-*]\s/.test(line)) {
+            return "- " + stripped.trimEnd();
+          }
+          return line.trimEnd();
+        }).join("\n").trim();
+
+        const taggedMemoryPattern = /^[-*]\s+\[(?:P0|P1\|expire:\d{4}-\d{2}-\d{2}|P2\|expire:\d{4}-\d{2}-\d{2})\]\s+/m;
         if (!taggedMemoryPattern.test(content)) {
-          return ok("保存失败：content 必须包含合法标签（[P0] / [P1|expire:YYYY-MM-DD] / [P2|expire:YYYY-MM-DD]）。");
+          return ok("保存失败：每个条目必须以 '- [P0] ' / '- [P1|expire:YYYY-MM-DD] ' / '- [P2|expire:YYYY-MM-DD] ' 开头。");
         }
 
         const settings = loadUserSettings();
@@ -949,12 +972,13 @@ const distillMemoryTool = tool(
     return ok(
       `[记忆蒸馏启动]${sopSection}\n` +
       `请回顾本次任务，用 save_memory 工具按以下规则提取信息：\n\n` +
-      `1. **环境事实**（路径/凭证/配置）→ save_memory(scope:"private") [P1|expire:90天后日期]\n` +
-      `2. **用户在你领域的偏好/决策** → save_memory(scope:"private") [P0]\n` +
-      `3. **用户身份变更/团队级决策** → save_memory(scope:"shared") [P0]\n` +
+      `1. **环境事实**（路径/凭证/配置）→ save_memory(scope:"private", content:"- [P1|expire:YYYY-MM-DD] 内容")\n` +
+      `   （YYYY-MM-DD 填今日+90天的日期，如今天是 ${new Date().toLocaleDateString("zh-CN", {year:"numeric",month:"2-digit",day:"2-digit"}).replace(/\//g,"-")}，则填 ${new Date(Date.now()+90*864e5).toISOString().slice(0,10)}）\n` +
+      `2. **用户在你领域的偏好/决策** → save_memory(scope:"private", content:"- [P0] 内容")\n` +
+      `3. **用户身份变更/团队级决策** → save_memory(scope:"shared", content:"- [P0] 内容")\n` +
       `4. **复杂任务流程**（多步骤、有踩坑点）→ 用 save_sop 保存\n` +
-      `5. **本次会话摘要** → 追加到 daily/今日.md\n` +
-      `6. **未完成任务/下次需继续的上下文** → 用 save_working_memory 保存\n\n` +
+      `5. **未完成任务/下次需继续的上下文** → 用 save_working_memory 保存\n` +
+      `   （daily 日志由系统自动写入，无需手动处理）\n\n` +
       `━━ 分流判断 ━━\n` +
       `默认写专属记忆（private）。只有当信息对所有助理都有用时才写共享（shared）。\n\n` +
       `━━ 禁止记忆 ━━\n` +
@@ -1562,19 +1586,23 @@ const systemInfoTool = tool(
 
 // ── Plan Table Tools ─────────────────────────────────────────────────────────
 
-function createUpsertPlanItemTool(assistantId?: string) {
+function createUpsertPlanItemTool(assistantId?: string, contextScheduledTaskId?: string) {
   return tool(
     "upsert_plan_item",
     "创建或更新一条计划项。用于在执行 SOP 过程中记录计划步骤和进度。\n" +
-      "如果已存在相同 sopName + assistantId 的计划项，则更新；否则创建新项。\n\n" +
+      "如果已存在相同 sopName + assistantId + targetId 的计划项，则更新；否则创建新项。\n" +
+      "当 SOP 针对多个目标（如多个学生）时，必须传入 target_id 和 target_name 以区分。\n\n" +
       "使用时机：\n" +
       "- 开始执行 SOP 某步骤前，创建计划项（status=pending 或 in_progress）\n" +
       "- 步骤进展中更新状态和内容",
     {
       sop_name: z.string().describe("SOP 步骤名称，如 'T-1 课前准备'、'月度结算'"),
+      category: z.enum(["客户服务", "情报监控", "内部运营", "增长销售"]).optional().describe("一级分类，建议始终传入"),
+      target_id: z.string().optional().describe("目标 ID，用于去重匹配，如 'student-001'。同一 SOP 针对不同目标时必填"),
+      target_name: z.string().optional().describe("目标显示名称，如 '张三'。留空则使用 target_id"),
       content: z.string().describe("具体执行内容描述"),
       scheduled_time: z.string().optional().describe("计划执行时间，ISO 格式（可选）"),
-      status: z.enum(["pending", "in_progress", "completed", "failed"]).optional().describe("状态，默认 pending"),
+      status: z.enum(["pending", "in_progress", "human_review", "completed", "failed"]).optional().describe("状态，默认 pending"),
       result: z.string().optional().describe("执行结果摘要（可选）"),
       session_id: z.string().optional().describe("关联的会话 ID（可选）"),
     },
@@ -1582,16 +1610,22 @@ function createUpsertPlanItemTool(assistantId?: string) {
       try {
         const item = upsertPlanItem({
           sopName: String(input.sop_name),
+          category: input.category ?? undefined,
+          targetId: input.target_id ? String(input.target_id) : undefined,
+          targetName: input.target_name ? String(input.target_name) : undefined,
           assistantId: assistantId ?? "",
           content: String(input.content),
           scheduledTime: input.scheduled_time ? String(input.scheduled_time) : undefined,
           status: input.status ?? "pending",
           result: input.result ? String(input.result) : undefined,
           sessionId: input.session_id ? String(input.session_id) : undefined,
+          scheduledTaskId: contextScheduledTaskId,
         });
+        const targetLabel = item.targetName ? `\n- 目标：${item.targetName}` : "";
+        const categoryLabel = item.category ? `\n- 分类：${item.category}` : "";
         return ok(
           `计划项已${item.createdAt === item.updatedAt ? "创建" : "更新"}：\n` +
-            `- SOP：${item.sopName}\n- 内容：${item.content.slice(0, 80)}\n` +
+            `- SOP：${item.sopName}${targetLabel}${categoryLabel}\n- 内容：${item.content.slice(0, 80)}\n` +
             `- 状态：${item.status}\n- ID：${item.id}`,
         );
       } catch (err) {
@@ -1608,6 +1642,7 @@ function createCompletePlanItemTool(assistantId?: string) {
     {
       plan_item_id: z.string().optional().describe("计划项 ID（与 sop_name 二选一）"),
       sop_name: z.string().optional().describe("SOP 步骤名称（与 plan_item_id 二选一）"),
+      target_id: z.string().optional().describe("目标 ID，多目标场景下用于精确匹配"),
       result: z.string().describe("执行结果摘要"),
       session_id: z.string().optional().describe("关联的会话 ID（可选）"),
     },
@@ -1618,11 +1653,14 @@ function createCompletePlanItemTool(assistantId?: string) {
         if (input.plan_item_id) {
           target = items.find((i) => i.id === input.plan_item_id);
         } else if (input.sop_name) {
+          const tid = input.target_id ?? "";
           target = items.find(
-            (i) => i.sopName === input.sop_name && (!assistantId || i.assistantId === assistantId),
+            (i) => i.sopName === input.sop_name
+              && (!assistantId || i.assistantId === assistantId)
+              && i.targetId === tid,
           );
         }
-        if (!target) return ok("未找到匹配的计划项。请检查 plan_item_id 或 sop_name。");
+        if (!target) return ok("未找到匹配的计划项。请检查 plan_item_id 或 sop_name + target_id。");
 
         const updated = updatePlanItem(target.id, {
           status: "completed",
@@ -1630,7 +1668,8 @@ function createCompletePlanItemTool(assistantId?: string) {
           result: String(input.result),
           ...(input.session_id && { sessionId: String(input.session_id) }),
         });
-        return ok(`计划项已完成：${updated?.sopName ?? target.sopName}\n结果：${input.result.slice(0, 120)}`);
+        const label = updated?.targetName ? ` [${updated.targetName}]` : "";
+        return ok(`计划项已完成：${updated?.sopName ?? target.sopName}${label}\n结果：${input.result.slice(0, 120)}`);
       } catch (err) {
         return ok(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1645,6 +1684,7 @@ function createFailPlanItemTool(assistantId?: string) {
     {
       plan_item_id: z.string().optional().describe("计划项 ID（与 sop_name 二选一）"),
       sop_name: z.string().optional().describe("SOP 步骤名称（与 plan_item_id 二选一）"),
+      target_id: z.string().optional().describe("目标 ID，多目标场景下用于精确匹配"),
       reason: z.string().describe("失败原因"),
     },
     async (input) => {
@@ -1654,28 +1694,31 @@ function createFailPlanItemTool(assistantId?: string) {
         if (input.plan_item_id) {
           target = items.find((i) => i.id === input.plan_item_id);
         } else if (input.sop_name) {
+          const tid = input.target_id ?? "";
           target = items.find(
-            (i) => i.sopName === input.sop_name && (!assistantId || i.assistantId === assistantId),
+            (i) => i.sopName === input.sop_name
+              && (!assistantId || i.assistantId === assistantId)
+              && i.targetId === tid,
           );
         }
-        if (!target) return ok("未找到匹配的计划项。请检查 plan_item_id 或 sop_name。");
+        if (!target) return ok("未找到匹配的计划项。请检查 plan_item_id 或 sop_name + target_id。");
 
         updatePlanItem(target.id, {
           status: "failed",
           result: String(input.reason),
         });
 
-        // Send DingTalk alert for failure
+        const targetLabel = target.targetName ? ` [${target.targetName}]` : "";
         const aid = target.assistantId || assistantId;
         if (aid) {
-          sendProactiveDingtalkMessage(aid, `**⚠️ 计划项执行失败**\n\n- SOP：${target.sopName}\n- 内容：${target.content}\n- 原因：${input.reason}`, {
-            title: `计划项失败: ${target.sopName}`,
+          sendProactiveDingtalkMessage(aid, `**⚠️ 计划项执行失败**\n\n- SOP：${target.sopName}${targetLabel}\n- 内容：${target.content}\n- 原因：${input.reason}`, {
+            title: `计划项失败: ${target.sopName}${targetLabel}`,
           }).catch((err: unknown) => {
             console.error("[PlanStore] Failed to send DingTalk alert:", err);
           });
         }
 
-        return ok(`计划项已标记失败：${target.sopName}\n原因：${input.reason}\n已发送钉钉告警通知。`);
+        return ok(`计划项已标记失败：${target.sopName}${targetLabel}\n原因：${input.reason}\n已发送钉钉告警通知。`);
       } catch (err) {
         return ok(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1686,9 +1729,11 @@ function createFailPlanItemTool(assistantId?: string) {
 function createListPlanItemsTool(assistantId?: string) {
   return tool(
     "list_plan_items",
-    "查询计划项列表，可按状态或助理筛选。",
+    "查询计划项列表，可按状态、目标或助理筛选。",
     {
-      status: z.enum(["pending", "in_progress", "completed", "failed"]).optional().describe("按状态筛选（可选）"),
+      status: z.enum(["pending", "in_progress", "human_review", "completed", "failed"]).optional().describe("按状态筛选（可选）"),
+      target_id: z.string().optional().describe("按目标 ID 筛选（可选）"),
+      target_name: z.string().optional().describe("按目标名称筛选（可选，模糊匹配）"),
       all_assistants: z.boolean().optional().describe("是否查看所有助理的计划项，默认只看当前助理"),
     },
     async (input) => {
@@ -1700,15 +1745,24 @@ function createListPlanItemsTool(assistantId?: string) {
         if (input.status) {
           items = items.filter((i) => i.status === input.status);
         }
+        if (input.target_id) {
+          items = items.filter((i) => i.targetId === input.target_id);
+        }
+        if (input.target_name) {
+          const q = input.target_name.toLowerCase();
+          items = items.filter((i) => i.targetName.toLowerCase().includes(q));
+        }
         if (items.length === 0) return ok("当前没有匹配的计划项。");
 
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const fmt = (iso: string) => new Date(iso).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
 
+        const statusIcons: Record<string, string> = { pending: "⏳", in_progress: "🔄", human_review: "👀", completed: "✅", failed: "❌" };
         const lines = items.map((i) => {
-          const statusIcon = { pending: "⏳", in_progress: "🔄", completed: "✅", failed: "❌" }[i.status];
+          const icon = statusIcons[i.status] ?? "•";
+          const targetLabel = i.targetName ? ` [${i.targetName}]` : "";
           return (
-            `- ${statusIcon} **${i.sopName}**\n` +
+            `- ${icon} **${i.sopName}**${targetLabel}\n` +
             `  内容：${i.content.slice(0, 80)}\n` +
             `  时间：${fmt(i.scheduledTime)} | 状态：${i.status}\n` +
             (i.result ? `  结果：${i.result.slice(0, 80)}\n` : "") +
@@ -1829,15 +1883,76 @@ function createSendNotificationTool(assistantId?: string) {
  * that assistant's private directory. SOP tools remain shared.
  * When sessionCwd is provided, run_script defaults to that directory.
  */
-export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?: string }) {
+
+// ── Tool catalog for SOP generation ─────────────────────────────────────────
+
+export interface ToolCatalogEntry {
+  name: string;
+  category: string;
+  description: string;
+  sopExclude?: true; // exclude from SOP generation prompts; framework handles this automatically
+}
+
+/**
+ * Static metadata catalog of all tools available in the shared MCP server.
+ * Used by sop.generate to inject an accurate, up-to-date tool list into the
+ * generation prompt — replacing the old hardcoded alias list.
+ */
+export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
+  // Scheduler — SOP scheduling is managed by the framework (sop.setSopSchedule); excluded from SOP generation prompts
+  { name: "create_scheduled_task", category: "调度", description: "创建一次性或周期性定时任务，到期自动启动 AI 会话执行", sopExclude: true },
+  { name: "list_scheduled_tasks",  category: "调度", description: "列出当前所有定时任务及其状态", sopExclude: true },
+  { name: "delete_scheduled_task", category: "调度", description: "删除指定定时任务", sopExclude: true },
+  // Web & Documents
+  { name: "web_search",   category: "网络", description: "通过 DuckDuckGo 搜索网络，返回 top 结果" },
+  { name: "web_fetch",    category: "网络", description: "抓取指定 URL 内容并以纯文本返回" },
+  { name: "read_document", category: "文件", description: "读取本地文件（PDF/Word/Excel/文本/CSV）内容" },
+  // Memory
+  { name: "save_memory",         category: "记忆", description: "保存长期记忆条目（private 专属 / shared 团队共享）" },
+  { name: "save_working_memory", category: "记忆", description: "保存当前任务上下文的工作记忆检查点" },
+  // framework injects prevOutput automatically; manual read is redundant and confusing in SOP stages
+  { name: "read_working_memory", category: "记忆", description: "读取最近保存的工作记忆检查点", sopExclude: true },
+  { name: "query_team_memory",   category: "记忆", description: "跨助理只读搜索记忆，获取其他助理的历史上下文", sopExclude: true },
+  // memory management ops, not business tools
+  { name: "distill_memory",      category: "记忆", description: "任务完成后触发结构化记忆蒸馏，提取值得长期保留的信息", sopExclude: true },
+  // SOP meta-operations — must not appear in SOP business stage steps
+  { name: "save_sop",    category: "SOP", description: "保存或更新一个标准操作流程（SOP）", sopExclude: true },
+  { name: "list_sops",   category: "SOP", description: "列出所有已保存的 SOP", sopExclude: true },
+  { name: "read_sop",    category: "SOP", description: "读取指定名称的 SOP 完整内容", sopExclude: true },
+  { name: "search_sops", category: "SOP", description: "按关键词搜索相关 SOP", sopExclude: true },
+  // Script & Automation
+  { name: "run_script",      category: "脚本", description: "执行 Python / PowerShell / Node.js 脚本，支持超时控制" },
+  { name: "desktop_control", category: "桌面", description: "发送键盘输入或控制鼠标，实现桌面自动化" },
+  { name: "take_screenshot", category: "桌面", description: "截取当前桌面屏幕截图" },
+  { name: "screen_analyze",  category: "桌面", description: "截取屏幕并返回路径和活动窗口信息" },
+  { name: "process_control", category: "系统", description: "列出、启动或终止系统进程" },
+  { name: "clipboard",       category: "系统", description: "读取或写入系统剪贴板内容" },
+  { name: "system_info",     category: "系统", description: "获取 OS / CPU / 内存 / 磁盘 / 网络等系统环境信息" },
+  // Plan Table — managed automatically by the workflow framework; excluded from SOP generation prompts
+  { name: "upsert_plan_item",    category: "计划", description: "创建或更新计划表中的一条任务项", sopExclude: true },
+  { name: "complete_plan_item",  category: "计划", description: "将计划任务项标记为已完成", sopExclude: true },
+  { name: "fail_plan_item",      category: "计划", description: "将计划任务项标记为失败并记录原因", sopExclude: true },
+  { name: "list_plan_items",     category: "计划", description: "列出计划表中的所有任务项", sopExclude: true },
+  // Notification
+  { name: "send_notification", category: "通知", description: "向用户发送主动通知（Telegram > 飞书 > 钉钉 优先级）" },
+  // News & Social
+  { name: "news_latest",         category: "资讯", description: "获取最新加密货币/财经资讯（含 AI 评分和交易信号）" },
+  { name: "news_search",         category: "资讯", description: "按关键词搜索加密货币/财经资讯" },
+  { name: "twitter_user_tweets", category: "社交", description: "获取指定 Twitter/X 用户的最近推文" },
+  { name: "twitter_search",      category: "社交", description: "搜索 Twitter/X 推文（支持关键词/话题/用户过滤）" },
+];
+
+export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?: string; workflowSopId?: string; scheduledTaskId?: string }) {
   const assistantId = opts?.assistantId;
   const sessionCwd = opts?.sessionCwd;
+  const workflowSopId = opts?.workflowSopId;
+  const scheduledTaskId = opts?.scheduledTaskId;
   return createSdkMcpServer({
     name: "vk-shared",
     version: "2.0.0",
     tools: [
       // Scheduler
-      createScheduledTaskTool,
+      createScheduledTaskTool(workflowSopId),
       listScheduledTasksTool,
       deleteScheduledTaskTool,
       // Web & Documents
@@ -1874,7 +1989,7 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       twitterUserTweetsTool,
       twitterSearchTool,
       // Plan Table (AI writes, frontend reads)
-      createUpsertPlanItemTool(assistantId),
+      createUpsertPlanItemTool(assistantId, scheduledTaskId),
       createCompletePlanItemTool(assistantId),
       createFailPlanItemTool(assistantId),
       createListPlanItemsTool(assistantId),

@@ -8,6 +8,66 @@ import { SchedulerModal } from "./SchedulerModal";
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
 export const ASSISTANT_PANEL_WIDTH = 168;
 
+/**
+ * WeChat-style relative time for list items:
+ * <1min → 刚刚, today → HH:mm, yesterday → 昨天,
+ * 2-6 days → 星期X, same year → M月D日, older → YYYY/M/D
+ */
+function formatRelativeTime(timestamp?: number): string {
+  if (!timestamp) return "";
+  const now = new Date();
+  const d = new Date(timestamp);
+  const diffMs = now.getTime() - d.getTime();
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart.getTime() - 86400000);
+
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+  if (diffMs < 60_000) return "刚刚";
+  if (d >= todayStart) return hhmm;
+  if (d >= yesterdayStart) return "昨天";
+
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays < 7) {
+    return ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"][d.getDay()];
+  }
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/**
+ * WeChat-style full time for conversation headers:
+ * today → HH:mm, yesterday → 昨天 HH:mm, 2-6 days → 星期X HH:mm,
+ * same year → M月D日 HH:mm, older → YYYY年M月D日 HH:mm
+ */
+export function formatConversationTime(timestamp?: number): string {
+  if (!timestamp) return "";
+  const now = new Date();
+  const d = new Date(timestamp);
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart.getTime() - 86400000);
+
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+  if (d >= todayStart) return hhmm;
+  if (d >= yesterdayStart) return `昨天 ${hhmm}`;
+
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diffDays < 7) {
+    return `${["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"][d.getDay()]} ${hhmm}`;
+  }
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
+  }
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
+}
+
 function loadAssistantCwdLocal(assistantId: string | null): string {
   if (!assistantId) return "";
   try {
@@ -29,8 +89,10 @@ interface SidebarProps {
   onToggleTaskPanel: () => void;
   onShowSplash?: () => void;
   onOpenSop?: () => void;
-  onOpenKnowledge?: () => void;
+  onOpenPlanTable?: () => void;
   titleBarHeight?: number;
+  darkMode?: boolean;
+  onDarkModeChange?: (enabled: boolean) => void;
 }
 
 export function Sidebar({
@@ -44,8 +106,10 @@ export function Sidebar({
   onToggleTaskPanel,
   onShowSplash,
   onOpenSop,
-  onOpenKnowledge,
+  onOpenPlanTable,
   titleBarHeight = 0,
+  darkMode,
+  onDarkModeChange,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -146,7 +210,7 @@ export function Sidebar({
 
   return (
     <aside
-      className={`fixed left-0 bottom-0 flex flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 overflow-hidden ${titleBarHeight > 0 ? "pt-2" : "pt-12"}`}
+      className={`fixed left-0 bottom-0 flex flex-col border-r border-ink-900/5 bg-surface-cream pb-4 overflow-hidden ${titleBarHeight > 0 ? "pt-2" : "pt-12"}`}
       style={{ top: `${titleBarHeight}px`, width: `${effectiveWidth}px`, transition: "width 0.2s ease, top 0.15s ease" }}
     >
       {titleBarHeight === 0 && (
@@ -237,16 +301,6 @@ export function Sidebar({
               <span className="text-[11px] font-medium">团队管理</span>
             </button>
             <button
-              onClick={() => onOpenKnowledge?.()}
-              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                <path d="M12 11v6M9 14h6" />
-              </svg>
-              <span className="text-[11px] font-medium">经验</span>
-            </button>
-            <button
               onClick={() => onOpenSop?.()}
               className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
             >
@@ -255,7 +309,17 @@ export function Sidebar({
                 <path d="M15 7h2a5 5 0 010 10h-2" />
                 <line x1="8" y1="12" x2="16" y2="12" />
               </svg>
-              <span className="text-[11px] font-medium">SOP</span>
+              <span className="text-[11px] font-medium">工作流程</span>
+            </button>
+            <button
+              onClick={() => onOpenPlanTable?.()}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M3 9h18M9 3v18" />
+              </svg>
+              <span className="text-[11px] font-medium">计划中心</span>
             </button>
             <button
               onClick={() => setShowScheduler(true)}
@@ -346,11 +410,17 @@ export function Sidebar({
                     }`}>
                       {session.title || "未命名任务"}
                     </span>
-                    {session.cwd && (
-                      <span className="mt-0.5 truncate text-[10.5px] text-muted-light">
-                        {formatCwd(session.cwd)}
-                      </span>
-                    )}
+                    <div className="mt-0.5 flex items-center text-[10.5px] text-muted-light truncate">
+                      {session.updatedAt ? (
+                        <>
+                          <span className="shrink-0 tabular-nums">{formatRelativeTime(session.updatedAt)}</span>
+                          {session.cwd && <span className="mx-1 opacity-40">·</span>}
+                          {session.cwd && <span className="truncate">{formatCwd(session.cwd)}</span>}
+                        </>
+                      ) : session.cwd ? (
+                        <span className="truncate">{formatCwd(session.cwd)}</span>
+                      ) : null}
+                    </div>
                   </div>
 
                   {/* 菜单按钮：默认隐藏，hover/active 时显示 */}
@@ -374,7 +444,7 @@ export function Sidebar({
                       </button>
                     </DropdownMenu.Trigger>
                     <DropdownMenu.Portal>
-                      <DropdownMenu.Content className="z-50 min-w-[200px] rounded-xl border border-ink-900/8 bg-white p-1 shadow-elevated" align="end" sideOffset={4}>
+                      <DropdownMenu.Content className="z-50 min-w-[200px] rounded-xl border border-ink-900/8 bg-surface p-1 shadow-elevated" align="end" sideOffset={4}>
                         <DropdownMenu.Item className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={() => onDeleteSession(session.id)}>
                           <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-error/70" fill="none" stroke="currentColor" strokeWidth="1.8">
                             <path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9l1-12" />
@@ -393,7 +463,7 @@ export function Sidebar({
         )}
       </div>
 
-      <SettingsModal open={showSettings} onOpenChange={setShowSettings} onShowSplash={onShowSplash} />
+      <SettingsModal open={showSettings} onOpenChange={setShowSettings} onShowSplash={onShowSplash} darkMode={darkMode} onDarkModeChange={onDarkModeChange} />
 
       <AssistantManagerModal
         open={showAssistantManager}

@@ -22,6 +22,8 @@ export type Session = {
   assistantSkillNames?: string[];
   background?: boolean;
   hidden?: boolean;
+  workflowSopId?: string;    // in-memory: set when session is part of a SOP workflow
+  scheduledTaskId?: string;  // in-memory: set when session was triggered by a scheduled task
   pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;
 };
@@ -92,7 +94,7 @@ export class SessionStore {
     this.loadSessions();
   }
 
-  createSession(options: { cwd?: string; allowedTools?: string; prompt?: string; title: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; background?: boolean }): Session {
+  createSession(options: { cwd?: string; allowedTools?: string; prompt?: string; title: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; background?: boolean; workflowSopId?: string; scheduledTaskId?: string }): Session {
     const id = crypto.randomUUID();
     const now = Date.now();
     const session: Session = {
@@ -107,6 +109,8 @@ export class SessionStore {
       assistantId: options.assistantId,
       assistantSkillNames: options.assistantSkillNames ?? [],
       background: options.background,
+      workflowSopId: options.workflowSopId,
+      scheduledTaskId: options.scheduledTaskId,
       pendingPermissions: new Map()
     };
     this.sessions.set(id, session);

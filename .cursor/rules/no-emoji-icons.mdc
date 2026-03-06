@@ -1,0 +1,32 @@
+---
+description: Icon 不用 emoji，统一用 inline SVG
+globs: src/ui/**/*.tsx
+alwaysApply: false
+---
+
+# Icon 规范：SVG 替代 Emoji
+
+UI 中所有图标一律使用 inline SVG，禁止使用 emoji 字符。
+
+```tsx
+// ❌ BAD
+<span className="text-base">{item.icon}</span>    // "🎓" emoji
+<span>📋</span>
+
+// ✅ GOOD — inline SVG with currentColor
+<svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+  <path d="M12 14l9-5-9-5-9 5 9 5z" />
+  <path d="M12 14l6.16-3.42A12 12 0 0112 21a12 12 0 01-6.16-10.42L12 14z" />
+</svg>
+
+// ✅ GOOD — icon 为空时用分类色首字母圆标
+<span
+  className="flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-white"
+  style={{ backgroundColor: categoryColor }}
+>
+  {name.slice(0, 1)}
+</span>
+```
+
+- 静态数据中 `icon` 字段留空字符串 `""`，渲染时 fallback 到首字母圆标
+- HAND.toml 等外部数据可能带 emoji，渲染层统一用 SVG 或首字母替代

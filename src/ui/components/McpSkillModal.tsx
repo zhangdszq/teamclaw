@@ -953,7 +953,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                               className={`flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] transition-colors ${
                                                 checked
                                                   ? "border-accent/40 bg-accent/10 text-ink-800"
-                                                  : "border-ink-900/10 bg-white text-muted hover:border-ink-900/20"
+                                                  : "border-ink-900/10 bg-surface text-muted hover:border-ink-900/20"
                                               }`}
                                             >
                                               <input

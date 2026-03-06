@@ -210,9 +210,37 @@ export default memo(function MDContent({ text }: { text: string }) {
           />
         ),
         code: (props) => {
-          const { children, className, ...rest } = props;
+          const { children, className, node: _node, ...rest } = props as typeof props & { node?: unknown };
           const match = /language-(\w+)/.exec(className || "");
-          const isInline = !match && !String(children).includes("\n");
+          const content = String(children);
+          const isInline = !match && !content.includes("\n");
+          const isFilePath = isInline && (
+            /^\/[^\s]/.test(content) ||
+            /^[A-Za-z]:[/\\]/.test(content)
+          );
+
+          if (isFilePath) {
+            const fileName = content.split(/[/\\]/).filter(Boolean).pop() ?? content;
+            return (
+              <code
+                className="inline-flex items-center gap-1 rounded bg-surface-tertiary px-1.5 py-0.5 text-accent font-mono text-[13px] cursor-pointer hover:bg-accent/10 hover:underline underline-offset-2 transition-colors"
+                title={content}
+                onClick={() => {
+                  if (typeof window.electron?.showItemInFolder === "function") {
+                    void window.electron.showItemInFolder(content);
+                  } else {
+                    void window.electron.openPath(content.split(/[/\\]/).slice(0, -1).join("/") || "/");
+                  }
+                }}
+                {...rest}
+              >
+                <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-60">
+                  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.08a1.5 1.5 0 0 1 1.06.44L6.5 3.5H11A1.5 1.5 0 0 1 12.5 5v5A1.5 1.5 0 0 1 11 11.5h-8.5A1.5 1.5 0 0 1 1 10V3.5Z" />
+                </svg>
+                {fileName}
+              </code>
+            );
+          }
 
           return isInline ? (
             <code className="rounded bg-surface-tertiary px-1.5 py-0.5 text-accent font-mono text-[13px]" {...rest}>

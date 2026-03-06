@@ -3,7 +3,7 @@ import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { useIPC } from "./hooks/useIPC";
 import { useAppStore } from "./store/useAppStore";
 import type { ServerEvent } from "./types";
-import { Sidebar, ASSISTANT_PANEL_WIDTH } from "./components/Sidebar";
+import { Sidebar, ASSISTANT_PANEL_WIDTH, formatConversationTime } from "./components/Sidebar";
 import { PromptInput, usePromptActions } from "./components/PromptInput";
 import { MessageCard, ProcessGroup } from "./components/EventCard";
 import { MessageSkeleton } from "./components/MessageSkeleton";
@@ -27,6 +27,14 @@ import splash1 from "../../assets/splash-1.jpg";
 const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
 const LIKED_MESSAGE_KEYS = "vk-cowork-liked-message-keys";
+const DARK_MODE_KEY = "vk-cowork-dark-mode";
+
+// Apply dark mode class immediately to prevent flash
+(function initDarkMode() {
+  if (localStorage.getItem(DARK_MODE_KEY) === "true") {
+    document.documentElement.classList.add("dark");
+  }
+})();
 
 function ThinkingDots() {
   return (
@@ -83,7 +91,7 @@ function WorkspaceDropdown({ currentCwd, onSelect, onBrowse }: WorkspaceDropdown
   };
 
   return (
-    <div className="absolute right-0 top-full z-50 mt-1.5 w-72 rounded-xl border border-ink-900/10 bg-white shadow-elevated overflow-hidden">
+    <div className="absolute right-0 top-full z-50 mt-1.5 w-72 rounded-xl border border-ink-900/10 bg-surface shadow-elevated overflow-hidden">
       {recentCwds.length > 0 ? (
         <div className="py-1.5">
           <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-light">
@@ -239,11 +247,11 @@ function GoogleLoginScreen({ onLoggedIn, onSkip }: { onLoggedIn: () => void; onS
           className="absolute inset-0 h-full w-full object-cover"
         />
         {/* Frosted overlay */}
-        <div className="absolute inset-0 bg-white/30 backdrop-blur-[2px]" />
+        <div className="absolute inset-0 bg-surface/30 backdrop-blur-[2px]" />
 
         {/* Centered login card */}
         <div className="relative z-10 flex h-full items-center justify-center p-8">
-          <div className="w-full max-w-[380px] rounded-3xl bg-white/90 backdrop-blur-md border border-white/60 px-10 py-12" style={{ boxShadow: "0 0 40px 20px rgba(255,255,255,0.5), 0 8px 32px rgba(0,0,0,0.1)" }}>
+          <div className="w-full max-w-[380px] rounded-3xl bg-surface/90 backdrop-blur-md border border-surface/60 px-10 py-12" style={{ boxShadow: "0 0 40px 20px rgba(0,0,0,0.15), 0 8px 32px rgba(0,0,0,0.1)" }}>
             <div className="text-center mb-9">
               <img
                 src={appIconUrl}
@@ -260,7 +268,7 @@ function GoogleLoginScreen({ onLoggedIn, onSkip }: { onLoggedIn: () => void; onS
               <button
                 onClick={handleLogin}
                 disabled={loggingIn}
-                className="w-full flex items-center justify-center gap-3 rounded-2xl border border-ink-900/8 bg-white px-5 py-3.5 text-[15px] font-medium text-ink-800 shadow-card hover:shadow-elevated hover:border-ink-900/15 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-3 rounded-2xl border border-ink-900/8 bg-surface px-5 py-3.5 text-[15px] font-medium text-ink-800 shadow-card hover:shadow-elevated hover:border-ink-900/15 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loggingIn ? (
                   <>
@@ -353,9 +361,7 @@ function App() {
 
   const handleSplashComplete = useCallback(() => {
     setShowSplash(false);
-    window.electron.getUserSettings().then((s) => {
-      window.electron.saveUserSettings({ ...s, splashSeen: true });
-    }).catch(console.error);
+    window.electron.saveUserSettings({ splashSeen: true }).catch(console.error);
   }, []);
 
   // Google login gate — null = still checking, true = logged in, false = needs login
@@ -417,12 +423,26 @@ function App() {
   const setCwd = useAppStore((s) => s.setCwd);
   const showSystemInfo = useAppStore((s) => s.showSystemInfo);
 
+  // Dark mode state
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem(DARK_MODE_KEY) === "true");
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+    localStorage.setItem(DARK_MODE_KEY, String(darkMode));
+  }, [darkMode]);
+
   // User display name from personalization settings + splash seen check
   const [userName, setUserName] = useState("User");
   useEffect(() => {
     window.electron.getUserSettings().then((s) => {
       if (s.userName?.trim()) setUserName(s.userName.trim());
       setShowSplash(!s.splashSeen);
+      if (s.darkMode !== undefined) {
+        setDarkMode(s.darkMode);
+      }
     }).catch(() => {
       setShowSplash(false);
     });
@@ -643,6 +663,8 @@ function App() {
 
   // Track which plan item triggered the current scheduler run, for session linkback
   const pendingPlanItemIdRef = useRef<string | null>(null);
+  const pendingWorkflowRef = useRef<{ sopId: string; stageId: string } | null>(null);
+  const workflowSessionMapRef = useRef<Record<string, { sopId: string; stageId: string }>>({});
   const prevActiveSessionIdRef = useRef<string | null>(activeSessionId);
 
   // Listen for scheduler task execution events
@@ -652,8 +674,13 @@ function App() {
       if (task.planItemId) {
         pendingPlanItemIdRef.current = task.planItemId;
       }
+      if (task.workflowSopId && task.workflowStageId) {
+        pendingWorkflowRef.current = { sopId: task.workflowSopId, stageId: task.workflowStageId };
+      }
       const effectiveCwd = task.cwd || cwd || "/Users";
-      const sessionTitle = task.planItemId
+      const sessionTitle = task.workflowSopId
+        ? `SOP · ${task.sopName || task.name}${task.planTaskName ? ` · ${task.planTaskName}` : ""}`
+        : task.planItemId
         ? `SOP · ${task.sopName || task.name}${task.planTaskName ? ` · ${task.planTaskName}` : ""}`
         : `定时任务: ${task.name}`;
       handleStartFromModal({
@@ -661,23 +688,30 @@ function App() {
         cwd: effectiveCwd,
         title: sessionTitle,
         assistantId: task.assistantId,
+        workflowSopId: task.workflowSopId,
+        scheduledTaskId: task.scheduledTaskId,
       });
     });
     return unsubscribe;
   }, [handleStartFromModal, cwd]);
 
-  // When a new session is activated after a plan item run, write sessionId back to the plan item
+  // When a new session is activated after a plan item or workflow stage run, link it
   useEffect(() => {
     if (
       activeSessionId &&
-      activeSessionId !== prevActiveSessionIdRef.current &&
-      pendingPlanItemIdRef.current
+      activeSessionId !== prevActiveSessionIdRef.current
     ) {
-      const planItemId = pendingPlanItemIdRef.current;
-      pendingPlanItemIdRef.current = null;
-      window.electron.updatePlanItemSession(planItemId, activeSessionId).catch((err: unknown) => {
-        console.error("[PlanTable] Failed to link session to plan item:", err);
-      });
+      if (pendingPlanItemIdRef.current) {
+        const planItemId = pendingPlanItemIdRef.current;
+        pendingPlanItemIdRef.current = null;
+        window.electron.updatePlanItemSession(planItemId, activeSessionId).catch((err: unknown) => {
+          console.error("[PlanTable] Failed to link session to plan item:", err);
+        });
+      }
+      if (pendingWorkflowRef.current) {
+        workflowSessionMapRef.current[activeSessionId] = pendingWorkflowRef.current;
+        pendingWorkflowRef.current = null;
+      }
     }
     prevActiveSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -722,6 +756,78 @@ function App() {
         }).catch((err: unknown) => {
           console.error("[Scheduler] Failed to send DingTalk notification:", err);
         });
+      }
+
+      // Workflow stage completion: detect when a workflow-linked session finishes
+      const wf = workflowSessionMapRef.current[sessionId];
+      if (
+        wf &&
+        prevStatus === "running" &&
+        curStatus !== "running"
+      ) {
+        const lastAssistantMsg = [...session.messages]
+          .reverse()
+          .find((m: any) => m.type === "assistant") as any;
+        const output: string =
+          lastAssistantMsg?.message?.content
+            ?.filter((c: any) => c.type === "text")
+            ?.map((c: any) => c.text as string)
+            ?.join("\n")
+            ?.trim() || "";
+
+        const isError = curStatus === "error";
+        // Extract structured summary — capture only the summary heading + bullet lines + step checklist.
+        // Stop at unrelated headings, horizontal rules, or non-list content to avoid noise.
+        let abstract = "";
+        const summaryStart = output.match(/##\s*阶段结果摘要/);
+        if (summaryStart && summaryStart.index != null) {
+          const afterHeading = output.slice(summaryStart.index);
+          const contentLines: string[] = [];
+          let seenContent = false;
+          for (const line of afterHeading.split("\n")) {
+            if (!seenContent) {
+              contentLines.push(line);
+              seenContent = true;
+              continue;
+            }
+            const trimmed = line.trim();
+            // Stop at unrelated headings (## but not ### 步骤完成情况)
+            if (/^##\s/.test(trimmed) && !/^###\s*步骤完成情况/.test(trimmed)) break;
+            // Stop at horizontal rules
+            if (/^---+\s*$/.test(trimmed)) break;
+            // Allow: bullet points, checkboxes, sub-headings for steps, blank lines between items
+            if (
+              trimmed === "" ||
+              trimmed.startsWith("- ") ||
+              trimmed.startsWith("* ") ||
+              /^###\s*步骤完成情况/.test(trimmed) ||
+              /^\(.+\)$/.test(trimmed)
+            ) {
+              contentLines.push(line);
+            } else {
+              break;
+            }
+          }
+          // Remove trailing blank lines
+          while (contentLines.length > 0 && contentLines[contentLines.length - 1].trim() === "") {
+            contentLines.pop();
+          }
+          abstract = contentLines.join("\n").trim().slice(0, 500);
+        }
+        if (!abstract) {
+          abstract = output.length > 300 ? output.slice(0, 300) + "..." : output;
+        }
+
+        window.electron.workflowStageComplete({
+          sopId: wf.sopId,
+          stageId: wf.stageId,
+          output,
+          abstract,
+          sessionId,
+          error: isError ? (output || "Agent 执行出错") : undefined,
+        });
+
+        delete workflowSessionMapRef.current[sessionId];
       }
 
       prevSessionStatusRef.current[sessionId] = curStatus;
@@ -987,6 +1093,7 @@ function App() {
   // SOP page state
   const [showSopPage, setShowSopPage] = useState(false);
   const [showPlanTable, setShowPlanTable] = useState(false);
+  const [planTableSopName, setPlanTableSopName] = useState<string | undefined>();
   const [showKnowledgePage, setShowKnowledgePage] = useState(false);
 
   // Header compact mode: hide button labels when header is narrow
@@ -1096,8 +1203,13 @@ function App() {
         onToggleTaskPanel={handleToggleTaskPanel}
         onShowSplash={() => setShowSplash(true)}
         onOpenSop={() => setShowSopPage(true)}
-        onOpenKnowledge={() => setShowKnowledgePage(true)}
+        onOpenPlanTable={() => {
+          setPlanTableSopName(undefined);
+          setShowPlanTable(true);
+        }}
         titleBarHeight={titleBarH}
+        darkMode={darkMode}
+        onDarkModeChange={setDarkMode}
       />
 
       <main
@@ -1220,14 +1332,23 @@ function App() {
           </div>
         ) : null}
 
-        <div ref={scrollContainerRef} className={`flex-1 px-8 pt-6 ${(messages.length > 0 || isLoadingHistory) ? "overflow-y-auto" : "overflow-hidden"} ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`} style={{ paddingBottom: (messages.length > 0 || isLoadingHistory) ? `${inputAreaHeight + 16}px` : 0 }}>
+        <div ref={scrollContainerRef} className={`select-text flex-1 px-8 pt-6 ${(messages.length > 0 || isLoadingHistory) ? "overflow-y-auto" : "overflow-hidden"} ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`} style={{ paddingBottom: (messages.length > 0 || isLoadingHistory) ? `${inputAreaHeight + 16}px` : 0 }}>
           <div className="mx-auto max-w-3xl">
             {isLoadingHistory ? (
               // 骨架屏 - 加载历史消息时显示
               <MessageSkeleton />
             ) : messages.length === 0 ? null : (
-              // 打字机动画进行时，从列表中隐藏正在被动画展示的消息（避免重复显示）
-              groupMessages(
+              <>
+              {/* Session start time pill — WeChat-style separator */}
+              {activeSession?.createdAt && (
+                <div className="flex justify-center pb-2">
+                  <span className="text-[11px] text-muted-light/80 bg-ink-900/[0.04] rounded-full px-3 py-0.5 select-none">
+                    {formatConversationTime(activeSession.createdAt)}
+                  </span>
+                </div>
+              )}
+              {/* 打字机动画进行时，从列表中隐藏正在被动画展示的消息（避免重复显示） */}
+              {groupMessages(
                 (animatingMsgUuid
                   ? messages.filter(msg => (msg as any).uuid !== animatingMsgUuid)
                   : messages
@@ -1266,7 +1387,8 @@ function App() {
                     userName={userName}
                   />
                 );
-              })
+              })}
+              </>
             )}
 
             {/* Loading skeleton - show when running but no response yet */}
@@ -1351,9 +1473,14 @@ function App() {
       {showSopPage && (
         <SopPage
           onClose={() => setShowSopPage(false)}
-          onOpenPlanTable={() => {
+          onOpenPlanTable={(sopName) => {
+            setPlanTableSopName(sopName);
             setShowSopPage(false);
             setShowPlanTable(true);
+          }}
+          onNavigateToSession={(sessionId) => {
+            setShowSopPage(false);
+            useAppStore.getState().setActiveSessionId(sessionId);
           }}
           titleBarHeight={titleBarH}
         />
@@ -1362,11 +1489,12 @@ function App() {
       {showPlanTable && (
         <PlanTablePage
           onClose={() => setShowPlanTable(false)}
-          onBack={() => {
+          onBack={planTableSopName ? () => {
             setShowPlanTable(false);
             setShowSopPage(true);
-          }}
+          } : undefined}
           titleBarHeight={titleBarH}
+          initialSopName={planTableSopName}
           onNavigateToSession={(sessionId, assistantId) => {
             setShowPlanTable(false);
             window.electron.getAssistantsConfig().then((config) => {

@@ -406,11 +406,11 @@
     },
     {
       "name": "skill-creator",
-      "label": "技能创建指南",
-      "description": "创建有效技能的指南。当用户想要创建新技能（或更新现有技能）来扩展 Claude 的专业知识、工作流程或工具集成能力时使用。",
+      "label": "技能创建器",
+      "description": "创建新技能、迭代改进已有技能、运行评估测试。支持完整的技能开发工作流：起草、测试、评审、优化触发描述。应用已内置，无需安装。",
       "category": "development",
-      "installPath": "",
-      "tags": ["skill", "create", "guide", "claude", "ai"]
+      "installPath": "https://github.com/anthropics/skills/tree/main/skills/skill-creator",
+      "tags": ["skill", "creator", "eval", "benchmark", "development"]
     },
     {
       "name": "feishu-card",

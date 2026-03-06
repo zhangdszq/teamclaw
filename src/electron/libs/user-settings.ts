@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { readFile as readFileAsync } from "fs/promises";
-import { join, dirname } from "path";
+import { join } from "path";
+import { homedir } from "os";
 import { app } from "electron";
 
 export interface OpenAITokens {
@@ -51,6 +52,8 @@ export interface UserSettings {
   alertDingtalkSecret?: string;
   // Memory isolation V3: per-assistant private MEMORY.md (default: true)
   memoryIsolationV3?: boolean;
+  // UI dark mode
+  darkMode?: boolean;
 }
 
 // Custom error class for validation errors
@@ -228,18 +231,42 @@ function validateUserSettings(settings: unknown): asserts settings is UserSettin
     throw new UserSettingsValidationError('alertDingtalkSecret must be a string');
   }
 
+  // Validate darkMode if provided
+  if (s.darkMode !== undefined && typeof s.darkMode !== 'boolean') {
+    throw new UserSettingsValidationError('darkMode must be a boolean');
+  }
+
 }
 
-const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");
+const VK_COWORK_DIR = join(homedir(), ".vk-cowork");
+const SETTINGS_FILE = join(VK_COWORK_DIR, "user-settings.json");
+const LEGACY_SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");
+
+let migrated = false;
 
 function ensureDirectory() {
-  const dir = dirname(SETTINGS_FILE);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  if (!existsSync(VK_COWORK_DIR)) {
+    mkdirSync(VK_COWORK_DIR, { recursive: true });
+  }
+}
+
+function migrateFromLegacy(): void {
+  if (migrated) return;
+  migrated = true;
+  if (existsSync(SETTINGS_FILE) || !existsSync(LEGACY_SETTINGS_FILE)) return;
+  try {
+    ensureDirectory();
+    const raw = readFileSync(LEGACY_SETTINGS_FILE, "utf8");
+    JSON.parse(raw); // validate JSON before writing
+    writeFileSync(SETTINGS_FILE, raw, "utf8");
+    unlinkSync(LEGACY_SETTINGS_FILE);
+  } catch {
+    // migration best-effort; keep both files on failure
   }
 }
 
 export function loadUserSettings(): UserSettings {
+  migrateFromLegacy();
   try {
     if (!existsSync(SETTINGS_FILE)) {
       return {};
@@ -252,6 +279,7 @@ export function loadUserSettings(): UserSettings {
 }
 
 export async function loadUserSettingsAsync(): Promise<UserSettings> {
+  migrateFromLegacy();
   try {
     const raw = await readFileAsync(SETTINGS_FILE, "utf8");
     return JSON.parse(raw) as UserSettings;

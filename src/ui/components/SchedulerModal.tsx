@@ -182,11 +182,14 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     [currentMonth]
   );
 
+  // SOP-linked tasks (hidden=true or sopId set) are managed from SopPage, not the calendar
+  const visibleTasks = useMemo(() => tasks.filter((t) => !t.hidden && !t.sopId), [tasks]);
+
   const filteredTasks = useMemo(() => {
-    if (filterAssistantId === null) return tasks;
-    if (filterAssistantId === "__default__") return tasks.filter((t) => !t.assistantId);
-    return tasks.filter((t) => t.assistantId === filterAssistantId);
-  }, [tasks, filterAssistantId]);
+    if (filterAssistantId === null) return visibleTasks;
+    if (filterAssistantId === "__default__") return visibleTasks.filter((t) => !t.assistantId);
+    return visibleTasks.filter((t) => t.assistantId === filterAssistantId);
+  }, [visibleTasks, filterAssistantId]);
 
   const getTasksForDay = useCallback(
     (date: Date) => filteredTasks.filter((t) => isTaskOnDay(t, date)),

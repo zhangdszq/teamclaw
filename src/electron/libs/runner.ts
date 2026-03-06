@@ -137,7 +137,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
           maxTurns: 300,
           // Load user settings to enable skills from ~/.claude/skills/
           settingSources: getSettingSources(),
-          mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
+          mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }) },
           canUseTool: async (toolName, input, { signal, toolUseID }) => {
             // For AskUserQuestion, we need to wait for user response
             if (toolName === "AskUserQuestion") {

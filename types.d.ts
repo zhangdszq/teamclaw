@@ -73,6 +73,7 @@ type UserSettings = {
     splashSeen?: boolean;
     alertDingtalkWebhook?: string;
     alertDingtalkSecret?: string;
+    darkMode?: boolean;
 }
 
 type KnowledgeReviewStatus = "draft" | "verified" | "archived";
@@ -130,6 +131,10 @@ type ScheduledTask = {
     lastRun?: string;
     nextRun?: string;
     assistantId?: string;
+    // SOP association — populated when task is created from a SOP schedule config
+    sopId?: string;
+    stageId?: string;   // set when task triggers a specific stage; absent = trigger whole SOP
+    hidden?: boolean;   // true = not shown in calendar UI
     createdAt: string;
     updatedAt: string;
 }
@@ -146,6 +151,9 @@ type SchedulerRunTaskPayload = {
     planItemId?: string;
     sopName?: string;
     planTaskName?: string;
+    workflowSopId?: string;
+    workflowStageId?: string;
+    scheduledTaskId?: string;
 }
 
 type EnvironmentCheck = {
@@ -536,11 +544,16 @@ type LongTermGoal = {
     completedAt?: string;
 }
 
-type PlanItemStatus = "pending" | "in_progress" | "completed" | "failed";
+type WorkCategory = "客户服务" | "情报监控" | "内部运营" | "增长销售" | "";
+
+type PlanItemStatus = "pending" | "in_progress" | "human_review" | "completed" | "failed";
 
 type PlanItem = {
     id: string;
     sopName: string;
+    category: WorkCategory;
+    targetId: string;
+    targetName: string;
     assistantId: string;
     content: string;
     scheduledTime: string;
@@ -548,6 +561,7 @@ type PlanItem = {
     status: PlanItemStatus;
     result: string;
     sessionId: string | null;
+    scheduledTaskId?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -587,6 +601,7 @@ type EventPayloadMapping = {
     "request-folder-access": FolderAccessResult;
     "open-privacy-settings": boolean;
     "open-path": boolean;
+    "show-item-in-folder": boolean;
     "open-external-url": boolean;
     "install-claude-cli": InstallResult;
     "is-claude-cli-installed": boolean;
@@ -658,6 +673,17 @@ type EventPayloadMapping = {
     // SOP Hands
     "sop.list": HandSopResult[];
     "sop.generate": HandSopResult;
+    "sop.generate.cancel": null;
+    "sop.delete": boolean;
+    "sop.rename": HandSopResult;
+    "sop.setSopSchedule": ScheduledTask;
+    "sop.getSopSchedules": ScheduledTask[];
+    "sop.removeSopSchedule": boolean;
+    // Workflow runs
+    "workflow.get-run": WorkflowRun | null;
+    "workflow.execute": WorkflowRun;
+    "workflow.execute-stage": WorkflowRun;
+    "workflow.retry-stage": WorkflowRun | null;
 }
 
 interface HandStage {
@@ -673,9 +699,39 @@ interface HandSopResult {
     id: string;
     name: string;
     description: string;
+    category: WorkCategory;
     icon: string;
     stages: HandStage[];
     workflowCount: number;
+    createdAt?: string;
+}
+
+// ── Workflow Run (per-stage execution tracking) ──────────────────────────────
+
+type WorkflowStatus = "idle" | "running" | "completed" | "failed";
+type WorkflowStageStatus = "pending" | "in_progress" | "completed" | "failed";
+
+interface WorkflowStageRun {
+    stageId: string;
+    label: string;
+    status: WorkflowStageStatus;
+    inputPrompt?: string;
+    output?: string;
+    abstract?: string;
+    error?: string;
+    sessionId?: string;
+    startedAt?: string;
+    completedAt?: string;
+    duration?: number;
+}
+
+interface WorkflowRun {
+    id: string;
+    sopId: string;
+    status: WorkflowStatus;
+    startedAt?: string;
+    completedAt?: string;
+    stages: WorkflowStageRun[];
 }
 
 interface Window {
@@ -706,6 +762,7 @@ interface Window {
         requestFolderAccess: (folderPath?: string) => Promise<FolderAccessResult>;
         openPrivacySettings: () => Promise<boolean>;
         openPath: (targetPath: string) => Promise<boolean>;
+        showItemInFolder: (targetPath: string) => Promise<boolean>;
         openExternalUrl: (url: string) => Promise<boolean>;
         installClaudeCLI: () => Promise<InstallResult>;
         isClaudeCLIInstalled: () => Promise<boolean>;
@@ -776,6 +833,21 @@ interface Window {
         updateScheduledTask: (id: string, updates: Partial<ScheduledTask>) => Promise<ScheduledTask | null>;
         deleteScheduledTask: (id: string) => Promise<boolean>;
         onSchedulerRunTask: (callback: (task: SchedulerRunTaskPayload) => void) => UnsubscribeFunction;
+        // SOP schedule management
+        sopSetSopSchedule: (params: {
+            sopId: string;
+            stageId?: string;
+            name: string;
+            scheduleType: "once" | "interval" | "daily";
+            scheduledTime?: string;
+            intervalValue?: number;
+            intervalUnit?: "minutes" | "hours" | "days" | "weeks";
+            dailyTime?: string;
+            dailyDays?: number[];
+            existingTaskId?: string;
+        }) => Promise<ScheduledTask>;
+        sopGetSopSchedules: (sopId: string, stageId?: string) => Promise<ScheduledTask[]>;
+        sopRemoveSopSchedule: (taskId: string) => Promise<boolean>;
         // Plan table
         getPlanItems: () => Promise<PlanItem[]>;
         retryPlanItem: (id: string) => Promise<{ ok: boolean; error?: string }>;
@@ -810,5 +882,15 @@ interface Window {
         // SOP Hands
         sopList: () => Promise<HandSopResult[]>;
         sopGenerate: (description: string) => Promise<HandSopResult>;
+        sopGenerateCancel: () => Promise<null>;
+        sopDelete: (sopId: string) => Promise<boolean>;
+        sopRename: (sopId: string, newName: string) => Promise<HandSopResult>;
+        // Workflow runs
+        workflowGetRun: (sopId: string) => Promise<WorkflowRun | null>;
+        workflowExecute: (sopId: string) => Promise<WorkflowRun>;
+        workflowExecuteStage: (sopId: string, stageId: string) => Promise<WorkflowRun>;
+        workflowRetryStage: (sopId: string, stageId: string) => Promise<WorkflowRun | null>;
+        workflowStageComplete: (payload: { sopId: string; stageId: string; output: string; abstract: string; sessionId?: string; error?: string }) => void;
+        onWorkflowRunChanged: (callback: (sopId: string) => void) => UnsubscribeFunction;
     }
 }

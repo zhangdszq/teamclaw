@@ -387,6 +387,8 @@ export async function handleClientEvent(event: ClientEvent) {
       assistantId: event.payload.assistantId,
       assistantSkillNames: event.payload.assistantSkillNames,
       background: event.payload.background,
+      workflowSopId: event.payload.workflowSopId,
+      scheduledTaskId: event.payload.scheduledTaskId,
     });
 
     sessions.updateSession(session.id, {

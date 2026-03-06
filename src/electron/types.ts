@@ -57,7 +57,7 @@ export type ServerEvent =
 
 // Client -> Server events
 export type ClientEvent =
-  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantPersona?: string; background?: boolean } }
+  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantPersona?: string; background?: boolean; workflowSopId?: string; scheduledTaskId?: string } }
   | { type: "session.continue"; payload: { sessionId: string; prompt: string } }
   | { type: "session.stop"; payload: { sessionId: string } }
   | { type: "session.delete"; payload: { sessionId: string } }

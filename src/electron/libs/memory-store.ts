@@ -450,7 +450,7 @@ export function refreshRootAbstract(assistantId?: string): void {
     }
 
     // Per-assistant insights
-    const aInsightsDir = join(scoped["root"], "insights");
+    const aInsightsDir = join(scoped.rootDir, "insights");
     if (existsSync(aInsightsDir)) {
       const insightFiles = readdirSync(aInsightsDir).filter(f => f.endsWith(".md")).sort().reverse().slice(0, 5);
       if (insightFiles.length) {
@@ -654,6 +654,8 @@ export type WorkingMemoryCheckpoint = {
 export class ScopedMemory {
   public readonly assistantId: string;
   private readonly root: string;
+
+  get rootDir(): string { return this.root; }
 
   constructor(assistantId: string) {
     this.assistantId = assistantId;

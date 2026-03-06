@@ -5,6 +5,8 @@ interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onShowSplash?: () => void;
+  darkMode?: boolean;
+  onDarkModeChange?: (enabled: boolean) => void;
 }
 
 type SectionId = "personalize" | "models" | "proxy" | "google" | "memory" | "shortcut" | "alert" | "debug";
@@ -103,7 +105,7 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDarkModeChange }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SectionId>("personalize");
 
   // Personalization
@@ -329,7 +331,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-900/25 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-[780px] h-[560px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/8 shadow-elevated overflow-hidden flex flex-col" style={{ fontFamily: '"Söhne", ui-sans-serif, system-ui, -apple-system, sans-serif', background: '#F6F4F0' }}>
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-[780px] h-[560px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/8 shadow-elevated overflow-hidden flex flex-col bg-surface-secondary" style={{ fontFamily: '"Söhne", ui-sans-serif, system-ui, -apple-system, sans-serif' }}>
 
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-ink-900/8 flex-shrink-0">
@@ -352,7 +354,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
           <div className="flex flex-1 overflow-hidden">
 
             {/* Left sidebar */}
-            <nav className="w-[192px] border-r border-ink-900/8 flex-shrink-0 overflow-y-auto py-3 px-2.5" style={{ background: '#F6F4F0' }}>
+            <nav className="w-[192px] border-r border-ink-900/8 flex-shrink-0 overflow-y-auto py-3 px-2.5 bg-surface-secondary">
               {NAV_ITEMS.map((item) => (
                 <button
                   key={item.id}
@@ -365,7 +367,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                       ? "font-medium text-white"
                       : "text-ink-600 hover:bg-black/5 hover:text-ink-900"
                   }`}
-                  style={activeSection === item.id ? { background: '#2C5F2F' } : {}}
+                  style={activeSection === item.id ? { background: 'var(--color-accent)' } : {}}
                 >
                   <span className={activeSection === item.id ? "text-white/80" : "text-ink-400"}>
                     {item.icon}
@@ -376,7 +378,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
             </nav>
 
             {/* Right content area */}
-            <main className="flex-1 overflow-y-auto px-6 py-5" style={{ background: '#F6F4F0' }}>
+            <main className="flex-1 overflow-y-auto px-6 py-5 bg-surface-secondary">
 
               {/* Personalization */}
               {activeSection === "personalize" && (
@@ -386,8 +388,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     <span className="text-[11px] text-muted-light">让 AI 知道你是谁</span>
                     <input
                       type="text"
-                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors"
-                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors"
+                      onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                       onBlur={(e) => e.currentTarget.style.borderColor = ''}
                       placeholder="输入你的名字"
                       value={userName}
@@ -399,8 +401,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     <span className="text-[13px] font-medium text-ink-800">工作描述</span>
                     <span className="text-[11px] text-muted-light">帮助 AI 理解你的背景，以便提供更贴合的回答</span>
                     <textarea
-                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
-                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
+                      onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                       onBlur={(e) => e.currentTarget.style.borderColor = ''}
                       placeholder="例如：我是一名前端工程师，主要使用 React 和 TypeScript 开发 Web 应用"
                       rows={3}
@@ -413,8 +415,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     <span className="text-[13px] font-medium text-ink-800">全局提示词</span>
                     <span className="text-[11px] text-muted-light">自定义指令会附加到每次对话的系统提示词中</span>
                     <textarea
-                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
-                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
+                      onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                       onBlur={(e) => e.currentTarget.style.borderColor = ''}
                       placeholder="给 AI 的自定义指令，例如：请用中文回答，代码注释用英文"
                       rows={5}
@@ -427,8 +429,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     <span className="text-[13px] font-medium text-ink-800">关于我</span>
                     <span className="text-[11px] text-muted-light">所有助理共享的用户信息，注入到每次对话中</span>
                     <textarea
-                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
-                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
+                      onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                       onBlur={(e) => e.currentTarget.style.borderColor = ''}
                       placeholder="所有助理共享的用户信息：姓名、时区、工作领域、沟通偏好等"
                       rows={4}
@@ -436,6 +438,35 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                       onChange={(e) => setUserContext(e.target.value)}
                     />
                   </label>
+
+                  {/* Dark mode toggle */}
+                  <div className="flex items-center justify-between rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-ink-900/5">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4 text-ink-600" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <span className="text-[13px] font-medium text-ink-800">夜间模式</span>
+                        <p className="text-[11px] text-muted-light">降低屏幕亮度，保护眼睛</p>
+                      </div>
+                    </div>
+                    <label className="relative cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={darkMode ?? false}
+                        onChange={(e) => {
+                          const enabled = e.target.checked;
+                          onDarkModeChange?.(enabled);
+                          window.electron.saveUserSettings({ darkMode: enabled }).catch(console.error);
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-10 h-6 rounded-full transition-colors" style={{ background: (darkMode ?? false) ? 'var(--color-accent)' : 'var(--color-toggle-off)' }} />
+                      <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform" style={{ transform: (darkMode ?? false) ? 'translateX(16px)' : 'translateX(0)' }} />
+                    </label>
+                  </div>
                 </div>
               )}
 
@@ -449,7 +480,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                       onClick={() => setModelTab("anthropic")}
                       className="flex-1 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-all"
                       style={modelTab === "anthropic"
-                        ? { background: '#fff', color: '#1a1915', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                        ? { background: 'var(--color-surface)', color: 'var(--color-ink-900)', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
                         : { color: 'var(--color-muted)' }}
                     >
                       Anthropic
@@ -459,7 +490,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                       onClick={() => setModelTab("codex")}
                       className="flex-1 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-all flex items-center justify-center gap-1.5"
                       style={modelTab === "codex"
-                        ? { background: '#fff', color: '#1a1915', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                        ? { background: 'var(--color-surface)', color: 'var(--color-ink-900)', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
                         : { color: 'var(--color-muted)' }}
                     >
                       OpenAI Codex
@@ -476,9 +507,9 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">API 地址</span>
                         <input
                           type="url"
-                          className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors"
-                          style={{ '--tw-ring-color': '#2C5F2F' } as React.CSSProperties}
-                          onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                          className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors"
+                          style={{ '--tw-ring-color': 'var(--color-accent)' } as React.CSSProperties}
+                          onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                           onBlur={(e) => e.currentTarget.style.borderColor = ''}
                           placeholder="https://api.anthropic.com (可选)"
                           value={baseUrl}
@@ -494,8 +525,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         <div className="relative">
                           <input
                             type={showToken ? "text" : "password"}
-                            className="w-full rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 pr-12 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
-                            onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                            className="w-full rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 pr-12 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
+                            onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                             onBlur={(e) => e.currentTarget.style.borderColor = ''}
                             placeholder="sk-ant-..."
                             value={authToken}
@@ -522,7 +553,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         </div>
                         <span className="text-[11px] text-muted-light">
                           从{" "}
-                          <a href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: '#2C5F2F' }}>
+                          <a href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--color-accent)' }}>
                             console.anthropic.com
                           </a>
                           {" "}获取 API Key
@@ -533,8 +564,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">模型</span>
                         <input
                           type="text"
-                          className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
-                          onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                          className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
+                          onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                           onBlur={(e) => e.currentTarget.style.borderColor = ''}
                           placeholder="claude-opus-4-6-thinking"
                           value={modelName}
@@ -603,7 +634,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         </>
                       ) : (
                         <>
-                          <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                          <div className="rounded-xl border border-ink-900/10 bg-surface/70 p-4">
                             <div className="flex items-center gap-3 mb-3">
                               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-ink-900/5 flex-shrink-0">
                                 <svg viewBox="0 0 24 24" className="h-5 w-5 text-ink-700" fill="currentColor">
@@ -695,7 +726,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         onChange={(e) => setProxyEnabled(e.target.checked)}
                         className="sr-only peer"
                       />
-                      <div className="w-10 h-6 rounded-full transition-colors" style={{ background: proxyEnabled ? '#2C5F2F' : 'rgba(26,25,21,0.2)' }} />
+                      <div className="w-10 h-6 rounded-full transition-colors" style={{ background: proxyEnabled ? 'var(--color-accent)' : 'var(--color-toggle-off)' }} />
                       <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform" style={{ transform: proxyEnabled ? 'translateX(16px)' : 'translateX(0)' }} />
                     </label>
                   </div>
@@ -704,8 +735,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">代理地址</span>
                     <input
                       type="text"
-                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono disabled:opacity-50 disabled:cursor-not-allowed"
-                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+                      onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                       onBlur={(e) => e.currentTarget.style.borderColor = ''}
                       placeholder="http://127.0.0.1:7890"
                       value={proxyUrl}
@@ -743,7 +774,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                   {googleLoggedIn ? (
                     <div>
                       {/* Profile card */}
-                      <div className="flex items-center gap-4 rounded-xl bg-white border border-ink-900/6 p-4 mb-5">
+                      <div className="flex items-center gap-4 rounded-xl bg-surface border border-ink-900/6 p-4 mb-5">
                         {googlePicture && !avatarError ? (
                           <img
                             src={googlePicture}
@@ -766,7 +797,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                       </div>
 
                       {/* Info rows */}
-                      <div className="rounded-xl bg-white border border-ink-900/6 divide-y divide-ink-900/5 mb-5">
+                      <div className="rounded-xl bg-surface border border-ink-900/6 divide-y divide-ink-900/5 mb-5">
                         <div className="flex items-center justify-between px-4 py-3">
                           <span className="text-[13px] text-ink-500">昵称</span>
                           <span className="text-[13px] font-medium text-ink-800">{googleName || "—"}</span>
@@ -799,7 +830,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                           setGoogleName(undefined);
                           setGooglePicture(undefined);
                         }}
-                        className="rounded-xl border border-error/20 bg-white px-4 py-2 text-[13px] font-medium text-error/80 hover:bg-error/5 hover:text-error transition-colors"
+                        className="rounded-xl border border-error/20 bg-surface px-4 py-2 text-[13px] font-medium text-error/80 hover:bg-error/5 hover:text-error transition-colors"
                       >
                         退出登录
                       </button>
@@ -835,7 +866,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                           }
                         }}
                         disabled={googleLoggingIn}
-                        className="flex items-center gap-2.5 rounded-xl border border-ink-900/10 bg-white px-5 py-2.5 text-[13px] font-medium text-ink-800 shadow-soft hover:shadow-card hover:border-ink-900/15 transition-all disabled:opacity-50"
+                        className="flex items-center gap-2.5 rounded-xl border border-ink-900/10 bg-surface px-5 py-2.5 text-[13px] font-medium text-ink-800 shadow-soft hover:shadow-card hover:border-ink-900/15 transition-all disabled:opacity-50"
                       >
                         <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0">
                           <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
@@ -860,7 +891,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     Agent 会自动加载记忆并主动记录重要信息；会话完成后自动抽取经验候选。所有数据以 Markdown 存储在本地。
                   </p>
 
-                  <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                  <div className="rounded-xl border border-ink-900/10 bg-surface/70 p-4">
                     <div className="flex items-center gap-3 mb-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/10 flex-shrink-0">
                         <svg viewBox="0 0 24 24" className="h-5 w-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
@@ -888,13 +919,13 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         if (dir) window.electron.openPath(dir);
                       }}
                       className="w-full rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-soft transition-colors"
-                      style={{ background: '#2C5F2F' }}
+                      style={{ background: 'var(--color-accent)' }}
                     >
                       打开记忆目录
                     </button>
                   </div>
 
-                  <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                  <div className="rounded-xl border border-ink-900/10 bg-surface/70 p-4">
                     <div className="flex items-center gap-3 mb-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/10 flex-shrink-0">
                         <svg viewBox="0 0 24 24" className="h-5 w-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
@@ -915,7 +946,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         if (kbPath) window.electron.openPath(kbPath);
                       }}
                       className="w-full rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-soft transition-colors"
-                      style={{ background: '#2C5F2F' }}
+                      style={{ background: 'var(--color-accent)' }}
                     >
                       打开经验库目录
                     </button>
@@ -935,7 +966,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                 <div className="grid gap-5">
                   <p className="text-[13px] text-muted">配置全局快捷键，快速唤起 AI 快捷对话窗口</p>
 
-                  <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                  <div className="rounded-xl border border-ink-900/10 bg-surface/70 p-4">
                     <div className="flex items-center gap-3 mb-4">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/10 flex-shrink-0">
                         <svg viewBox="0 0 24 24" className="h-5 w-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
@@ -979,7 +1010,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         className={`flex items-center justify-between rounded-xl border px-4 py-3 text-[13px] cursor-pointer transition-all ${
                           isRecordingShortcut
                             ? "border-accent bg-accent/5 ring-2 ring-accent/20"
-                            : "border-ink-900/10 bg-white/70 hover:border-ink-900/20"
+                            : "border-ink-900/10 bg-surface/70 hover:border-ink-900/20"
                         }`}
                         onClick={() => setIsRecordingShortcut(true)}
                       >
@@ -1036,7 +1067,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                           className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${
                             quickShortcut === preset
                               ? "border-accent/30 bg-accent/8 text-accent"
-                              : "border-ink-900/10 bg-white/70 text-ink-600 hover:bg-surface-secondary hover:text-ink-800"
+                              : "border-ink-900/10 bg-surface/70 text-ink-600 hover:bg-surface-secondary hover:text-ink-800"
                           }`}
                         >
                           {preset}
@@ -1064,8 +1095,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">Webhook 地址</span>
                     <input
                       type="url"
-                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
-                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
+                      onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                       onBlur={(e) => e.currentTarget.style.borderColor = ''}
                       placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
                       value={alertWebhook}
@@ -1083,8 +1114,8 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                     <div className="relative">
                       <input
                         type={showAlertSecret ? "text" : "password"}
-                        className="w-full rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 pr-12 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
-                        onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                        className="w-full rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-2.5 pr-12 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
+                        onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
                         onBlur={(e) => e.currentTarget.style.borderColor = ''}
                         placeholder="SEC..."
                         value={alertSecret}
@@ -1160,7 +1191,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                 <div className="grid gap-4">
                   <p className="text-[13px] text-muted">开发调试工具</p>
 
-                  <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                  <div className="rounded-xl border border-ink-900/10 bg-surface/70 p-4">
                     <div className="flex items-center gap-3 mb-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/10 flex-shrink-0">
                         <svg viewBox="0 0 24 24" className="h-5 w-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1180,9 +1211,9 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         setTimeout(() => onShowSplash?.(), 300);
                       }}
                       className="w-full rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-soft transition-colors"
-                      style={{ background: '#2C5F2F' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#3A7A3D'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#2C5F2F'; }}
+                      style={{ background: 'var(--color-accent)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-accent-hover)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-accent)'; }}
                     >
                       显示开屏页
                     </button>
@@ -1217,16 +1248,16 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-ink-900/8 flex-shrink-0" style={{ background: '#F6F4F0' }}>
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-ink-900/8 flex-shrink-0 bg-surface-secondary">
             {showSaveButton && (
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={validating || saving}
                 className="rounded-xl px-5 py-2 text-[13px] font-medium text-white shadow-soft transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ background: '#2C5F2F' }}
-                onMouseEnter={(e) => { if (!validating && !saving) (e.currentTarget as HTMLButtonElement).style.background = '#3A7A3D'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#2C5F2F'; }}
+                style={{ background: 'var(--color-accent)' }}
+                onMouseEnter={(e) => { if (!validating && !saving) (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-accent-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-accent)'; }}
               >
                 {validating ? (
                   <span className="flex items-center gap-2">
@@ -1260,9 +1291,9 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
               <button
                 type="button"
                 className="rounded-xl px-5 py-2 text-[13px] font-medium text-white transition-colors"
-                style={{ background: '#2C5F2F' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#3A7A3D'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#2C5F2F'; }}
+                style={{ background: 'var(--color-accent)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-accent-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-accent)'; }}
               >
                 完成
               </button>

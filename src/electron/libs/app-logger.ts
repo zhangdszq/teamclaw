@@ -62,7 +62,7 @@ function buildAlertMarkdown(kind: string, err: unknown, settings?: UserInfo): st
   return lines.join("\n");
 }
 
-async function sendDingtalkAlert(text: string): Promise<void> {
+export async function sendDingtalkAlert(text: string): Promise<void> {
   // Lazy-load user settings to avoid circular deps at module init time
   const { loadUserSettings } = await import("./user-settings.js");
   const settings = loadUserSettings();

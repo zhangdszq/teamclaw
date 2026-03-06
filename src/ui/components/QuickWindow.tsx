@@ -327,7 +327,7 @@ export function QuickWindow() {
       <div className="flex items-center gap-3 px-4 pt-3.5 pb-2.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
         <div
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]"
-          style={{ background: "linear-gradient(135deg, #2C5F2F 0%, #3a7d3e 100%)" }}
+          style={{ background: "linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%)" }}
         >
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
@@ -355,7 +355,7 @@ export function QuickWindow() {
           onClick={handleSend}
           disabled={!prompt.trim() || sending}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white transition-all disabled:opacity-20"
-          style={{ background: !prompt.trim() || sending ? "#a0a0a0" : "linear-gradient(135deg, #2C5F2F 0%, #3a7d3e 100%)" }}
+          style={{ background: !prompt.trim() || sending ? "#a0a0a0" : "linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%)" }}
         >
           {sending ? (
             <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">

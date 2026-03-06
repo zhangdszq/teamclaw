@@ -15,6 +15,8 @@ module.exports = {
     'app-icon.png',
     'trayIconTemplate.png',
     { from: 'config', to: 'config' },
+    { from: 'builtin-skills', to: 'builtin-skills', filter: ['**/*'] },
+    'skills-catalog.json',
   ],
   asarUnpack: [
     'node_modules/@openai/codex-sdk/vendor/**/*',

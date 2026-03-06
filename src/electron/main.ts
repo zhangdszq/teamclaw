@@ -1986,6 +1986,23 @@ app.on("ready", async () => {
         "knowledge_add_entity", "knowledge_add_relation", "knowledge_query",
     ]);
 
+    // Tools that must never appear in stage 【推荐工具】 regardless of HAND.toml content.
+    // Mirrors the sopExclude flag in SHARED_TOOL_CATALOG, plus legacy aliases.
+    const SOP_STAGE_EXCLUDED_TOOLS = new Set([
+        // Scheduler — managed by framework (sop.setSopSchedule / register_sop_schedule)
+        "create_scheduled_task", "schedule_create",
+        "list_scheduled_tasks",  "schedule_list",
+        "delete_scheduled_task", "schedule_delete",
+        // Plan table — synced automatically by the workflow framework
+        "upsert_plan_item", "complete_plan_item", "fail_plan_item", "list_plan_items",
+        // SOP meta-ops — must not appear in business stage steps
+        "save_sop", "list_sops", "read_sop", "search_sops",
+        // Memory tools redundant in SOP context (framework injects prevOutput)
+        "read_working_memory", "memory_recall",
+        "query_team_memory",
+        "distill_memory",
+    ]);
+
     // Common MCP server names
     const KNOWN_MCPS = [
         "dingtalk-ai-table", "dingtalk-contacts", "dingtalk-message",
@@ -2720,6 +2737,7 @@ ${brokenToml}
                 const resolved: string[] = [];
                 const unavailable: string[] = [];
                 for (const t of stageInfo.tools) {
+                    if (SOP_STAGE_EXCLUDED_TOOLS.has(t)) continue;
                     if (UNIMPLEMENTED_TOOLS.has(t)) {
                         unavailable.push(t);
                     } else {

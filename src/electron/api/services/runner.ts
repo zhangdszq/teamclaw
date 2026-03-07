@@ -11,6 +11,8 @@ import type { Session } from '../types.js';
 import { recordMessage, updateSession, addPendingPermission } from './session.js';
 import { buildSmartMemoryContext } from '../../libs/memory-store.js';
 import { getSettingSources } from '../../libs/claude-settings.js';
+import { loadAssistantsConfig } from '../../libs/assistants-config.js';
+import { loadUserSettings } from '../../libs/user-settings.js';
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -76,7 +78,7 @@ function getClaudeCodePath(): string | undefined {
 }
 
 // Build enhanced environment
-function getEnhancedEnv(): Record<string, string | undefined> {
+function getEnhancedEnv(assistantId?: string): Record<string, string | undefined> {
   const home = homedir();
   
   let additionalPaths: string[];
@@ -117,15 +119,27 @@ function getEnhancedEnv(): Record<string, string | undefined> {
   // Load Claude-specific env vars
   const claudeEnv: Record<string, string | undefined> = {};
 
-  // Check for custom API settings from environment
-  if (process.env.ANTHROPIC_API_KEY) {
-    claudeEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+  // Per-assistant config takes priority over global user settings.
+  // Each assistant's claude CLI subprocess gets its own env, so parallel assistants
+  // with different keys run independently without interfering with each other.
+  const assistantConfig = assistantId
+    ? loadAssistantsConfig().assistants.find(a => a.id === assistantId)
+    : undefined;
+  const userSettings = loadUserSettings();
+
+  const apiKey = assistantConfig?.apiAuthToken || userSettings.anthropicAuthToken || process.env.ANTHROPIC_API_KEY;
+  const baseUrl = assistantConfig?.apiBaseUrl   || userSettings.anthropicBaseUrl  || process.env.ANTHROPIC_BASE_URL;
+  const model   = assistantConfig?.model        || userSettings.anthropicModel    || process.env.ANTHROPIC_MODEL;
+
+  if (apiKey) {
+    claudeEnv.ANTHROPIC_API_KEY = apiKey;
+    claudeEnv.ANTHROPIC_AUTH_TOKEN = apiKey;
   }
-  if (process.env.ANTHROPIC_BASE_URL) {
-    claudeEnv.ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL;
+  if (baseUrl) {
+    claudeEnv.ANTHROPIC_BASE_URL = baseUrl;
   }
-  if (process.env.ANTHROPIC_MODEL) {
-    claudeEnv.ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL;
+  if (model) {
+    claudeEnv.ANTHROPIC_MODEL = model;
   }
 
   // Proxy settings
@@ -178,8 +192,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
 
   // Get CLI path and environment dynamically (env vars are set after module load)
   const claudeCodePath = getClaudeCodePath();
-  const enhancedEnv = getEnhancedEnv();
-
+  const enhancedEnv = getEnhancedEnv(session.assistantId);
   // Per-assistant model override: if the assistant has an explicit model configured,
   // use it instead of the global ANTHROPIC_MODEL environment variable.
   if (model) {

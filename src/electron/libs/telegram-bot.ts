@@ -30,7 +30,7 @@ import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
-import { patchAssistantBotOwnerIds } from "./assistants-config.js";
+import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
@@ -1410,7 +1410,7 @@ class TelegramConnection {
           maxTurns: 300,
           settingSources: getSettingSources(),
           pathToClaudeCodeExecutable: claudeCodePath,
-          env: buildQueryEnv(),
+          env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)),
         },
       });
 

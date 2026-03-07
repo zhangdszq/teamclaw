@@ -44,15 +44,18 @@ export const FILE_PATH_RE = /\/(?:tmp|var\/folders|private\/var|home|Users)\/\S+
 /**
  * Build the environment variables required by the Claude Agent SDK / Codex runner.
  * Reads Anthropic API key and base URL from user settings, falling back to env vars.
+ * If assistantConfig is provided, its apiAuthToken/apiBaseUrl take priority over global settings,
+ * allowing multiple assistants to run in parallel with different API keys.
  */
-export function buildQueryEnv(): Record<string, string | undefined> {
+export function buildQueryEnv(assistantConfig?: { apiAuthToken?: string; apiBaseUrl?: string; model?: string }): Record<string, string | undefined> {
   const settings = loadUserSettings();
   const apiKey =
+    assistantConfig?.apiAuthToken ||
     settings.anthropicAuthToken ||
     process.env.ANTHROPIC_API_KEY ||
     process.env.ANTHROPIC_AUTH_TOKEN ||
     "";
-  const baseURL = settings.anthropicBaseUrl || "";
+  const baseURL = assistantConfig?.apiBaseUrl || settings.anthropicBaseUrl || "";
 
   return {
     ...getEnhancedEnv(),

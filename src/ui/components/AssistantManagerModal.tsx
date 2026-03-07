@@ -18,6 +18,8 @@ type EditingAssistant = {
   avatar: string;
   provider: "claude" | "codex";
   model: string;
+  apiAuthToken: string;
+  apiBaseUrl: string;
   skillNames: string[];
   skillTags: string[];
   persona: string;
@@ -36,6 +38,8 @@ function emptyAssistant(defaults?: AssistantDefaults): EditingAssistant {
     avatar: "",
     provider: defaults?.defaultProvider ?? "claude",
     model: "",
+    apiAuthToken: "",
+    apiBaseUrl: "",
     skillNames: [],
     skillTags: [],
     persona: defaults?.persona ?? "",
@@ -120,6 +124,8 @@ export function AssistantManagerModal({
       avatar: editing.avatar || undefined,
       provider: editing.provider,
       model: editing.model.trim() || undefined,
+      apiAuthToken: editing.apiAuthToken.trim() || undefined,
+      apiBaseUrl: editing.apiBaseUrl.trim() || undefined,
       skillNames: editing.skillNames,
       skillTags: editing.skillTags.length > 0 ? editing.skillTags : undefined,
       persona: editing.persona.trim() || undefined,
@@ -220,6 +226,8 @@ export function AssistantManagerModal({
       avatar: assistant.avatar ?? "",
       provider: assistant.provider,
       model: assistant.model ?? "",
+      apiAuthToken: assistant.apiAuthToken ?? "",
+      apiBaseUrl: assistant.apiBaseUrl ?? "",
       skillNames: assistant.skillNames ?? [],
       skillTags: assistant.skillTags ?? [],
       persona: assistant.persona ?? "",
@@ -433,6 +441,31 @@ export function AssistantManagerModal({
                         placeholder="默认模型"
                         value={editing.model}
                         onChange={(e) => setEditing({ ...editing, model: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Per-assistant API config */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs font-medium text-muted">API Key（可选）</span>
+                      <input
+                        type="password"
+                        className="rounded-xl border border-ink-900/10 bg-surface-secondary px-3.5 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors font-mono"
+                        placeholder="留空则使用全局配置"
+                        value={editing.apiAuthToken}
+                        onChange={(e) => setEditing({ ...editing, apiAuthToken: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs font-medium text-muted">API 地址（可选）</span>
+                      <input
+                        type="url"
+                        className="rounded-xl border border-ink-900/10 bg-surface-secondary px-3.5 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                        placeholder="留空则使用全局配置"
+                        value={editing.apiBaseUrl}
+                        onChange={(e) => setEditing({ ...editing, apiBaseUrl: e.target.value })}
                       />
                     </div>
                   </div>

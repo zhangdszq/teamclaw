@@ -13,6 +13,10 @@ export type AssistantConfig = {
   avatar?: string;
   provider: "claude" | "codex";
   model?: string;
+  /** Per-assistant API key — overrides global anthropicAuthToken when set */
+  apiAuthToken?: string;
+  /** Per-assistant API base URL — overrides global anthropicBaseUrl when set */
+  apiBaseUrl?: string;
   skillNames?: string[];
   skillTags?: string[];
   persona?: string;
@@ -152,6 +156,8 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
       avatar: optStr(item.avatar),
       provider: item.provider === "codex" ? "codex" : "claude",
       model: optStr(item.model),
+      apiAuthToken: optStr(item.apiAuthToken),
+      apiBaseUrl: optStr(item.apiBaseUrl),
       skillNames: Array.isArray(item.skillNames)
         ? item.skillNames.filter(Boolean).map((name) => String(name))
         : [],

@@ -294,6 +294,40 @@ export function saveUserSettings(settings: UserSettings): void {
 
   ensureDirectory();
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
+
+  // Sync API key/url into ~/.claude/settings.json so claude CLI reads the latest config,
+  // preventing stale values in that file from overriding user settings.
+  syncToClaudeSettings(settings);
+}
+
+function syncToClaudeSettings(settings: UserSettings): void {
+  const claudeSettingsPath = join(homedir(), ".claude", "settings.json");
+  try {
+    let parsed: { env?: Record<string, string>; [key: string]: unknown } = {};
+    if (existsSync(claudeSettingsPath)) {
+      parsed = JSON.parse(readFileSync(claudeSettingsPath, "utf8"));
+    }
+    const env: Record<string, string> = { ...(parsed.env ?? {}) };
+
+    if (settings.anthropicAuthToken) {
+      env.ANTHROPIC_API_KEY = settings.anthropicAuthToken;
+      env.ANTHROPIC_AUTH_TOKEN = settings.anthropicAuthToken;
+    } else {
+      delete env.ANTHROPIC_API_KEY;
+      delete env.ANTHROPIC_AUTH_TOKEN;
+    }
+
+    if (settings.anthropicBaseUrl) {
+      env.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
+    } else {
+      delete env.ANTHROPIC_BASE_URL;
+    }
+
+    parsed.env = env;
+    writeFileSync(claudeSettingsPath, JSON.stringify(parsed, null, 2), "utf8");
+  } catch {
+    // best-effort, don't block saving user settings
+  }
 }
 
 export function getUserSetting<K extends keyof UserSettings>(key: K): UserSettings[K] {

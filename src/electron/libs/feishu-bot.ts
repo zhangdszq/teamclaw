@@ -33,6 +33,7 @@ import {
   markProcessed as markProcessedMsg,
   parseReplySegments,
 } from "./bot-base.js";
+import { loadAssistantsConfig } from "./assistants-config.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -515,7 +516,7 @@ class FeishuConnection {
         maxTurns: 300,
         settingSources: getSettingSources(),
         pathToClaudeCodeExecutable: claudeCodePath,
-        env: buildQueryEnv(),
+        env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)),
       },
     });
 

@@ -6,6 +6,8 @@ import { query, type SDKMessage, type PermissionResult } from "@anthropic-ai/cla
 import type { ServerEvent } from "../types.js";
 import type { Session } from "./session-store.js";
 import { claudeCodeEnv, getSettingSources } from "./claude-settings.js";
+import { loadUserSettings } from "./user-settings.js";
+import { loadAssistantsConfig, type AssistantConfig } from "./assistants-config.js";
 import { buildSmartMemoryContext } from "./memory-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
 import { app } from "electron";
@@ -45,7 +47,8 @@ function getClaudeCodePath(): string | undefined {
 }
 
 // Build enhanced PATH for packaged environment
-function getEnhancedEnv(): Record<string, string | undefined> {
+// Called on every runClaude() invocation so user settings changes take effect immediately.
+function buildEnhancedEnv(assistantConfig?: AssistantConfig): Record<string, string | undefined> {
   const home = homedir();
   const isWindows = process.platform === 'win32';
   const pathSeparator = isWindows ? ';' : ':';
@@ -78,19 +81,47 @@ function getEnhancedEnv(): Record<string, string | undefined> {
   const currentPath = process.env.PATH || '';
   const newPath = [...additionalPaths, currentPath].join(pathSeparator);
 
+  // Read user settings fresh on every call so new key/url takes effect immediately
+  // and overrides whatever is in ~/.claude/settings.json
+  const userSettings = loadUserSettings();
+
+  // Per-assistant config takes priority over global user settings.
+  // Each assistant's claude CLI subprocess gets its own env, so parallel assistants
+  // with different keys run independently without interfering with each other.
+  const authToken = assistantConfig?.apiAuthToken || userSettings.anthropicAuthToken;
+  const baseUrl   = assistantConfig?.apiBaseUrl   || userSettings.anthropicBaseUrl;
+  const model     = assistantConfig?.model        || userSettings.anthropicModel;
+
+  const userOverrides: Record<string, string> = {};
+  if (authToken) {
+    userOverrides.ANTHROPIC_AUTH_TOKEN = authToken;
+    userOverrides.ANTHROPIC_API_KEY = authToken;
+  }
+  if (baseUrl) {
+    userOverrides.ANTHROPIC_BASE_URL = baseUrl;
+  }
+  if (model) {
+    userOverrides.ANTHROPIC_MODEL = model;
+  }
+
   return {
     ...process.env,
     ...claudeCodeEnv,
+    ...userOverrides,  // assistant-level (or user-level) settings take highest priority
     PATH: newPath,
   };
 }
 
 const claudeCodePath = getClaudeCodePath();
-const enhancedEnv = getEnhancedEnv();
 
 export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
   const { prompt, session, resumeSessionId, onEvent, onSessionUpdate } = options;
   const abortController = new AbortController();
+
+  // Build env fresh on every call — picks up latest user settings, overriding ~/.claude/settings.json
+  // Use per-assistant API config if set, otherwise fall back to global user settings.
+  const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === session.assistantId);
+  const enhancedEnv = buildEnhancedEnv(assistantConfig);
 
   // Inject smart memory context for new sessions (scoped to assistant)
   let effectivePrompt = prompt;

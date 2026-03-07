@@ -11,7 +11,7 @@ export type AssistantConfig = {
   id: string;
   name: string;
   avatar?: string;
-  provider: "claude" | "codex";
+  provider: "claude" | "openai";
   model?: string;
   /** Per-assistant API key — overrides global anthropicAuthToken when set */
   apiAuthToken?: string;
@@ -46,23 +46,21 @@ const ASSISTANTS_FILE = join(VK_COWORK_DIR, "assistants-config.json");
  * OpenAI still expect Claude to be the default.
  *
  * - Claude: anthropicAuthToken in user-settings  OR  ANTHROPIC_AUTH_TOKEN env var
- * - Codex:  openaiTokens in user-settings  OR  ~/.codex/auth.json exists
+ * - OpenAI: openaiTokens in user-settings
  *
  * Falls back to "claude" when neither is configured.
  */
-export function resolveDefaultProvider(): "claude" | "codex" {
+export function resolveDefaultProvider(): "claude" | "openai" {
   const settings = loadUserSettings();
 
   const hasClaude =
     !!settings.anthropicAuthToken ||
     !!process.env.ANTHROPIC_AUTH_TOKEN;
 
-  const hasCodex =
-    !!settings.openaiTokens?.accessToken ||
-    existsSync(join(homedir(), ".codex", "auth.json"));
+  const hasOpenAI = !!settings.openaiTokens?.accessToken;
 
   if (hasClaude) return "claude";
-  if (hasCodex) return "codex";
+  if (hasOpenAI) return "openai";
   return "claude";
 }
 
@@ -154,7 +152,7 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
       id: String(item.id),
       name: String(item.name),
       avatar: optStr(item.avatar),
-      provider: item.provider === "codex" ? "codex" : "claude",
+      provider: item.provider === "openai" ? "openai" : "claude",
       model: optStr(item.model),
       apiAuthToken: optStr(item.apiAuthToken),
       apiBaseUrl: optStr(item.apiBaseUrl),
@@ -223,7 +221,7 @@ export function saveAssistantsConfig(config: AssistantsConfig): AssistantsConfig
  */
 export function patchAssistantBotOwnerIds(
   assistantId: string,
-  platform: "telegram" | "dingtalk",
+  platform: "telegram" | "dingtalk" | "feishu",
   userId: string,
 ): boolean {
   const config = loadAssistantsConfig();
@@ -234,7 +232,10 @@ export function patchAssistantBotOwnerIds(
   const botCfg = bots[platform] as Record<string, unknown> | undefined;
   if (!botCfg) return false;
 
-  const field = platform === "telegram" ? "ownerUserIds" : "ownerStaffIds";
+  const field =
+    platform === "telegram" ? "ownerUserIds" :
+    platform === "feishu"   ? "ownerOpenIds" :
+                              "ownerStaffIds";
   const existing = (botCfg[field] as string[] | undefined) ?? [];
   if (existing.includes(userId)) return false;
 

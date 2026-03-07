@@ -217,6 +217,18 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("update-scheduled-task", id, updates),
     deleteScheduledTask: (id: string) => 
         ipcInvoke("delete-scheduled-task", id),
+    runTaskNow: (id: string) =>
+        ipcInvoke("run-task-now", id),
+    getTaskRunHistory: (taskId: string, limit?: number) =>
+        ipcInvoke("get-task-run-history", taskId, limit),
+    getUsageLogs: (filter?: UsageFilter) =>
+        ipcInvoke("get-usage-logs", filter),
+    getUsageSummary: (filter?: UsageFilter) =>
+        ipcInvoke("get-usage-summary", filter),
+    getProviderStats: (filter?: UsageFilter) =>
+        ipcInvoke("get-provider-stats", filter),
+    clearUsageLogs: () =>
+        ipcInvoke("clear-usage-logs"),
     onSchedulerRunTask: (callback: (task: any) => void) => {
         const cb = (_: Electron.IpcRendererEvent, task: any) => callback(task);
         electron.ipcRenderer.on("scheduler:run-task", cb);
@@ -285,22 +297,7 @@ electron.contextBridge.exposeInMainWorld("electron", {
         return () => electron.ipcRenderer.off("window-maximized-change", cb);
     },
     getPlatform: () => process.platform,
-    // Goals
-    goalsList: () =>
-        ipcInvoke("goals-list"),
-    goalsAdd: (input: GoalAddInput) =>
-        ipcInvoke("goals-add", input),
-    goalsUpdate: (id: string, updates: Partial<LongTermGoal>) =>
-        ipcInvoke("goals-update", id, updates),
-    goalsDelete: (id: string) =>
-        ipcInvoke("goals-delete", id),
-    goalsRunNow: (id: string) =>
-        ipcInvoke("goals-run-now", id),
-    onGoalCompleted: (callback: () => void) => {
-        const cb = () => callback();
-        electron.ipcRenderer.on("goal-completed", cb);
-        return () => electron.ipcRenderer.off("goal-completed", cb);
-    },
+    // Goals module removed
     // SOP Hands
     sopList: () =>
         ipcInvoke("sop.list"),

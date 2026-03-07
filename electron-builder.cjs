@@ -19,7 +19,6 @@ module.exports = {
     'skills-catalog.json',
   ],
   asarUnpack: [
-    'node_modules/@openai/codex-sdk/vendor/**/*',
     'node_modules/@anthropic-ai/claude-agent-sdk/vendor/**/*',
   ],
   icon: './app-icon.png',

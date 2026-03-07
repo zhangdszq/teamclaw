@@ -16,7 +16,7 @@ type EditingAssistant = {
   id: string;
   name: string;
   avatar: string;
-  provider: "claude" | "codex";
+  provider: "claude" | "openai";
   model: string;
   apiAuthToken: string;
   apiBaseUrl: string;
@@ -425,12 +425,12 @@ export function AssistantManagerModal({
                         onChange={(e) =>
                           setEditing({
                             ...editing,
-                            provider: e.target.value as "claude" | "codex",
+                            provider: e.target.value as "claude" | "openai",
                           })
                         }
                       >
                         <option value="claude">Claude</option>
-                        <option value="codex">Codex</option>
+                        <option value="openai">OpenAI (via OAuth)</option>
                       </select>
                     </div>
 

@@ -245,6 +245,10 @@ export class SessionStore {
   }
 
   recordMessage(sessionId: string, message: StreamMessage): void {
+    if (!this.sessions.has(sessionId)) {
+      console.warn(`[SessionStore] Skip recordMessage: unknown session ${sessionId}`);
+      return;
+    }
     const id = ('uuid' in message && message.uuid) ? String(message.uuid) : crypto.randomUUID();
     this.db
       .prepare(
@@ -254,6 +258,10 @@ export class SessionStore {
   }
 
   queueMessage(sessionId: string, message: StreamMessage): void {
+    if (!this.sessions.has(sessionId)) {
+      console.warn(`[SessionStore] Skip queueMessage: unknown session ${sessionId}`);
+      return;
+    }
     const id = ('uuid' in message && message.uuid) ? String(message.uuid) : crypto.randomUUID();
     this.messageQueue.push({ id, sessionId, data: JSON.stringify(message), createdAt: Date.now() });
 
@@ -277,6 +285,9 @@ export class SessionStore {
     );
     const runBatch = this.db.transaction((rows: typeof batch) => {
       for (const row of rows) {
+        if (!this.sessions.has(row.sessionId)) {
+          continue;
+        }
         insert.run(row.id, row.sessionId, row.data, row.createdAt);
       }
     });

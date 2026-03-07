@@ -7,7 +7,7 @@
  * - Message deduplication (5-min TTL)
  * - Media handling: photos, voice, documents, video
  * - Claude Agent SDK query() with shared MCP + per-session MCP
- * - Codex provider support
+ * - OpenAI provider support
  * - Session/memory sync with in-app session store
  * - Conversation history (last N turns)
  * - Dynamic session title generation
@@ -15,9 +15,9 @@
  * - Telegram HTML formatting + message chunking (4096 char limit)
  */
 import { Bot, GrammyError, HttpError, type Context } from "grammy";
-import { Codex, type CodexOptions, type ThreadOptions } from "@openai/codex-sdk";
-import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { promptOnce, runAgent } from "./agent-client.js";
 import { EventEmitter } from "events";
 import { homedir } from "os";
 import { join, dirname } from "path";
@@ -28,11 +28,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
-import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
-import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
 import {
@@ -64,7 +62,7 @@ export interface TelegramBotOptions {
   cognitiveStyle?: string;
   operatingGuidelines?: string;
   userContext?: string;
-  provider?: "claude" | "codex";
+  provider?: "claude" | "openai";
   model?: string;
   defaultCwd?: string;
   dmPolicy?: "open" | "allowlist";
@@ -455,13 +453,14 @@ function getBotSession(
   assistantId: string,
   chatId: string,
   assistantName: string,
-  provider: "claude" | "codex",
+  provider: "claude" | "openai",
   model: string | undefined,
   cwd: string | undefined,
 ): string {
   const key = `${assistantId}:${chatId}`;
-  if (botSessionIds.has(key)) return botSessionIds.get(key)!;
   if (!sessionStore) throw new Error("[Telegram] SessionStore not injected");
+  const existingId = botSessionIds.get(key);
+  if (existingId && sessionStore.getSession(existingId)) return existingId;
   const session = sessionStore.createSession({
     title: `[Telegram] ${assistantName}`,
     assistantId,
@@ -499,12 +498,9 @@ async function updateBotSessionTitle(
   ).slice(0, 30).trim();
 
   try {
-    const agentSdk = await import("@anthropic-ai/claude-agent-sdk");
-    const result = await agentSdk.unstable_v2_prompt(
+    const generated = (await promptOnce(
       `请根据以下对话内容，生成一个简短的中文标题（不超过12字，不加引号，不加标点），直接输出标题，不输出其他内容：\n\n${contextLines}`,
-      { model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514" } as Parameters<typeof agentSdk.unstable_v2_prompt>[1],
-    );
-    const generated = result.subtype === "success" && result.result ? result.result.trim() : "";
+    ))?.trim() || "";
     const title = (generated && generated !== "New Session") ? generated : fallback;
     emitSessionUpdate(sessionId, { title: `${prefix} ${title}` });
     console.log(`[Telegram] Session title updated (turn ${turns}): "${title}"`);
@@ -1204,11 +1200,7 @@ class TelegramConnection {
     let result: StreamResult;
 
     try {
-      if (provider === "codex") {
-        result = await this.runCodexSession(system, history, userText, ctx);
-      } else {
-        result = await this.runClaudeQuery(system, userText, ctx, chatId, hasFiles);
-      }
+      result = await this.runClaudeQuery(system, userText, ctx, chatId, provider, hasFiles);
     } catch (err) {
       console.error("[Telegram] AI error:", err);
       result = { text: "抱歉，处理您的消息时遇到了问题，请稍后再试。", draftMessageId: null };
@@ -1377,13 +1369,12 @@ class TelegramConnection {
     userText: string,
     ctx: Context,
     chatId: string,
+    provider: "claude" | "openai",
     hasFiles?: boolean,
   ): Promise<StreamResult> {
     const sessionKey = `${this.opts.assistantId}:${chatId}`;
     const sessionMcp = this.createSessionMcp(ctx);
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
-    // File messages must not resume previous session — the old session context
-    // may contain content from a previously read file, causing Claude to mix up files.
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();
 
@@ -1397,21 +1388,14 @@ class TelegramConnection {
     let lastEditTime = 0;
 
     try {
-      const q = query({
-        prompt: userText,
-        options: {
-          systemPrompt: system,
-          resume: claudeSessionId,
-          cwd: this.opts.defaultCwd ?? homedir(),
-          mcpServers: { "vk-shared": sharedMcp, "tg-session": sessionMcp },
-          permissionMode: "bypassPermissions",
-          includePartialMessages: true,
-          allowDangerouslySkipPermissions: true,
-          maxTurns: 300,
-          settingSources: getSettingSources(),
-          pathToClaudeCodeExecutable: claudeCodePath,
-          env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)),
-        },
+      const q = await runAgent(userText, {
+        systemPrompt: system,
+        resume: claudeSessionId,
+        cwd: this.opts.defaultCwd ?? homedir(),
+        mcpServers: { "vk-shared": sharedMcp, "tg-session": sessionMcp },
+        pathToClaudeCodeExecutable: claudeCodePath,
+        provider,
+        ...(provider !== "openai" && { env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)) }),
       });
 
       for await (const message of q) {
@@ -1480,66 +1464,6 @@ class TelegramConnection {
     );
 
     return createSdkMcpServer({ name: "telegram-session", tools: [sendMessageTool, sendFileTool] });
-  }
-
-  /** Codex provider session with streaming preview + typing indicator */
-  private async runCodexSession(
-    system: string,
-    history: ConvMessage[],
-    userText: string,
-    ctx: Context,
-  ): Promise<StreamResult> {
-    const codexOpts: CodexOptions = {};
-    const codexPath = getCodexBinaryPath();
-    if (codexPath) codexOpts.codexPathOverride = codexPath;
-
-    const codex = new Codex(codexOpts);
-    const threadOpts: ThreadOptions = {
-      model: this.opts.model || "gpt-5.3-codex",
-      workingDirectory: this.opts.defaultCwd || homedir(),
-      sandboxMode: "danger-full-access",
-      approvalPolicy: "never",
-      skipGitRepoCheck: true,
-    };
-
-    const historyLines = history
-      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-      .join("\n");
-    const fullPrompt = `${system}\n\n${historyLines}\n\nPlease reply to the latest user message above.`;
-
-    const typingInterval = setInterval(() => {
-      ctx.replyWithChatAction("typing").catch((e) => console.warn("[Telegram] Failed to send typing action:", e));
-    }, 4000);
-
-    let draftMessageId: number | null = null;
-    let lastEditTime = 0;
-
-    try {
-      const thread = codex.startThread(threadOpts);
-      const { events } = await thread.runStreamed(fullPrompt, {});
-
-      const textParts: string[] = [];
-      for await (const event of events) {
-        if (
-          event.type === "item.completed" &&
-          event.item.type === "agent_message" &&
-          event.item.text
-        ) {
-          textParts.push(event.item.text);
-          const accumulated = textParts.join("").trim();
-          const now = Date.now();
-          if (now - lastEditTime >= DRAFT_THROTTLE_MS) {
-            draftMessageId = await this.upsertDraft(ctx, accumulated, draftMessageId);
-            lastEditTime = now;
-          }
-        }
-      }
-
-      const text = textParts.join("").trim() || "抱歉，无法生成回复。";
-      return { text, draftMessageId };
-    } finally {
-      clearInterval(typingInterval);
-    }
   }
 
   /** Send a file to the current chat */

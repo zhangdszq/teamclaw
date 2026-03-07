@@ -1,7 +1,4 @@
-import { unstable_v2_prompt } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import { claudeCodeEnv } from './claude-settings.js';
-import { claudeCodePath, enhancedEnv } from './util.js';
+import { promptOnce } from './agent-client.js';
 
 const MAX_DIGEST_CHARS = 6000;
 
@@ -55,15 +52,10 @@ ${conversationText}
   "risk": "注意事项和潜在风险（如果没有明显风险可以写'无'）"
 }`;
 
-  const result: SDKResultMessage = await unstable_v2_prompt(prompt, {
-    model: claudeCodeEnv.ANTHROPIC_MODEL,
-    env: enhancedEnv,
-    pathToClaudeCodeExecutable: claudeCodePath,
-  });
+  const raw = await promptOnce(prompt);
+  if (!raw) return null;
 
-  if (result.subtype !== 'success' || !result.result) return null;
-
-  let text = result.result.trim();
+  let text = raw.trim();
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (jsonMatch) text = jsonMatch[1].trim();
   const objMatch = text.match(/\{[\s\S]*\}/);

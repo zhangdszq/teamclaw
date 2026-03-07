@@ -25,7 +25,16 @@ export type FeishuBotConfig = {
   platform: "feishu";
   appId: string;
   appSecret: string;
-  domain: "feishu" | "lark";
+  /** "feishu" | "lark" | custom URL for private deployment */
+  domain: "feishu" | "lark" | string;
+  connectionMode?: "websocket" | "webhook";
+  webhookPort?: number;
+  dmPolicy?: "open" | "allowlist" | "pairing";
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  allowFrom?: string[];
+  requireMention?: boolean;
+  renderMode?: "auto" | "raw" | "card";
+  ownerOpenIds?: string[];
   connected: boolean;
 };
 

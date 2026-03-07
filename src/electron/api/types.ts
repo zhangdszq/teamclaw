@@ -11,7 +11,7 @@ export type PendingPermission = {
   resolve: (result: { behavior: 'allow' | 'deny'; updatedInput?: unknown; message?: string }) => void;
 };
 
-export type AgentProvider = 'claude' | 'codex';
+export type AgentProvider = 'claude' | 'openai';
 
 export type Session = {
   id: string;

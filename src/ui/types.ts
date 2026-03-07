@@ -48,7 +48,7 @@ export type ServerEvent =
   | { type: "runner.error"; payload: { sessionId?: string; message: string } }
   | { type: "heartbeat.report"; payload: { assistantId: string; assistantName: string; text: string; ts: number } };
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "openai";
 
 // Client -> Server events
 export type ClientEvent =

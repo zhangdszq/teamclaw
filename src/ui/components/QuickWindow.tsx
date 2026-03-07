@@ -455,7 +455,7 @@ export function QuickWindow() {
           {!showAssistantPicker && (
             <div className="flex items-center gap-1 rounded-full px-2 py-[3px] text-[10px] font-medium text-ink-400">
               <div className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              {selectedAssistant?.provider === "codex" ? "Codex" : "Claude"}
+              {selectedAssistant?.provider === "openai" ? "OpenAI" : "Claude"}
             </div>
           )}
         </div>

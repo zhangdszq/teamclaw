@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 interface AssistantConfig {
   id: string;
   name: string;
-  provider: "claude" | "codex";
+  provider: "claude" | "openai";
   model?: string;
 }
 
@@ -15,7 +15,7 @@ interface SchedulerModalProps {
 }
 
 type EditMode = "calendar" | "create" | "edit";
-type ScheduleTypeOption = "once" | "interval" | "daily" | "hook";
+type ScheduleTypeOption = "once" | "interval" | "daily" | "cron" | "hook";
 
 // Weekday labels and JS day indices (Mon-first display order)
 const WEEKDAY_OPTIONS: { label: string; value: number }[] = [
@@ -88,8 +88,9 @@ const isSameDay = (a: Date, b: Date) =>
   a.getDate() === b.getDate();
 
 const getTaskDisplayDate = (task: ScheduledTask): Date | null => {
+  // Always prefer nextRun (dynamic, accurate) over scheduledTime (original, may be past)
+  if (task.nextRun) return new Date(task.nextRun);
   if (task.scheduleType === "once" && task.scheduledTime) return new Date(task.scheduledTime);
-  if (task.scheduleType === "interval" && task.nextRun) return new Date(task.nextRun);
   return null;
 };
 
@@ -101,12 +102,17 @@ const isTaskOnDay = (task: ScheduledTask, date: Date): boolean => {
     const d = getTaskDisplayDate(task);
     return !!d && isSameDay(d, date);
   }
-  if (task.scheduleType === "daily") {
-    if (!task.dailyTime) return false;
-    if (task.dailyDays && task.dailyDays.length > 0) {
-      return task.dailyDays.includes(date.getDay());
+  if (task.scheduleType === "daily" || task.scheduleType === "cron") {
+    // Show on the day of next scheduled run if available; otherwise fall back to day-of-week match
+    if (task.nextRun) return isSameDay(new Date(task.nextRun), date);
+    if (task.scheduleType === "daily") {
+      if (!task.dailyTime) return false;
+      if (task.dailyDays && task.dailyDays.length > 0) {
+        return task.dailyDays.includes(date.getDay());
+      }
+      return true;
     }
-    return true; // every day
+    return false;
   }
   return false;
 };
@@ -124,6 +130,7 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
   // Form state
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [notifyText, setNotifyText] = useState("");
   const [cwd, setCwd] = useState("");
   const [scheduleType, setScheduleType] = useState<ScheduleTypeOption>("once");
   const [scheduledTime, setScheduledTime] = useState("");
@@ -131,10 +138,14 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
   const [intervalUnit, setIntervalUnit] = useState<"minutes" | "hours" | "days" | "weeks">("hours");
   const [dailyTime, setDailyTime] = useState("09:00");
   const [dailyDays, setDailyDays] = useState<number[]>([]);
+  const [cronExpr, setCronExpr] = useState("");
+  const [cronTimezone, setCronTimezone] = useState("");
   const [hookEvent, setHookEvent] = useState<"startup" | "session.complete">("startup");
   const [hookFilterAssistantId, setHookFilterAssistantId] = useState("");
   const [hookFilterOnlyOnError, setHookFilterOnlyOnError] = useState(false);
   const [formAssistantId, setFormAssistantId] = useState<string>("");
+  const [runHistory, setRunHistory] = useState<TaskRunRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
@@ -203,12 +214,14 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
   const goToToday = () => setCurrentMonth(new Date());
 
   const resetForm = () => {
-    setName(""); setPrompt(""); setCwd("");
+    setName(""); setPrompt(""); setNotifyText(""); setCwd("");
     setScheduleType("once"); setScheduledTime("");
     setIntervalValue(1); setIntervalUnit("hours");
     setDailyTime("09:00"); setDailyDays([]);
+    setCronExpr(""); setCronTimezone("");
     setHookEvent("startup"); setHookFilterAssistantId(""); setHookFilterOnlyOnError(false);
     setFormAssistantId(""); setEditingTask(null);
+    setRunHistory([]);
   };
 
   const handleCreate = (date?: Date) => {
@@ -228,28 +241,62 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     setEditingTask(task);
     setName(task.name);
     setPrompt(task.prompt);
+    setNotifyText(task.notifyText || "");
     setCwd(task.cwd || "");
-    setScheduleType(task.scheduleType === "heartbeat" ? "interval" : task.scheduleType as ScheduleTypeOption);
-    if (task.scheduledTime) setScheduledTime(toLocalDateTimeString(new Date(task.scheduledTime)));
+    const st = task.scheduleType === "heartbeat" ? "interval" : task.scheduleType as ScheduleTypeOption;
+    setScheduleType(st);
+    if (task.scheduledTime || task.nextRun) {
+      const displayTime = task.nextRun ?? task.scheduledTime!;
+      setScheduledTime(toLocalDateTimeString(new Date(displayTime)));
+    }
     setIntervalValue(task.intervalValue || 1);
     setIntervalUnit(task.intervalUnit || "hours");
     setDailyTime(task.dailyTime || "09:00");
     setDailyDays(task.dailyDays || []);
+    setCronExpr(task.cronExpr || "");
+    setCronTimezone(task.cronTimezone || "");
     setHookEvent(task.hookEvent ?? "startup");
     setHookFilterAssistantId(task.hookFilter?.assistantId ?? "");
     setHookFilterOnlyOnError(task.hookFilter?.onlyOnError ?? false);
     setFormAssistantId(task.assistantId || "");
     setMode("edit");
+    // Load execution history
+    setHistoryLoading(true);
+    window.electron.getTaskRunHistory(task.id, 10)
+      .then((h) => setRunHistory(h ?? []))
+      .catch(() => setRunHistory([]))
+      .finally(() => setHistoryLoading(false));
+  };
+
+  const handleRunNow = async () => {
+    if (!editingTask) return;
+    setLoading(true);
+    try {
+      await window.electron.runTaskNow(editingTask.id);
+      setTimeout(() => {
+        loadTasks();
+        if (editingTask) {
+          window.electron.getTaskRunHistory(editingTask.id, 10)
+            .then((h) => setRunHistory(h ?? []))
+            .catch(() => {});
+        }
+      }, 1500);
+    } catch (e) {
+      console.error("Failed to run task:", e);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSave = async () => {
-    if (!name.trim() || !prompt.trim()) return;
+    if (!name.trim() || (!prompt.trim() && !notifyText.trim())) return;
     setLoading(true);
     try {
       const taskData: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt"> = {
         name: name.trim(),
         enabled: true,
         prompt: prompt.trim(),
+        notifyText: notifyText.trim() || undefined,
         cwd: cwd.trim() || undefined,
         scheduleType,
         scheduledTime: scheduleType === "once" ? new Date(scheduledTime).toISOString() : undefined,
@@ -257,6 +304,8 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
         intervalUnit: scheduleType === "interval" ? intervalUnit : undefined,
         dailyTime: scheduleType === "daily" ? dailyTime : undefined,
         dailyDays: scheduleType === "daily" ? dailyDays : undefined,
+        cronExpr: scheduleType === "cron" ? cronExpr.trim() : undefined,
+        cronTimezone: scheduleType === "cron" && cronTimezone.trim() ? cronTimezone.trim() : undefined,
         heartbeatInterval: undefined,
         suppressIfShort: undefined,
         hookEvent: scheduleType === "hook" ? hookEvent : undefined,
@@ -564,18 +613,27 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                                 }`}
                                 title={`${assistantName ? assistantName + " · " : ""}${task.name}`}
                               >
-                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${task.enabled ? color.dot : "bg-ink-300"}`} />
+                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                  !task.enabled ? "bg-ink-300"
+                                    : task.lastRunStatus === "error" ? "bg-red-500"
+                                    : task.lastRunStatus === "ok" ? color.dot
+                                    : color.dot
+                                }`} />
                                 <span className={`truncate text-[11px] leading-[1.3] font-medium ${task.enabled ? color.text : "text-ink-400"}`}>
                                   {assistantName && (
                                     <span className="opacity-60">{assistantName} · </span>
                                   )}
                                   {task.name}
                                 </span>
-                                {(task.scheduleType === "interval" || task.scheduleType === "daily") && (
-                                  <span className={`ml-auto shrink-0 text-[10px] opacity-60 ${task.enabled ? color.text : "text-ink-300"}`}>
-                                    {task.scheduleType === "daily" ? task.dailyTime : "↻"}
+                                {task.consecutiveErrors && task.consecutiveErrors > 0 ? (
+                                  <span className="ml-auto shrink-0 text-[10px] text-red-500 font-medium">
+                                    {task.consecutiveErrors}x
                                   </span>
-                                )}
+                                ) : (task.scheduleType === "interval" || task.scheduleType === "daily" || task.scheduleType === "cron") ? (
+                                  <span className={`ml-auto shrink-0 text-[10px] opacity-60 ${task.enabled ? color.text : "text-ink-300"}`}>
+                                    {task.scheduleType === "daily" ? task.dailyTime : task.scheduleType === "cron" ? "cron" : "↻"}
+                                  </span>
+                                ) : null}
                               </button>
                             );
                           })}
@@ -626,15 +684,29 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                   </label>
 
                   <label className="block">
-                    <span className="text-xs font-medium text-muted">执行指令</span>
-                    <textarea
-                      value={prompt}
-                      onChange={(e) => setPrompt(e.target.value)}
-                      placeholder="输入要执行的任务指令..."
-                      rows={3}
-                      className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                    <span className="text-xs font-medium text-muted">提醒内容（直接推送，不启动 AI）</span>
+                    <input
+                      type="text"
+                      value={notifyText}
+                      onChange={(e) => setNotifyText(e.target.value)}
+                      placeholder="例如：该喝水啦、记得开会"
+                      className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
                     />
+                    <p className="mt-1 text-xs text-muted">填写后到期直接推送到 Telegram/飞书/钉钉，秒级送达</p>
                   </label>
+
+                  {!notifyText.trim() && (
+                    <label className="block">
+                      <span className="text-xs font-medium text-muted">AI 执行指令（需要 AI 思考的复杂任务）</span>
+                      <textarea
+                        value={prompt}
+                        onChange={(e) => setPrompt(e.target.value)}
+                        placeholder="输入要执行的任务指令..."
+                        rows={3}
+                        className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                      />
+                    </label>
+                  )}
 
                   <label className="block">
                     <span className="text-xs font-medium text-muted">工作目录（可选）</span>
@@ -659,11 +731,12 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                   <div className="border-t border-ink-900/10 pt-4">
                     <span className="text-xs font-medium text-muted">执行方式</span>
                     <div className="mt-3 grid grid-cols-3 gap-2">
-                      {(["once", "interval", "daily", "hook"] as const).map((type) => {
+                      {(["once", "interval", "daily", "cron", "hook"] as const).map((type) => {
                         const labels: Record<string, string> = {
                           once: "单次执行",
                           interval: "间隔重复",
                           daily: "指定时间",
+                          cron: "Cron 表达式",
                           hook: "事件钩子",
                         };
                         return (
@@ -780,6 +853,34 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                       </div>
                     )}
 
+                    {scheduleType === "cron" && (
+                      <div className="mt-4 space-y-3">
+                        <label className="block">
+                          <span className="text-xs font-medium text-muted">Cron 表达式</span>
+                          <input
+                            type="text"
+                            value={cronExpr}
+                            onChange={(e) => setCronExpr(e.target.value)}
+                            placeholder="0 9 * * 1-5"
+                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 font-mono placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                          />
+                          <p className="mt-1.5 text-xs text-muted">
+                            5 位标准 cron: 分 时 日 月 周（示例: 0 9 * * 1-5 = 工作日 9:00）
+                          </p>
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-medium text-muted">时区（可选）</span>
+                          <input
+                            type="text"
+                            value={cronTimezone}
+                            onChange={(e) => setCronTimezone(e.target.value)}
+                            placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone}
+                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                          />
+                        </label>
+                      </div>
+                    )}
+
                     {scheduleType === "hook" && (
                       <div className="mt-4 space-y-3">
                         <label className="block">
@@ -828,32 +929,92 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                     )}
                   </div>
 
-                  {/* Edit-only: toggle enabled + delete */}
+                  {/* Edit-only: status + run now + toggle + delete */}
                   {mode === "edit" && editingTask && (
-                    <div className="border-t border-ink-900/10 pt-4 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-medium text-muted">启用</span>
-                        <button
-                          onClick={(e) => editingTask && handleToggle(editingTask, e)}
-                          className={`relative w-10 h-6 rounded-full transition-colors ${
-                            editingTask.enabled ? "bg-accent" : "bg-ink-900/20"
-                          }`}
-                        >
-                          <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
-                            editingTask.enabled ? "left-5" : "left-1"
-                          }`} />
-                        </button>
+                    <>
+                      {/* Execution status */}
+                      {editingTask.lastRunStatus && (
+                        <div className={`rounded-xl px-4 py-3 text-xs ${
+                          editingTask.lastRunStatus === "ok"
+                            ? "bg-emerald-500/8 text-emerald-700"
+                            : editingTask.lastRunStatus === "error"
+                            ? "bg-red-500/8 text-red-700"
+                            : "bg-ink-900/5 text-ink-500"
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">
+                              {editingTask.lastRunStatus === "ok" ? "上次执行成功" : editingTask.lastRunStatus === "error" ? "上次执行失败" : "上次已跳过"}
+                            </span>
+                            {editingTask.lastRun && (
+                              <span className="opacity-70">{new Date(editingTask.lastRun).toLocaleString("zh-CN", { hour12: false })}</span>
+                            )}
+                          </div>
+                          {editingTask.lastError && (
+                            <p className="mt-1 opacity-80 break-all">{editingTask.lastError}</p>
+                          )}
+                          {editingTask.consecutiveErrors && editingTask.consecutiveErrors > 1 && (
+                            <p className="mt-1 font-medium">连续失败 {editingTask.consecutiveErrors} 次</p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Execution history */}
+                      {runHistory.length > 0 && (
+                        <div className="border border-ink-900/8 rounded-xl overflow-hidden">
+                          <div className="px-3 py-2 bg-surface-secondary/50 text-xs font-medium text-muted">执行历史</div>
+                          <div className="max-h-36 overflow-y-auto divide-y divide-ink-900/5">
+                            {runHistory.map((r, i) => (
+                              <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                                <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${r.status === "ok" ? "bg-emerald-500" : r.status === "error" ? "bg-red-500" : "bg-ink-300"}`} />
+                                <span className="text-ink-600 tabular-nums">{new Date(r.startedAt).toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+                                <span className="text-muted">{Math.round(r.durationMs / 1000)}s</span>
+                                {r.error && <span className="text-red-500 truncate flex-1" title={r.error}>{r.error.slice(0, 40)}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {historyLoading && (
+                        <div className="text-xs text-muted text-center py-2">加载历史...</div>
+                      )}
+
+                      <div className="border-t border-ink-900/10 pt-4 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-medium text-muted">启用</span>
+                          <button
+                            onClick={(e) => editingTask && handleToggle(editingTask, e)}
+                            className={`relative w-10 h-6 rounded-full transition-colors ${
+                              editingTask.enabled ? "bg-accent" : "bg-ink-900/20"
+                            }`}
+                          >
+                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
+                              editingTask.enabled ? "left-5" : "left-1"
+                            }`} />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleRunNow}
+                            disabled={loading}
+                            className="flex items-center gap-1.5 rounded-lg border border-ink-900/10 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-surface-tertiary transition-colors disabled:opacity-40"
+                          >
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polygon points="5 3 19 12 5 21 5 3" />
+                            </svg>
+                            立即执行
+                          </button>
+                          <button
+                            onClick={() => editingTask && handleDelete(editingTask.id)}
+                            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-error hover:bg-error/10 transition-colors"
+                          >
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
+                            删除
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        onClick={() => editingTask && handleDelete(editingTask.id)}
-                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-error hover:bg-error/10 transition-colors"
-                      >
-                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                        删除任务
-                      </button>
-                    </div>
+                    </>
                   )}
                 </div>
               </div>
@@ -863,7 +1024,7 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                 <div className="max-w-lg mx-auto">
                   <button
                     onClick={handleSave}
-                    disabled={loading || !name.trim() || !prompt.trim()}
+                    disabled={loading || !name.trim() || (!prompt.trim() && !notifyText.trim())}
                     className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {loading ? (

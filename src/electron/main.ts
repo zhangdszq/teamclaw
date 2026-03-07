@@ -51,17 +51,9 @@ import {
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { ensureBuiltinMcpServers } from "./libs/builtin-mcps.js";
 import { seedBuiltinSkills } from "./libs/builtin-skills.js";
-import {
-    loadGoals,
-    addGoal,
-    updateGoal,
-    deleteGoal,
-    triggerGoalRun,
-    setGoalCompleteNotifier,
-    type LongTermGoal,
-} from "./libs/goals-manager.js";
+// Goals module removed — long-term goals are now handled via SOP + scheduler
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
-import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
+import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureOpenAIAuthSync } from "./libs/openai-auth.js";
 import { googleLogin, googleLogout, getGoogleAuthStatus } from "./libs/google-auth.js";
 import { startEmbeddedApi, stopEmbeddedApi, isEmbeddedApiRunning, setWebhookSessionRunner } from "./api/server.js";
 import {
@@ -86,8 +78,12 @@ import {
   setSopRunner,
   setSopStageRunner,
   runHookTasks,
+  createSchedulerService,
+  runTaskNow,
+  readRunLog,
+  getDefaultLogDir,
   type ScheduledTask
-} from "./libs/scheduler.js";
+} from "./libs/scheduler/index.js";
 import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer, readLastCompactionAt } from "./libs/heartbeat.js";
 import { loadPlanItems, updatePlanItem, upsertPlanItem } from "./libs/plan-store.js";
 import {
@@ -104,11 +100,9 @@ import {
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import Anthropic from "@anthropic-ai/sdk";
 import { parse as parseToml } from "smol-toml";
-import { query as agentQuery } from "@anthropic-ai/claude-agent-sdk";
 import { rmSync } from "fs";
-import { getSettingSources } from "./libs/claude-settings.js";
+import { runAgent } from "./libs/agent-client.js";
 import {
     listKnowledgeCandidates,
     updateKnowledgeCandidateReviewStatus,
@@ -123,6 +117,7 @@ import {
     getKnowledgeBasePath,
 } from "./libs/knowledge-store.js";
 import { SHARED_TOOL_CATALOG, type ToolCatalogEntry } from "./libs/shared-mcp.js";
+import { initUsageTracker, getUsageLogs, getUsageSummary, getProviderStats, clearUsageLogs } from "./libs/usage-tracker.js";
 
 // ─── Memory janitor: run on startup + every 24 h ─────────────
 function startMemoryJanitor(): void {
@@ -245,6 +240,14 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     provider: assistant.provider,
                     model: assistant.model,
                     defaultCwd: assistant.defaultCwd,
+                    connectionMode: feishu.connectionMode,
+                    webhookPort: feishu.webhookPort,
+                    dmPolicy: feishu.dmPolicy,
+                    groupPolicy: feishu.groupPolicy,
+                    allowFrom: feishu.allowFrom,
+                    requireMention: feishu.requireMention,
+                    renderMode: feishu.renderMode,
+                    ownerOpenIds: feishu.ownerOpenIds,
                 });
                 console.log(`[AutoConnect] Feishu bot connected for: ${assistant.name}`);
             } catch (err) {
@@ -307,8 +310,8 @@ app.on("ready", async () => {
     startMemoryJanitor();
     setInterval(startMemoryJanitor, JANITOR_INTERVAL_MS);
 
-    // Ensure Codex auth.json is in sync with stored tokens
-    ensureCodexAuthSync();
+    // Verify stored OpenAI tokens
+    ensureOpenAIAuthSync();
 
     // Seed built-in MCP servers (opennews, opentwitter) into ~/.claude/settings.json
     ensureBuiltinMcpServers();
@@ -608,6 +611,7 @@ app.on("ready", async () => {
     ipcMain.on("show-main-window", showMainWindowNow);
 
     // Initialize scheduler — inject sessionRunner so tasks fire directly in main process
+    createSchedulerService();
     startScheduler();
     setSchedulerSessionRunner(handleClientEvent);
 
@@ -889,7 +893,7 @@ app.on("ready", async () => {
     ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
         const result = saveAssistantsConfig(config);
         const configUpdates = {
-            provider: undefined as "claude" | "codex" | undefined,
+            provider: undefined as "claude" | "openai" | undefined,
             model: undefined as string | undefined,
             persona: undefined as string | undefined,
             coreValues: undefined as string | undefined,
@@ -1093,6 +1097,8 @@ app.on("ready", async () => {
     });
 
     // Scheduler handlers
+    initUsageTracker(join(app.getPath("userData"), "sessions.db"));
+
     ipcMainHandle("get-scheduled-tasks", () => {
         return loadScheduledTasks();
     });
@@ -1107,6 +1113,30 @@ app.on("ready", async () => {
 
     ipcMainHandle("delete-scheduled-task", async (_: any, id: string) => {
         return await deleteScheduledTask(id);
+    });
+
+    ipcMainHandle("run-task-now", async (_: any, id: string) => {
+        return await runTaskNow(id);
+    });
+
+    ipcMainHandle("get-task-run-history", async (_: any, taskId: string, limit?: number) => {
+        return await readRunLog(getDefaultLogDir(), taskId, limit ?? 20);
+    });
+
+    ipcMainHandle("get-usage-logs", (_: any, filter?: UsageFilter) => {
+        return getUsageLogs(filter ?? {});
+    });
+
+    ipcMainHandle("get-usage-summary", (_: any, filter?: UsageFilter) => {
+        return getUsageSummary(filter ?? {});
+    });
+
+    ipcMainHandle("get-provider-stats", (_: any, filter?: UsageFilter) => {
+        return getProviderStats(filter ?? {});
+    });
+
+    ipcMainHandle("clear-usage-logs", () => {
+        return clearUsageLogs();
     });
 
     function normalizeWorkCategory(value: string): "客户服务" | "情报监控" | "内部运营" | "增长销售" | "" {
@@ -1256,7 +1286,7 @@ app.on("ready", async () => {
         return await validateApiConfig(baseUrl, authToken, model);
     });
 
-    // OpenAI Codex OAuth handlers
+    // OpenAI OAuth handlers
     ipcMainHandle("openai-login", async () => {
         return await openAILogin(mainWindow);
     });
@@ -1904,33 +1934,7 @@ app.on("ready", async () => {
         return isEmbeddedApiRunning();
     });
 
-    // Goals IPC handlers
-    ipcMainHandle("goals-list", () => loadGoals());
-
-    ipcMainHandle("goals-add", (_: any, input: Omit<LongTermGoal, "id" | "status" | "totalRuns" | "progressLog" | "createdAt" | "updatedAt" | "completedAt" | "nextRunAt" | "consecutiveErrors">) => {
-        const goal = addGoal(input);
-        triggerGoalRun(goal);
-        return goal;
-    });
-
-    ipcMainHandle("goals-update", (_: any, id: string, updates: Partial<LongTermGoal>) => updateGoal(id, updates));
-
-    ipcMainHandle("goals-delete", (_: any, id: string) => deleteGoal(id));
-
-    ipcMainHandle("goals-run-now", (_: any, id: string) => {
-        const goals = loadGoals();
-        const goal = goals.find((g) => g.id === id);
-        if (goal) triggerGoalRun(goal);
-    });
-
-    setGoalCompleteNotifier(() => {
-        const windows = BrowserWindow.getAllWindows();
-        for (const win of windows) {
-            if (!win.isDestroyed()) {
-                win.webContents.send("goal-completed");
-            }
-        }
-    });
+    // Goals module removed — see SOP + scheduler for long-term automation
 
     // ─── SOP Hands IPC handlers ──────────────────────────────────────────────
 
@@ -2567,17 +2571,12 @@ ${description}`;
         if (settings.anthropicBaseUrl)   envOverride.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
 
         try {
-            const q = agentQuery({
-                prompt,
-                options: {
-                    cwd: HANDS_DIR,
-                    abortController,
-                    permissionMode: "bypassPermissions",
-                    allowDangerouslySkipPermissions: true,
-                    maxTurns: 15,
-                    settingSources: getSettingSources(),
-                    env: { ...process.env, ...envOverride },
-                },
+            const q = await runAgent(prompt, {
+                cwd: HANDS_DIR,
+                abortController,
+                maxTurns: 15,
+                includePartialMessages: false,
+                env: { ...process.env, ...envOverride },
             });
 
             // Drain the agent stream
@@ -2630,8 +2629,7 @@ ${description}`;
                 abortController.abort();
             }, FIX_TIMEOUT_MS);
             try {
-                const fixQ = agentQuery({
-                    prompt: `以下 TOML 文件有格式错误，请修复后用 Write 工具写回同一路径。
+                const fixQ = await runAgent(`以下 TOML 文件有格式错误，请修复后用 Write 工具写回同一路径。
 只修复 TOML 语法问题，不要改变任何业务内容。
 
 错误信息：${parseError}
@@ -2643,16 +2641,12 @@ ${description}`;
 ${brokenToml}
 \`\`\`
 
-请将修复后的完整 TOML 写入：${targetPath}`,
-                    options: {
-                        cwd: HANDS_DIR,
-                        abortController,
-                        permissionMode: "bypassPermissions",
-                        allowDangerouslySkipPermissions: true,
-                        maxTurns: 3,
-                        settingSources: getSettingSources(),
-                        env: { ...process.env, ...envOverride },
-                    },
+请将修复后的完整 TOML 写入：${targetPath}`, {
+                    cwd: HANDS_DIR,
+                    abortController,
+                    maxTurns: 3,
+                    includePartialMessages: false,
+                    env: { ...process.env, ...envOverride },
                 });
                 for await (const msg of fixQ) {
                     if (msg.type === "result") {
@@ -3147,9 +3141,11 @@ app.on("before-quit", () => {
     isQuitting = true;
 });
 
-// Stop embedded API and unregister shortcuts when app is quitting
-app.on("will-quit", () => {
+// Stop embedded API, proxy, and unregister shortcuts when app is quitting
+app.on("will-quit", async () => {
     globalShortcut.unregisterAll();
     console.log("Stopping embedded API server...");
     stopEmbeddedApi();
+    const { stopProxy } = await import("./libs/openai-proxy.js");
+    stopProxy();
 });

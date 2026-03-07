@@ -1,16 +1,9 @@
-import { query, type SDKMessage, type PermissionResult, unstable_v2_prompt, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKMessage, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import { promptOnce, runAgent, type AgentProvider } from '../../libs/agent-client.js';
 import { createSharedMcpServer } from '../../libs/shared-mcp.js';
-import {
-  Codex,
-  type ThreadEvent,
-  type ThreadItem,
-  type CodexOptions,
-  type ThreadOptions,
-} from '@openai/codex-sdk';
 import type { Session } from '../types.js';
 import { recordMessage, updateSession, addPendingPermission } from './session.js';
 import { buildSmartMemoryContext } from '../../libs/memory-store.js';
-import { getSettingSources } from '../../libs/claude-settings.js';
 import { loadAssistantsConfig } from '../../libs/assistants-config.js';
 import { loadUserSettings } from '../../libs/user-settings.js';
 import { homedir } from 'os';
@@ -34,6 +27,7 @@ export type RunnerOptions = {
   session: Session;
   resumeSessionId?: string;
   model?: string;
+  provider?: AgentProvider;
   onSessionUpdate?: (updates: Partial<Session>) => void;
 };
 
@@ -175,9 +169,9 @@ export function stopSession(sessionId: string): boolean {
   return false;
 }
 
-// Run Claude query
+// Run Claude query (supports both claude and openai providers via proxy)
 export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerEvent> {
-  const { prompt, session, resumeSessionId, model, onSessionUpdate } = options;
+  const { prompt, session, resumeSessionId, model, provider, onSessionUpdate } = options;
   const abortController = new AbortController();
 
   // Track this controller - use externalId if available for cross-process stop
@@ -217,55 +211,38 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   console.log('[Runner] Claude Code path:', claudeCodePath);
 
   try {
-    const q = query({
-      prompt: effectivePrompt,
-      options: {
-        cwd: session.cwd ?? DEFAULT_CWD,
-        resume: resumeSessionId,
-        abortController,
-        env: enhancedEnv,
-        pathToClaudeCodeExecutable: claudeCodePath,
-        permissionMode: 'bypassPermissions',
-        includePartialMessages: true,
-        allowDangerouslySkipPermissions: true,
-        maxTurns: 300,
-        settingSources: getSettingSources(),
-        mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
-        canUseTool: async (toolName, input, { signal, toolUseID }) => {
-          // For AskUserQuestion, we need to wait for user response
-          if (toolName === 'AskUserQuestion') {
-            const toolUseId = toolUseID;
-
-            console.log('[Runner] AskUserQuestion requested, toolUseId:', toolUseId);
-
-            // Queue permission request to be yielded
-            permissionRequestQueue.push({
-              type: 'permission.request',
-              payload: { sessionId: session.id, toolUseId, toolName, input },
+    const q = await runAgent(effectivePrompt, {
+      cwd: session.cwd ?? DEFAULT_CWD,
+      resume: resumeSessionId,
+      abortController,
+      ...((!provider || provider === 'claude') && { env: enhancedEnv }),
+      pathToClaudeCodeExecutable: claudeCodePath,
+      provider: provider ?? 'claude',
+      mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
+      canUseTool: async (toolName, input, { signal, toolUseID }) => {
+        if (toolName === 'AskUserQuestion') {
+          const toolUseId = toolUseID;
+          console.log('[Runner] AskUserQuestion requested, toolUseId:', toolUseId);
+          permissionRequestQueue.push({
+            type: 'permission.request',
+            payload: { sessionId: session.id, toolUseId, toolName, input },
+          });
+          return new Promise<PermissionResult>((resolve) => {
+            addPendingPermission(session.id, {
+              toolUseId,
+              toolName,
+              input,
+              resolve: (result) => {
+                console.log('[Runner] Permission resolved:', toolUseId, result.behavior);
+                resolve(result as PermissionResult);
+              },
             });
-
-            // Create a promise that will be resolved when user responds
-            return new Promise<PermissionResult>((resolve) => {
-              addPendingPermission(session.id, {
-                toolUseId,
-                toolName,
-                input,
-                resolve: (result) => {
-                  console.log('[Runner] Permission resolved:', toolUseId, result.behavior);
-                  resolve(result as PermissionResult);
-                },
-              });
-
-              // Handle abort
-              signal.addEventListener('abort', () => {
-                resolve({ behavior: 'deny', message: 'Session aborted' });
-              });
+            signal.addEventListener('abort', () => {
+              resolve({ behavior: 'deny', message: 'Session aborted' });
             });
-          }
-
-          // Auto-approve other tools
-          return { behavior: 'allow', updatedInput: input };
-        },
+          });
+        }
+        return { behavior: 'allow', updatedInput: input as Record<string, unknown> };
       },
     });
 
@@ -393,244 +370,6 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   }
 }
 
-// ─── Codex SDK helpers ───────────────────────────────────────
-
-// Get Codex binary path for packaged app
-function getCodexBinaryPath(): string | undefined {
-  const bundledPath = process.env.CODEX_CLI_PATH;
-  if (bundledPath && existsSync(bundledPath)) {
-    return bundledPath;
-  }
-
-  // Check for asar-unpacked vendor binary
-  const platform = process.platform === 'darwin' ? 'apple-darwin' : 'unknown-linux-musl';
-  const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64';
-  const candidates = [
-    // When running in packaged Electron
-    join(process.resourcesPath || '', 'app.asar.unpacked', 'node_modules', '@openai', 'codex-sdk', 'vendor', `${arch}-${platform}`, 'codex', 'codex'),
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return undefined;
-}
-
-// Synthetic UUID counter for Codex events
-let codexCounter = 0;
-function codexUuid(): string {
-  return `codex-${Date.now()}-${++codexCounter}`;
-}
-
-// SDKMessage-compatible object builders for Codex events
-function codexSystemInit(sessionId: string, model: string, cwd: string, threadId?: string): Record<string, unknown> {
-  return { type: 'system', subtype: 'init', session_id: threadId ?? sessionId, model, cwd, permissionMode: 'dangerFullAccess', uuid: codexUuid() };
-}
-
-function codexAssistantText(text: string): Record<string, unknown> {
-  return { type: 'assistant', uuid: codexUuid(), message: { role: 'assistant', content: [{ type: 'text', text }] } };
-}
-
-function codexAssistantThinking(thinking: string): Record<string, unknown> {
-  return { type: 'assistant', uuid: codexUuid(), message: { role: 'assistant', content: [{ type: 'thinking', thinking }] } };
-}
-
-function codexToolUse(id: string, name: string, input: unknown): Record<string, unknown> {
-  return { type: 'assistant', uuid: codexUuid(), message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } };
-}
-
-function codexToolResult(toolUseId: string, content: string, isError = false): Record<string, unknown> {
-  return { type: 'user', uuid: codexUuid(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }] } };
-}
-
-function codexResult(success: boolean, usage?: { input_tokens: number; output_tokens: number }): Record<string, unknown> {
-  return { type: 'result', subtype: success ? 'success' : 'error', uuid: codexUuid(), duration_ms: 0, duration_api_ms: 0, total_cost_usd: 0, usage: usage ?? { input_tokens: 0, output_tokens: 0 } };
-}
-
-function mapCodexItem(item: ThreadItem, phase: 'started' | 'updated' | 'completed'): Array<Record<string, unknown>> {
-  const msgs: Array<Record<string, unknown>> = [];
-
-  switch (item.type) {
-    case 'agent_message':
-      if (item.text) msgs.push(codexAssistantText(item.text));
-      break;
-    case 'reasoning':
-      if (item.text) msgs.push(codexAssistantThinking(item.text));
-      break;
-    case 'command_execution':
-      if (phase === 'started') {
-        msgs.push(codexToolUse(item.id, 'Bash', { command: item.command }));
-      }
-      if (phase === 'completed' || phase === 'updated') {
-        const exitInfo = item.exit_code !== undefined ? `[exit ${item.exit_code}] ` : '';
-        msgs.push(codexToolResult(item.id, `${exitInfo}${item.aggregated_output ?? ''}`, item.status === 'failed'));
-      }
-      break;
-    case 'file_change':
-      if (phase === 'started') {
-        const summary = item.changes.map(c => `${c.kind}: ${c.path}`).join('\n');
-        msgs.push(codexToolUse(item.id, 'Edit', { description: summary, changes: item.changes }));
-      }
-      if (phase === 'completed') {
-        const summary = item.changes.map(c => `${c.kind}: ${c.path}`).join('\n');
-        msgs.push(codexToolResult(item.id, summary, item.status === 'failed'));
-      }
-      break;
-    case 'mcp_tool_call':
-      if (phase === 'started') {
-        msgs.push(codexToolUse(item.id, `MCP:${item.server}/${item.tool}`, item.arguments));
-      }
-      if (phase === 'completed') {
-        const content = item.error ? item.error.message : JSON.stringify(item.result ?? {});
-        msgs.push(codexToolResult(item.id, content, item.status === 'failed'));
-      }
-      break;
-    case 'web_search':
-      if (phase === 'started') msgs.push(codexToolUse(item.id, 'WebSearch', { query: item.query }));
-      if (phase === 'completed') msgs.push(codexToolResult(item.id, `Search: ${item.query}`));
-      break;
-    case 'todo_list': {
-      const text = item.items.map(t => `${t.completed ? '✓' : '○'} ${t.text}`).join('\n');
-      msgs.push(codexAssistantText(`**Todo List**\n${text}`));
-      break;
-    }
-    case 'error':
-      msgs.push(codexAssistantText(`**Error:** ${item.message}`));
-      break;
-  }
-  return msgs;
-}
-
-// Run Codex query — async generator matching the same pattern as runClaude
-export async function* runCodex(options: RunnerOptions): AsyncGenerator<ServerEvent> {
-  const { prompt, session, model, onSessionUpdate } = options;
-  const abortController = new AbortController();
-
-  const trackingId = session.externalId || session.id;
-  activeControllers.set(trackingId, abortController);
-  console.log('[CodexRunner] Tracking session with ID:', trackingId);
-
-  const DEFAULT_CWD = homedir();
-
-  // Inject smart memory context into prompt (scoped to assistant)
-  let effectivePrompt = prompt;
-  if (!session.claudeSessionId) {
-    try {
-      const memoryCtx = await buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
-      if (memoryCtx) {
-        effectivePrompt = memoryCtx + '\n\n' + prompt;
-        console.log('[CodexRunner] Memory context injected, length:', memoryCtx.length);
-      }
-    } catch (err) {
-      console.warn('[CodexRunner] Failed to load memory context:', err);
-    }
-  }
-
-  try {
-    const codexPath = getCodexBinaryPath();
-    const codexOpts: CodexOptions = {};
-    if (codexPath) {
-      codexOpts.codexPathOverride = codexPath;
-    }
-
-    const codex = new Codex(codexOpts);
-
-    const threadOpts: ThreadOptions = {
-      model: model ?? 'gpt-5.3-codex',
-      workingDirectory: session.cwd ?? DEFAULT_CWD,
-      sandboxMode: 'danger-full-access',
-      approvalPolicy: 'never',
-      skipGitRepoCheck: true,
-    };
-
-    const thread = session.claudeSessionId
-      ? codex.resumeThread(session.claudeSessionId, threadOpts)
-      : codex.startThread(threadOpts);
-
-    const { events } = await thread.runStreamed(effectivePrompt, {
-      signal: abortController.signal,
-    });
-
-    for await (const event of events) {
-      if (abortController.signal.aborted) break;
-
-      const serverEvents = handleCodexEvent(event, session, onSessionUpdate);
-      for (const se of serverEvents) {
-        // Record messages that are stream.message
-        if (se.type === 'stream.message') {
-          recordMessage(session.id, (se.payload as any).message);
-        }
-        yield se;
-      }
-    }
-
-    // Completed normally
-    if (!abortController.signal.aborted && session.status === 'running') {
-      updateSession(session.id, { status: 'completed' });
-      yield { type: 'session.status', payload: { sessionId: session.id, status: 'completed', title: session.title } };
-    }
-  } catch (error) {
-    if ((error as Error).name === 'AbortError' || abortController.signal.aborted) {
-      console.log('[CodexRunner] Session aborted');
-      updateSession(session.id, { status: 'idle' });
-      yield { type: 'session.status', payload: { sessionId: session.id, status: 'idle', title: session.title } };
-      return;
-    }
-
-    console.error('[CodexRunner] Error:', error);
-    updateSession(session.id, { status: 'error' });
-    yield { type: 'session.status', payload: { sessionId: session.id, status: 'error', title: session.title, error: String(error) } };
-  } finally {
-    if (abortController.signal.aborted) {
-      updateSession(session.id, { status: 'idle' });
-    }
-    activeControllers.delete(trackingId);
-    console.log('[CodexRunner] Finished, cleaning up:', trackingId);
-  }
-}
-
-function handleCodexEvent(
-  event: ThreadEvent,
-  session: Session,
-  onSessionUpdate?: (updates: Partial<Session>) => void
-): ServerEvent[] {
-  const results: ServerEvent[] = [];
-  const DEFAULT_CWD = homedir();
-
-  const pushMsg = (msg: Record<string, unknown>) => {
-    results.push({ type: 'stream.message', payload: { sessionId: session.id, message: msg as any } });
-  };
-
-  switch (event.type) {
-    case 'thread.started':
-      session.claudeSessionId = event.thread_id;
-      onSessionUpdate?.({ claudeSessionId: event.thread_id });
-      pushMsg(codexSystemInit(session.id, session.model ?? 'codex', session.cwd ?? DEFAULT_CWD, event.thread_id));
-      break;
-    case 'turn.started':
-      break;
-    case 'turn.completed':
-      pushMsg(codexResult(true, { input_tokens: event.usage.input_tokens, output_tokens: event.usage.output_tokens }));
-      break;
-    case 'turn.failed':
-      pushMsg(codexAssistantText(`**Error:** ${event.error.message}`));
-      pushMsg(codexResult(false));
-      break;
-    case 'item.started':
-      mapCodexItem(event.item, 'started').forEach(pushMsg);
-      break;
-    case 'item.updated':
-      mapCodexItem(event.item, 'updated').forEach(pushMsg);
-      break;
-    case 'item.completed':
-      mapCodexItem(event.item, 'completed').forEach(pushMsg);
-      break;
-    case 'error':
-      pushMsg(codexAssistantText(`**Stream Error:** ${event.message}`));
-      break;
-  }
-
-  return results;
-}
 
 // Generate session title using Claude
 export async function generateSessionTitle(userIntent: string | null): Promise<string> {
@@ -641,20 +380,13 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
   const enhancedEnv = getEnhancedEnv();
 
   try {
-    const result: SDKResultMessage = await unstable_v2_prompt(
+    const title = await promptOnce(
       `please analyze the following user input to generate a short but clear title to identify this conversation theme:
       ${userIntent}
       directly output the title, do not include any other content`,
-      {
-        model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
-        env: enhancedEnv,
-        pathToClaudeCodeExecutable: claudeCodePath,
-      }
+      { env: enhancedEnv, pathToClaudeCodeExecutable: claudeCodePath },
     );
-
-    if (result.subtype === 'success') {
-      return result.result;
-    }
+    if (title) return title;
   } catch (error) {
     console.error('Failed to generate session title:', error);
   }
@@ -664,8 +396,7 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
 
 /**
  * Generate skill tags for an assistant using the Agent SDK.
- * Detects which SDK is configured and uses it; if both are configured,
- * prefers Codex. The other serves as fallback.
+ * Tries OpenAI (via proxy) first if configured, falls back to Claude.
  */
 export async function generateSkillTags(
   persona: string,
@@ -675,9 +406,7 @@ export async function generateSkillTags(
   const { loadUserSettings } = await import('../../libs/user-settings.js');
   const settings = loadUserSettings();
 
-  const hasCodex =
-    !!settings.openaiTokens?.accessToken ||
-    existsSync(join(homedir(), '.codex', 'auth.json'));
+  const hasOpenAI = !!settings.openaiTokens?.accessToken;
   const hasClaude =
     !!settings.anthropicAuthToken ||
     !!process.env.ANTHROPIC_AUTH_TOKEN;
@@ -697,13 +426,12 @@ export async function generateSkillTags(
 3. 直接输出JSON数组格式，例如: ["写作","数据分析","代码审查","调研报告"]
 4. 不要输出其他任何内容，只输出JSON数组`;
 
-  // Build ordered list: configured SDKs, Codex first when both available
   const attempts: Array<() => Promise<string[]>> = [];
-  if (hasCodex) attempts.push(() => generateTagsViaCodex(prompt));
-  if (hasClaude) attempts.push(() => generateTagsViaClaude(prompt));
+  if (hasOpenAI) attempts.push(() => generateTagsViaClaude(prompt, 'openai'));
+  if (hasClaude) attempts.push(() => generateTagsViaClaude(prompt, 'claude'));
 
   if (attempts.length === 0) {
-    console.warn('[generateSkillTags] No Agent SDK configured (neither Codex nor Claude)');
+    console.warn('[generateSkillTags] No Agent SDK configured');
     return [];
   }
 
@@ -719,59 +447,18 @@ export async function generateSkillTags(
   return [];
 }
 
-async function generateTagsViaCodex(prompt: string): Promise<string[]> {
-  const codexPath = getCodexBinaryPath();
-  const codexOpts: CodexOptions = {};
-  if (codexPath) {
-    codexOpts.codexPathOverride = codexPath;
-  }
-
-  const codex = new Codex(codexOpts);
-  const thread = codex.startThread({
-    model: 'gpt-5.3-codex',
-    workingDirectory: homedir(),
-    sandboxMode: 'danger-full-access',
-    approvalPolicy: 'never',
-    skipGitRepoCheck: true,
-  });
-
-  const abortController = new AbortController();
-  const timeout = setTimeout(() => abortController.abort(), 30000);
-
-  let collectedText = '';
-  try {
-    const { events } = await thread.runStreamed(prompt, {
-      signal: abortController.signal,
-    });
-
-    for await (const event of events) {
-      if (event.type === 'item.completed' || event.type === 'item.updated') {
-        if (event.item.type === 'agent_message' && event.item.text) {
-          collectedText += event.item.text;
-        }
-      }
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  console.log('[generateSkillTags] Codex raw output:', collectedText);
-  return parseTagsFromText(collectedText);
-}
-
-async function generateTagsViaClaude(prompt: string): Promise<string[]> {
+async function generateTagsViaClaude(prompt: string, provider: AgentProvider = 'claude'): Promise<string[]> {
   const claudeCodePath = getClaudeCodePath();
   const enhancedEnv = getEnhancedEnv();
 
-  const result: SDKResultMessage = await unstable_v2_prompt(prompt, {
-    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
-    env: enhancedEnv,
+  const result = await promptOnce(prompt, {
+    ...((!provider || provider === 'claude') && { env: enhancedEnv }),
     pathToClaudeCodeExecutable: claudeCodePath,
+    provider,
   });
-
-  if (result.subtype === 'success') {
-    console.log('[generateSkillTags] Claude raw output:', result.result);
-    return parseTagsFromText(result.result);
+  if (result) {
+    console.log('[generateSkillTags] raw output:', result);
+    return parseTagsFromText(result);
   }
   return [];
 }

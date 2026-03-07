@@ -6,7 +6,7 @@ interface BotConfigModalProps {
   onOpenChange: (open: boolean) => void;
   assistantName: string;
   skillNames?: string[];
-  provider?: "claude" | "codex";
+  provider?: "claude" | "openai";
   model?: string;
   defaultCwd?: string;
   persona?: string;
@@ -98,7 +98,19 @@ type FormState = {
     requireMention: boolean;
     ownerUserIds: string;
   };
-  feishu: { appId: string; appSecret: string; domain: "feishu" | "lark" };
+  feishu: {
+    appId: string;
+    appSecret: string;
+    domain: "feishu" | "lark" | string;
+    connectionMode: "websocket" | "webhook";
+    webhookPort: string;
+    dmPolicy: "open" | "allowlist" | "pairing";
+    groupPolicy: "open" | "allowlist" | "disabled";
+    allowFrom: string;
+    requireMention: boolean;
+    renderMode: "auto" | "raw" | "card";
+    ownerOpenIds: string;
+  };
   wecom: { corpId: string; agentId: string; secret: string };
   discord: { token: string };
   dingtalk: {
@@ -119,7 +131,7 @@ type FormState = {
 function buildDefaultForm(): FormState {
   return {
     telegram: { token: "", proxy: "", dmPolicy: "open", groupPolicy: "open", allowFrom: "", requireMention: true, ownerUserIds: "" },
-    feishu: { appId: "", appSecret: "", domain: "feishu" },
+    feishu: { appId: "", appSecret: "", domain: "feishu", connectionMode: "websocket", webhookPort: "3000", dmPolicy: "open", groupPolicy: "open", allowFrom: "", requireMention: true, renderMode: "auto", ownerOpenIds: "" },
     wecom: { corpId: "", agentId: "", secret: "" },
     discord: { token: "" },
     dingtalk: {
@@ -154,7 +166,19 @@ function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): 
   }
   const f = bots.feishu as any;
   if (f) {
-    form.feishu = { appId: f.appId ?? "", appSecret: f.appSecret ?? "", domain: f.domain ?? "feishu" };
+    form.feishu = {
+      appId: f.appId ?? "",
+      appSecret: f.appSecret ?? "",
+      domain: f.domain ?? "feishu",
+      connectionMode: f.connectionMode ?? "websocket",
+      webhookPort: String(f.webhookPort ?? "3000"),
+      dmPolicy: f.dmPolicy ?? "open",
+      groupPolicy: f.groupPolicy ?? "open",
+      allowFrom: (f.allowFrom ?? []).join(","),
+      requireMention: f.requireMention ?? true,
+      renderMode: f.renderMode ?? "auto",
+      ownerOpenIds: (f.ownerOpenIds ?? []).join(","),
+    };
   }
   const w = bots.wecom as any;
   if (w) {
@@ -206,7 +230,21 @@ function formToPlatformConfig(
     };
   }
   if (platform === "feishu") {
-    return { platform: "feishu", appId: form.feishu.appId, appSecret: form.feishu.appSecret, domain: form.feishu.domain, connected };
+    return {
+      platform: "feishu",
+      appId: form.feishu.appId,
+      appSecret: form.feishu.appSecret,
+      domain: form.feishu.domain,
+      connectionMode: form.feishu.connectionMode,
+      webhookPort: form.feishu.connectionMode === "webhook" ? parseInt(form.feishu.webhookPort, 10) || 3000 : undefined,
+      dmPolicy: form.feishu.dmPolicy,
+      groupPolicy: form.feishu.groupPolicy,
+      allowFrom: form.feishu.allowFrom ? form.feishu.allowFrom.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
+      requireMention: form.feishu.requireMention,
+      renderMode: form.feishu.renderMode,
+      ownerOpenIds: form.feishu.ownerOpenIds ? form.feishu.ownerOpenIds.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
+      connected,
+    };
   }
   if (platform === "wecom") {
     return { platform: "wecom", corpId: form.wecom.corpId, agentId: form.wecom.agentId, secret: form.wecom.secret, connected };
@@ -588,6 +626,14 @@ export function BotConfigModal({
             cognitiveStyle,
             operatingGuidelines,
             userContext,
+            connectionMode: fs.connectionMode,
+            webhookPort: fs.connectionMode === "webhook" ? parseInt(fs.webhookPort, 10) || 3000 : undefined,
+            dmPolicy: fs.dmPolicy,
+            groupPolicy: fs.groupPolicy,
+            allowFrom: fs.allowFrom ? fs.allowFrom.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
+            requireMention: fs.requireMention,
+            renderMode: fs.renderMode,
+            ownerOpenIds: fs.ownerOpenIds ? fs.ownerOpenIds.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
           });
           if (result.status === "error") {
             setTestResult({ success: false, message: result.detail ?? "连接失败" });
@@ -622,6 +668,7 @@ export function BotConfigModal({
     setForm((f) => ({ ...f, dingtalk: { ...f.dingtalk, ...u } }));
 
   const [dingtalkAdvanced, setDingtalkAdvanced] = useState(false);
+  const [feishuAdvanced, setFeishuAdvanced] = useState(false);
 
   const connectedCount = Object.values(bots).filter((b) => b?.connected).length;
 
@@ -851,6 +898,76 @@ export function BotConfigModal({
                             <option value="lark">Lark (larksuite.com)</option>
                           </select>
                         </FormField>
+                        <FormField label="连接模式">
+                          <select className={INPUT_CLASS} value={form.feishu.connectionMode}
+                            onChange={(e) => updateFeishu({ connectionMode: e.target.value as "websocket" | "webhook" })}>
+                            <option value="websocket">WebSocket 长连接（推荐，无需公网地址）</option>
+                            <option value="webhook">Webhook（需公网可访问 URL）</option>
+                          </select>
+                        </FormField>
+                        {form.feishu.connectionMode === "webhook" && (
+                          <FormField label="Webhook 端口" hint="（默认 3000）">
+                            <input type="number" className={INPUT_CLASS} placeholder="3000"
+                              value={form.feishu.webhookPort} onChange={(e) => updateFeishu({ webhookPort: e.target.value })} />
+                          </FormField>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => setFeishuAdvanced((v) => !v)}
+                          className="flex items-center gap-1.5 text-xs text-muted hover:text-ink-700 transition-colors mt-1"
+                        >
+                          <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform ${feishuAdvanced ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M9 18l6-6-6-6" />
+                          </svg>
+                          高级设置（访问控制 / 渲染模式）
+                        </button>
+
+                        {feishuAdvanced && (
+                          <div className="flex flex-col gap-3 pl-3 border-l-2 border-ink-900/8">
+                            <FormField label="群聊中需要 @提及">
+                              <select className={INPUT_CLASS} value={form.feishu.requireMention ? "true" : "false"}
+                                onChange={(e) => updateFeishu({ requireMention: e.target.value === "true" })}>
+                                <option value="true">是 — 需要 @机器人 才响应</option>
+                                <option value="false">否 — 响应所有群消息</option>
+                              </select>
+                            </FormField>
+                            <FormField label="私聊策略 (dmPolicy)">
+                              <select className={INPUT_CLASS} value={form.feishu.dmPolicy}
+                                onChange={(e) => updateFeishu({ dmPolicy: e.target.value as "open" | "allowlist" | "pairing" })}>
+                                <option value="open">open — 任何人可私聊</option>
+                                <option value="pairing">pairing — 需配对审批</option>
+                                <option value="allowlist">allowlist — 仅白名单用户</option>
+                              </select>
+                            </FormField>
+                            <FormField label="群聊策略 (groupPolicy)">
+                              <select className={INPUT_CLASS} value={form.feishu.groupPolicy}
+                                onChange={(e) => updateFeishu({ groupPolicy: e.target.value as "open" | "allowlist" | "disabled" })}>
+                                <option value="open">open — 任何群可使用</option>
+                                <option value="allowlist">allowlist — 仅白名单群/用户</option>
+                                <option value="disabled">disabled — 禁用群聊</option>
+                              </select>
+                            </FormField>
+                            {(form.feishu.dmPolicy === "allowlist" || form.feishu.groupPolicy === "allowlist") && (
+                              <FormField label="白名单 ID" hint="（逗号分隔，open_id 或 chat_id）">
+                                <input className={INPUT_CLASS} placeholder="ou_xxx,oc_xxx,..."
+                                  value={form.feishu.allowFrom} onChange={(e) => updateFeishu({ allowFrom: e.target.value })} />
+                              </FormField>
+                            )}
+                            <FormField label="回复渲染模式 (renderMode)">
+                              <select className={INPUT_CLASS} value={form.feishu.renderMode}
+                                onChange={(e) => updateFeishu({ renderMode: e.target.value as "auto" | "raw" | "card" })}>
+                                <option value="auto">auto — 自动（有代码/表格时用卡片）</option>
+                                <option value="card">card — 始终使用卡片（支持语法高亮）</option>
+                                <option value="raw">raw — 纯文本</option>
+                              </select>
+                            </FormField>
+                            <FormField label="我的 open_id（主动推送）" hint="填入你的 open_id，机器人才能主动发消息给你。逗号分隔多人。">
+                              <input className={INPUT_CLASS} placeholder="ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                                value={form.feishu.ownerOpenIds} onChange={(e) => updateFeishu({ ownerOpenIds: e.target.value })} />
+                            </FormField>
+                          </div>
+                        )}
                       </>
                     )}
 

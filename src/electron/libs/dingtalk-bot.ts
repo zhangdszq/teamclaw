@@ -15,18 +15,16 @@
  * - Message deduplication by msgId (5-min TTL)
  */
 import WebSocket from "ws";
-import { Codex, type CodexOptions, type ThreadOptions } from "@openai/codex-sdk";
-import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { EventEmitter } from "events";
 import { networkInterfaces, homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
-import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
-import { getSettingSources } from "./claude-settings.js";
+import { promptOnce, runAgent } from "./agent-client.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
 import {
@@ -74,7 +72,7 @@ export interface DingtalkBotOptions {
   operatingGuidelines?: string;
   userContext?: string;
   // AI config
-  provider?: "claude" | "codex";
+  provider?: "claude" | "openai";
   model?: string;
   defaultCwd?: string;
   // Reply mode
@@ -1208,12 +1206,13 @@ function getHistory(assistantId: string): ConvMessage[] {
 function getBotSession(
   assistantId: string,
   assistantName: string,
-  provider: "claude" | "codex",
+  provider: "claude" | "openai",
   model: string | undefined,
   cwd: string | undefined,
 ): string {
-  if (botSessionIds.has(assistantId)) return botSessionIds.get(assistantId)!;
   if (!sessionStore) throw new Error("[DingTalk] SessionStore not injected");
+  const existingId = botSessionIds.get(assistantId);
+  if (existingId && sessionStore.getSession(existingId)) return existingId;
   const session = sessionStore.createSession({
     title: `[钉钉] ${assistantName}`,
     assistantId,
@@ -1261,12 +1260,9 @@ async function updateBotSessionTitle(
   ).slice(0, 30).trim();
 
   try {
-    const agentSdk = await import("@anthropic-ai/claude-agent-sdk");
-    const result = await agentSdk.unstable_v2_prompt(
+    const generated = (await promptOnce(
       `请根据以下对话内容，生成一个简短的中文标题（不超过12字，不加引号，不加标点），直接输出标题，不输出其他内容：\n\n${contextLines}`,
-      { model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514" } as Parameters<typeof agentSdk.unstable_v2_prompt>[1],
-    );
-    const generated = result.subtype === "success" && result.result ? result.result.trim() : "";
+    ))?.trim() || "";
     const title = (generated && generated !== "New Session") ? generated : fallback;
     emitSessionUpdate(sessionId, { title: `${prefix} ${title}` });
     console.log(`[DingTalk] Session title updated (turn ${turns}): "${title}"`);
@@ -1942,10 +1938,10 @@ class DingtalkConnection {
       let replyText: string;
       let cardDelivered = false;
 
-      if (provider === "codex") {
-        replyText = await this.runCodexSession(system, history, userText);
+      if (provider === "openai") {
+        replyText = await this.runClaudeQuery(system, userText, msg, provider, hasFiles);
       } else if (useCard && preCreatedCard) {
-        const result = await this.runClaudeCard(system, userText, msg, preCreatedCard, inflightTask, hasFiles);
+        const result = await this.runClaudeCard(system, userText, msg, preCreatedCard, inflightTask, provider, hasFiles);
         if (result === "__CARD_DELIVERED__") {
           cardDelivered = true;
           replyText = inflightTask.accumulatedContent;
@@ -1953,7 +1949,7 @@ class DingtalkConnection {
           replyText = result;
         }
       } else {
-        replyText = await this.runClaudeQuery(system, userText, msg, hasFiles);
+        replyText = await this.runClaudeQuery(system, userText, msg, provider, hasFiles);
       }
 
       // Update inflight with final content
@@ -1977,31 +1973,23 @@ class DingtalkConnection {
     system: string,
     userText: string,
     msg: DingtalkMessage,
+    provider: "claude" | "openai",
     hasFiles?: boolean,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
-    // File messages must not resume previous session — the old session context
-    // may contain content from a previously read file, causing Claude to mix up files.
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(this.opts.assistantId);
     const claudeCodePath = getClaudeCodePath();
 
     let finalText = "";
-    const q = query({
-      prompt: userText,
-      options: {
-        systemPrompt: system,
-        resume: claudeSessionId,
-        cwd: this.opts.defaultCwd ?? homedir(),
-        mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
-        permissionMode: "bypassPermissions",
-        includePartialMessages: true,
-        allowDangerouslySkipPermissions: true,
-        maxTurns: 300,
-        settingSources: getSettingSources(),
-        pathToClaudeCodeExecutable: claudeCodePath,
-        env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)),
-      },
+    const q = await runAgent(userText, {
+      systemPrompt: system,
+      resume: claudeSessionId,
+      cwd: this.opts.defaultCwd ?? homedir(),
+      mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
+      pathToClaudeCodeExecutable: claudeCodePath,
+      provider,
+      ...(provider !== "openai" && { env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)) }),
     });
 
     for await (const message of q) {
@@ -2058,6 +2046,7 @@ class DingtalkConnection {
     msg: DingtalkMessage,
     card: AICardInstance,
     inflightTask: InflightTask,
+    provider: "claude" | "openai",
     hasFiles?: boolean,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
@@ -2070,21 +2059,14 @@ class DingtalkConnection {
     let lastUpdate = 0;
     const THROTTLE_MS = 500;
 
-    const q = query({
-      prompt: userText,
-      options: {
-        systemPrompt: system,
-        resume: claudeSessionId,
-        cwd: this.opts.defaultCwd ?? homedir(),
-        mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
-        permissionMode: "bypassPermissions",
-        includePartialMessages: true,
-        allowDangerouslySkipPermissions: true,
-        maxTurns: 300,
-        settingSources: getSettingSources(),
-        pathToClaudeCodeExecutable: claudeCodePath,
-        env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)),
-      },
+    const q = await runAgent(userText, {
+      systemPrompt: system,
+      resume: claudeSessionId,
+      cwd: this.opts.defaultCwd ?? homedir(),
+      mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
+      pathToClaudeCodeExecutable: claudeCodePath,
+      provider,
+      ...(provider !== "openai" && { env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)) }),
     });
 
     try {
@@ -2179,46 +2161,6 @@ class DingtalkConnection {
       inflightTask.accumulatedContent = text;
       return text; // Caller (generateAndDeliver) will use deliverWithFallback
     }
-  }
-
-  /** Codex provider session */
-  private async runCodexSession(
-    system: string,
-    history: ConvMessage[],
-    userText: string,
-  ): Promise<string> {
-    const codexOpts: CodexOptions = {};
-    const codexPath = getCodexBinaryPath();
-    if (codexPath) codexOpts.codexPathOverride = codexPath;
-
-    const codex = new Codex(codexOpts);
-    const threadOpts: ThreadOptions = {
-      model: this.opts.model || "gpt-5.3-codex",
-      workingDirectory: this.opts.defaultCwd || homedir(),
-      sandboxMode: "danger-full-access",
-      approvalPolicy: "never",
-      skipGitRepoCheck: true,
-    };
-
-    const historyLines = history
-      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-      .join("\n");
-    const fullPrompt = `${system}\n\n${historyLines}\n\nPlease reply to the latest user message above.`;
-
-    const thread = codex.startThread(threadOpts);
-    const { events } = await thread.runStreamed(fullPrompt, {});
-
-    const textParts: string[] = [];
-    for await (const event of events) {
-      if (
-        event.type === "item.completed" &&
-        event.item.type === "agent_message" &&
-        event.item.text
-      ) {
-        textParts.push(event.item.text);
-      }
-    }
-    return textParts.join("").trim() || "抱歉，无法生成回复。";
   }
 
   /**

@@ -1,6 +1,6 @@
 import type { SDKMessage, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "openai";
 
 export type ClaudeSettingsEnv = {
   ANTHROPIC_AUTH_TOKEN: string;

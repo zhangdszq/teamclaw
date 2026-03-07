@@ -6,7 +6,6 @@ import { BrowserWindow } from 'electron';
 import type { ClientEvent, ServerEvent } from './types.js';
 import { SessionStore } from './libs/session-store.js';
 import { runClaude, type RunnerHandle } from './libs/runner.js';
-import { runCodex } from './libs/codex-runner.js';
 import { isEmbeddedApiRunning } from './api/server.js';
 import {
   startSession as apiStartSession,
@@ -18,7 +17,7 @@ import { app } from 'electron';
 import { join } from 'path';
 import { existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { loadScheduledTasks, runHookTasks } from './libs/scheduler.js';
+import { loadScheduledTasks, runHookTasks } from './libs/scheduler/index.js';
 import { loadAssistantsConfig } from './libs/assistants-config.js';
 import { onHeartbeatResult, onCompactionResult } from './libs/heartbeat.js';
 import {
@@ -372,7 +371,13 @@ export async function handleClientEvent(event: ClientEvent) {
     // Ensure AGENTS.md exists in working directory
     ensureAgentsMd(event.payload.cwd);
 
-    const provider = event.payload.provider ?? 'claude';
+    // Always derive provider from the assistant's saved config so that
+    // switching assistants in the UI can never bleed the previous assistant's
+    // provider into a new session (e.g. openai → claude when switching back).
+    const assistantProvider = event.payload.assistantId
+      ? loadAssistantsConfig().assistants.find((a) => a.id === event.payload.assistantId)?.provider
+      : undefined;
+    const provider = assistantProvider ?? event.payload.provider ?? 'claude';
     if (event.payload.assistantSkillNames?.length) {
       console.log('[IPC] session.start with skills:', event.payload.assistantSkillNames);
     }
@@ -474,31 +479,11 @@ export async function handleClientEvent(event: ClientEvent) {
         type: 'stream.user_prompt',
         payload: { sessionId: session.id, prompt: event.payload.prompt },
       });
-      if (provider === 'codex') {
-        runCodex({
-          prompt: effectivePrompt,
-          session,
-          model: event.payload.model,
-          onEvent: emit,
-          onSessionUpdate: (updates) => {
-            sessions.updateSession(session.id, updates);
-          },
-        })
-          .then((handle) => {
-            runnerHandles.set(session.id, handle);
-          })
-          .catch((error) => {
-            sessions.updateSession(session.id, { status: 'error' });
-            emit({
-              type: 'session.status',
-              payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
-            });
-          });
-      } else {
-        runClaude({
+      runClaude({
           prompt: effectivePrompt,
           session,
           resumeSessionId: session.claudeSessionId,
+          provider: provider === 'openai' ? 'openai' : 'claude',
           onEvent: emit,
           onSessionUpdate: (updates) => {
             sessions.updateSession(session.id, updates);
@@ -515,7 +500,6 @@ export async function handleClientEvent(event: ClientEvent) {
               payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
             });
           });
-      }
     }
 
     return;
@@ -609,31 +593,11 @@ export async function handleClientEvent(event: ClientEvent) {
         type: 'stream.user_prompt',
         payload: { sessionId: session.id, prompt: event.payload.prompt },
       });
-      if (sessionProvider === 'codex') {
-        runCodex({
-          prompt: event.payload.prompt, // IMAGE_INLINE_RULE is appended inside codex-runner
-          session,
-          model: session.model,
-          onEvent: emit,
-          onSessionUpdate: (updates) => {
-            sessions.updateSession(session.id, updates);
-          },
-        })
-          .then((handle) => {
-            runnerHandles.set(session.id, handle);
-          })
-          .catch((error) => {
-            sessions.updateSession(session.id, { status: 'error' });
-            emit({
-              type: 'session.status',
-              payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
-            });
-          });
-      } else {
-        runClaude({
+      runClaude({
           prompt: event.payload.prompt,
           session,
           resumeSessionId: session.claudeSessionId,
+          provider: sessionProvider === 'openai' ? 'openai' : 'claude',
           onEvent: emit,
           onSessionUpdate: (updates) => {
             sessions.updateSession(session.id, updates);
@@ -649,7 +613,6 @@ export async function handleClientEvent(event: ClientEvent) {
               payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
             });
           });
-      }
     }
 
     return;

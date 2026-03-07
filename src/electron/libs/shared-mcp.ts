@@ -20,7 +20,7 @@ import {
   loadScheduledTasks,
   deleteScheduledTask,
   updateScheduledTask,
-} from "./scheduler.js";
+} from "./scheduler/index.js";
 import {
   readSop,
   writeSop,
@@ -398,10 +398,13 @@ const twitterSearchTool = tool(
 function createScheduledTaskTool(workflowSopId?: string) {
   return tool(
     "create_scheduled_task",
-    "创建一个定时任务。任务到期时会自动启动 AI 会话执行 prompt。\n\n" +
+    "创建一个定时任务。\n\n" +
       (workflowSopId
         ? "【注意】当前在 SOP 工作流中，创建的定时任务将自动关联到该 SOP（hidden=true，不显示在日历中）。\n\n"
         : "") +
+      "**重要：prompt vs notifyText 二选一**\n" +
+      "- notifyText（优先推荐）：用户说「提醒我XXX」「X分钟后提醒我」等简单文字提醒 → 填 notifyText，到期直接推送文字到用户的消息渠道（Telegram/飞书/钉钉），不启动 AI 会话，秒级送达。\n" +
+      "- prompt：用户说「帮我执行XXX」「每天分析XXX」等需要 AI 思考和操作的复杂任务 → 填 prompt，到期启动完整 AI 会话执行。\n\n" +
       "scheduleType 选择规则（必须严格遵守）：\n" +
       "- once：用户说「X 分钟/小时后」「明天 X 点」「X 号 X 点」等一次性时间 → 单次执行\n" +
       "- interval：用户说「每隔 X 分钟/小时」「每 X 分钟重复」等周期性 → 间隔重复，必填 intervalValue + intervalUnit\n" +
@@ -410,12 +413,20 @@ function createScheduledTaskTool(workflowSopId?: string) {
       "- 相对时间（推荐）：填 delay_minutes（相对现在的分钟数），服务器自动计算准确时间。「5分钟后」→ delay_minutes=5，「2小时后」→ delay_minutes=120\n" +
       "- 绝对时间：填 scheduledTime，格式 'YYYY-MM-DDTHH:MM:SS'（本地时间，不加Z）\n\n" +
       "示例：\n" +
-      "「2分钟后提醒我」→ once，delay_minutes=2\n" +
-      "「每2分钟检查邮件」→ interval，intervalValue=2，intervalUnit=minutes\n" +
-      "「每天早上9点汇报」→ daily，dailyTime='09:00'",
+      "「3分钟后提醒我喝水」→ once，delay_minutes=3，notifyText='该喝水啦～记得喝水哦'\n" +
+      "「每天早上9点提醒我站起来活动」→ daily，dailyTime='09:00'，notifyText='该站起来活动一下啦！'\n" +
+      "「每2分钟检查邮件」→ interval，intervalValue=2，intervalUnit=minutes，prompt='检查邮件并汇报'\n" +
+      "「每天早上9点汇报」→ daily，dailyTime='09:00'，prompt='总结最新消息并汇报'",
     {
       name: z.string().describe("任务名称，简短描述任务用途"),
-      prompt: z.string().describe("任务执行时发送给 AI 的指令内容"),
+      notifyText: z
+        .string()
+        .optional()
+        .describe("【简单提醒专用，优先使用】到期直接推送此文字到用户的消息渠道，不启动 AI 会话。适用于「提醒我喝水」「提醒我开会」等。用自然、友好的语气撰写提醒内容。"),
+      prompt: z
+        .string()
+        .optional()
+        .describe("【复杂任务专用】任务执行时发送给 AI 的指令内容。仅当任务需要 AI 思考、调用工具时才填此字段。与 notifyText 二选一。"),
       scheduleType: z
         .enum(["once", "interval", "daily"])
         .describe("调度类型：once=单次、interval=间隔重复、daily=每日固定时间"),
@@ -469,9 +480,16 @@ function createScheduledTaskTool(workflowSopId?: string) {
           }
         }
 
+        const notifyText = input.notifyText ? String(input.notifyText).trim() : undefined;
+        const prompt = input.prompt ? String(input.prompt).trim() : "";
+        if (!notifyText && !prompt) {
+          return ok("创建失败：必须提供 notifyText（简单提醒）或 prompt（AI 任务），不能都为空。");
+        }
+
         const task = await addScheduledTask({
           name: String(input.name ?? ""),
-          prompt: String(input.prompt ?? ""),
+          prompt,
+          notifyText,
           enabled: true,
           scheduleType,
           assistantId: input.assistantId,
@@ -488,9 +506,10 @@ function createScheduledTaskTool(workflowSopId?: string) {
         const nextRunStr = task.nextRun
           ? new Date(task.nextRun).toLocaleString("zh-CN", { timeZone: tz, hour12: false })
           : "未知";
+        const modeLabel = notifyText ? "直推提醒" : "AI 任务";
 
         return ok(
-          `定时任务已创建！\n- 名称：${task.name}\n- 类型：${task.scheduleType}\n- 下次执行：${nextRunStr}\n- 任务 ID：${task.id}`,
+          `定时任务已创建！\n- 名称：${task.name}\n- 模式：${modeLabel}\n- 类型：${task.scheduleType}\n- 下次执行：${nextRunStr}\n- 任务 ID：${task.id}`,
         );
       } catch (err) {
         return ok(`创建失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -1894,6 +1913,59 @@ function markChannelUsed(platform: string, targetId: string): void {
   notificationCooldowns.set(`${platform}:${targetId}`, Date.now());
 }
 
+/**
+ * Direct notification push — callable from scheduled tasks without an AI session.
+ * Returns { ok, channel?, error? }.
+ */
+export async function sendNotificationDirect(
+  text: string,
+  opts?: { assistantId?: string; skipCooldown?: boolean },
+): Promise<{ ok: boolean; channel?: string; error?: string }> {
+  const assistantId = opts?.assistantId;
+  const skipCooldown = opts?.skipCooldown ?? true; // scheduled tasks skip cooldown by default
+  const cooldownMs = getCooldownMs(assistantId);
+
+  const resolveId = (
+    exactId: string | undefined,
+    getExactStatus: (id: string) => string,
+    getAnyId: () => string | null,
+  ): string | null => {
+    if (exactId && getExactStatus(exactId) === "connected") return exactId;
+    return getAnyId();
+  };
+
+  const channels: Array<{ name: string; id: string | null; send: (id: string) => Promise<{ ok: boolean; error?: string }> }> = [
+    {
+      name: "telegram",
+      id: resolveId(assistantId, getTelegramBotStatus, getAnyConnectedTelegramAssistantId),
+      send: (id) => sendProactiveTelegramMessage(id, text),
+    },
+    {
+      name: "feishu",
+      id: resolveId(assistantId, getFeishuBotStatus, getAnyConnectedFeishuAssistantId),
+      send: (id) => sendProactiveFeishuMessage(id, text),
+    },
+    {
+      name: "dingtalk",
+      id: resolveId(assistantId, getDingtalkBotStatus, getAnyConnectedDingtalkAssistantId),
+      send: (id) => sendProactiveDingtalkMessage(id, text),
+    },
+  ];
+
+  for (const ch of channels) {
+    if (!ch.id) continue;
+    if (!skipCooldown && isChannelOnCooldown(ch.name, ch.id, cooldownMs)) continue;
+    const result = await ch.send(ch.id);
+    if (result.ok) {
+      markChannelUsed(ch.name, ch.id);
+      appendNotified({ summary: text.slice(0, 120), ts: Date.now(), assistantId: assistantId ?? "" });
+      return { ok: true, channel: ch.name };
+    }
+  }
+
+  return { ok: false, error: "no connected channel" };
+}
+
 function createSendNotificationTool(assistantId?: string) {
   return tool(
     "send_notification",
@@ -1905,61 +1977,14 @@ function createSendNotificationTool(assistantId?: string) {
     },
     async (input) => {
       const text = input.title ? `**${input.title}**\n\n${input.text}` : input.text;
-      const skipCooldown = input.urgent === true;
-      const cooldownMs = getCooldownMs(assistantId);
-
-      // Helper: resolve effective assistantId — prefer exact match, fallback to any connected bot
-      const resolveId = (
-        exactId: string | undefined,
-        getExactStatus: (id: string) => string,
-        getAnyId: () => string | null,
-      ): string | null => {
-        if (exactId && getExactStatus(exactId) === "connected") return exactId;
-        return getAnyId();
-      };
-
-      const channels: Array<{ name: string; id: string | null; send: (id: string) => Promise<{ ok: boolean; error?: string }> }> = [
-        {
-          name: "telegram",
-          id: resolveId(assistantId, getTelegramBotStatus, getAnyConnectedTelegramAssistantId),
-          send: (id) => sendProactiveTelegramMessage(id, text),
-        },
-        {
-          name: "feishu",
-          id: resolveId(assistantId, getFeishuBotStatus, getAnyConnectedFeishuAssistantId),
-          send: (id) => sendProactiveFeishuMessage(id, text),
-        },
-        {
-          name: "dingtalk",
-          id: resolveId(assistantId, getDingtalkBotStatus, getAnyConnectedDingtalkAssistantId),
-          send: (id) => sendProactiveDingtalkMessage(id, text),
-        },
-      ];
-
-      const channelNames: Record<string, string> = { telegram: "Telegram", feishu: "飞书", dingtalk: "钉钉" };
-      let allOnCooldown = true;
-      let minRemainMs = cooldownMs;
-
-      for (const ch of channels) {
-        if (!ch.id) continue;
-        if (!skipCooldown && isChannelOnCooldown(ch.name, ch.id, cooldownMs)) {
-          const remainMs = cooldownMs - (Date.now() - (notificationCooldowns.get(`${ch.name}:${ch.id}`) ?? 0));
-          minRemainMs = Math.min(minRemainMs, remainMs);
-          continue; // fall through to next channel
-        }
-        allOnCooldown = false;
-        const result = await ch.send(ch.id);
-        if (result.ok) {
-          markChannelUsed(ch.name, ch.id);
-          appendNotified({ summary: text.slice(0, 120), ts: Date.now(), assistantId: assistantId ?? "" });
-          return ok(`通知已通过 ${channelNames[ch.name]} 发送。`);
-        }
+      const result = await sendNotificationDirect(text, {
+        assistantId,
+        skipCooldown: input.urgent === true,
+      });
+      if (result.ok) {
+        const channelNames: Record<string, string> = { telegram: "Telegram", feishu: "飞书", dingtalk: "钉钉" };
+        return ok(`通知已通过 ${channelNames[result.channel!] ?? result.channel} 发送。`);
       }
-
-      if (allOnCooldown) {
-        return ok(`通知已跳过：所有渠道均在冷却中（还剩约 ${Math.ceil(minRemainMs / 60000)} 分钟）。`);
-      }
-
       return ok("无可用推送渠道（Telegram / 飞书 / 钉钉 均未连接或未配置接收者）。");
     },
   );
@@ -2039,15 +2064,22 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
   const sessionCwd = opts?.sessionCwd;
   const workflowSopId = opts?.workflowSopId;
   const scheduledTaskId = opts?.scheduledTaskId;
+
+  // When executing a scheduled task, exclude scheduler tools to prevent
+  // infinite recursion (AI creating new tasks instead of executing the prompt)
+  const isScheduledRun = !!scheduledTaskId && !workflowSopId;
+
   return createSdkMcpServer({
     name: "vk-shared",
     version: "2.0.0",
     tools: [
-      // Scheduler
-      createScheduledTaskTool(workflowSopId),
-      listScheduledTasksTool,
-      deleteScheduledTaskTool,
-      createRegisterSopScheduleTool(workflowSopId),
+      // Scheduler — excluded during scheduled task execution to prevent loops
+      ...(isScheduledRun ? [] : [
+        createScheduledTaskTool(workflowSopId),
+        listScheduledTasksTool,
+        deleteScheduledTaskTool,
+        createRegisterSopScheduleTool(workflowSopId),
+      ]),
       // Web & Documents
       webSearchTool,
       webFetchTool,

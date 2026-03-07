@@ -6,7 +6,7 @@ import {
   recordMessage,
   resolvePendingPermission,
 } from '../services/session.js';
-import { runClaude, runCodex, stopSession, type ServerEvent } from '../services/runner.js';
+import { runClaude, stopSession, type ServerEvent } from '../services/runner.js';
 import type { AgentProvider } from '../types.js';
 import { loadAssistantsConfig } from '../../libs/assistants-config.js';
 import { IMAGE_INLINE_RULE } from '../../libs/bot-base.js';
@@ -208,11 +208,7 @@ agent.post('/start', async (c) => {
       },
     };
 
-    if (provider === 'codex') {
-      yield* runCodex(runnerOpts);
-    } else {
-      yield* runClaude(runnerOpts);
-    }
+    yield* runClaude({ ...runnerOpts, provider: provider === 'openai' ? 'openai' : 'claude' });
   }
 
   const readable = createSSEStream(session.id, eventGenerator());
@@ -320,11 +316,7 @@ agent.post('/continue', async (c) => {
       },
     };
 
-    if (continueProvider === 'codex') {
-      yield* runCodex(runnerOpts);
-    } else {
-      yield* runClaude(runnerOpts);
-    }
+    yield* runClaude({ ...runnerOpts, provider: continueProvider === 'openai' ? 'openai' : 'claude' });
   }
 
   const readable = createSSEStream(tempSession.id, eventGenerator());

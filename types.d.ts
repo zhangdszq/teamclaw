@@ -76,6 +76,50 @@ type UserSettings = {
     darkMode?: boolean;
 }
 
+type UsageRange = "24h" | "7d" | "30d" | "all";
+
+type UsageFilter = {
+    range?: UsageRange;
+    provider?: "anthropic" | "openai";
+    model?: string;
+    status?: "ok" | "error";
+    limit?: number;
+    offset?: number;
+}
+
+type UsageRecord = {
+    id: string;
+    timestamp: string;
+    provider: "anthropic" | "openai";
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    latencyMs: number;
+    status: "ok" | "error";
+    error?: string;
+}
+
+type UsageSummary = {
+    totalRequests: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+}
+
+type ProviderStat = {
+    provider: "anthropic" | "openai";
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+}
+
 type KnowledgeReviewStatus = "draft" | "verified" | "archived";
 
 type KnowledgeCandidate = {
@@ -113,33 +157,44 @@ type ScheduledTask = {
     prompt: string;
     cwd?: string;
     skillPath?: string;
-    scheduleType: "once" | "interval" | "daily" | "heartbeat" | "hook";
-    // For "once" type
+    scheduleType: "once" | "interval" | "daily" | "cron" | "heartbeat" | "hook";
     scheduledTime?: string;
-    // For "interval" type
     intervalValue?: number;
     intervalUnit?: "minutes" | "hours" | "days" | "weeks";
-    // For "daily" type — run at a fixed time each day/week
-    dailyTime?: string;    // "HH:MM"
-    dailyDays?: number[];  // 0=Sun…6=Sat; empty = every day
-    // For "heartbeat" type — periodic self-check
-    heartbeatInterval?: number;  // minutes, default 30
-    suppressIfShort?: boolean;   // hide session if response < 80 chars or contains <no-action>
-    // For "hook" type — triggered by internal events
+    dailyTime?: string;
+    dailyDays?: number[];
+    cronExpr?: string;
+    cronTimezone?: string;
+    notifyText?: string;
+    heartbeatInterval?: number;
+    suppressIfShort?: boolean;
     hookEvent?: "startup" | "session.complete";
     hookFilter?: ScheduledTaskHookFilter;
     lastRun?: string;
     nextRun?: string;
+    lastRunStatus?: "ok" | "error" | "skipped";
+    lastError?: string;
+    consecutiveErrors?: number;
     assistantId?: string;
-    // SOP association — populated when task is created from a SOP schedule config
     sopId?: string;
-    stageId?: string;   // set when task triggers a specific stage; absent = trigger whole SOP
-    hidden?: boolean;   // true = not shown in calendar UI
+    stageId?: string;
+    hidden?: boolean;
     createdAt: string;
     updatedAt: string;
 }
 
 type ScheduledTaskInput = Omit<ScheduledTask, "id" | "createdAt" | "updatedAt">
+
+type TaskRunRecord = {
+    taskId: string;
+    taskName: string;
+    taskKind: "task" | "sop" | "hook";
+    startedAt: string;
+    endedAt: string;
+    durationMs: number;
+    status: "ok" | "error" | "skipped";
+    error?: string;
+}
 
 type SchedulerRunTaskPayload = {
     taskId: string;
@@ -204,8 +259,10 @@ type AssistantConfig = {
     id: string;
     name: string;
     avatar?: string;
-    provider: "claude" | "codex";
+    provider: "claude" | "openai";
     model?: string;
+    apiAuthToken?: string;
+    apiBaseUrl?: string;
     skillNames?: string[];
     skillTags?: string[];
     persona?: string;
@@ -220,7 +277,7 @@ type AssistantConfig = {
 }
 
 type AssistantDefaults = {
-    defaultProvider: "claude" | "codex";
+    defaultProvider: "claude" | "openai";
     persona: string;
     coreValues: string;
     relationship: string;
@@ -326,7 +383,26 @@ type FeishuBotConfig = {
     platform: "feishu";
     appId: string;
     appSecret: string;
-    domain: "feishu" | "lark";
+    /** "feishu" | "lark" | custom URL for private deployment */
+    domain: "feishu" | "lark" | string;
+    /** Connection mode: "websocket" (default) or "webhook" */
+    connectionMode?: "websocket" | "webhook";
+    /** Webhook server port */
+    webhookPort?: number;
+    /** Webhook event path */
+    webhookPath?: string;
+    /** DM access policy */
+    dmPolicy?: "open" | "allowlist" | "pairing";
+    /** Group access policy */
+    groupPolicy?: "open" | "allowlist" | "disabled";
+    /** Allowlisted user open_ids */
+    allowFrom?: string[];
+    /** Require @mention in groups */
+    requireMention?: boolean;
+    /** Reply render mode */
+    renderMode?: "auto" | "raw" | "card";
+    /** Owner open_ids for proactive messaging */
+    ownerOpenIds?: string[];
     connected: boolean;
 };
 
@@ -412,7 +488,7 @@ type StartDingtalkBotInput = {
     cognitiveStyle?: string;
     operatingGuidelines?: string;
     userContext?: string;
-    provider?: "claude" | "codex";
+    provider?: "claude" | "openai";
     model?: string;
     defaultCwd?: string;
     messageType?: "markdown" | "card";
@@ -467,7 +543,7 @@ type StartTelegramBotInput = {
     cognitiveStyle?: string;
     operatingGuidelines?: string;
     userContext?: string;
-    provider?: "claude" | "codex";
+    provider?: "claude" | "openai";
     model?: string;
     defaultCwd?: string;
     dmPolicy?: "open" | "allowlist";
@@ -498,7 +574,7 @@ type FeishuBotStatus = "disconnected" | "connecting" | "connected" | "error";
 type StartFeishuBotInput = {
     appId: string;
     appSecret: string;
-    domain?: "feishu" | "lark";
+    domain?: "feishu" | "lark" | string;
     assistantId: string;
     assistantName: string;
     persona?: string;
@@ -507,10 +583,21 @@ type StartFeishuBotInput = {
     cognitiveStyle?: string;
     operatingGuidelines?: string;
     userContext?: string;
-    provider?: "claude" | "codex";
+    provider?: "claude" | "openai";
     model?: string;
     defaultCwd?: string;
     maxConnectionAttempts?: number;
+    connectionMode?: "websocket" | "webhook";
+    webhookPort?: number;
+    webhookPath?: string;
+    encryptKey?: string;
+    verificationToken?: string;
+    dmPolicy?: "open" | "allowlist" | "pairing";
+    allowFrom?: string[];
+    groupPolicy?: "open" | "allowlist" | "disabled";
+    requireMention?: boolean;
+    renderMode?: "auto" | "raw" | "card";
+    ownerOpenIds?: string[];
 };
 
 type FeishuBotStatusResult = {
@@ -518,31 +605,7 @@ type FeishuBotStatusResult = {
     detail?: string;
 };
 
-type GoalProgressEntry = {
-    sessionId: string;
-    runAt: string;
-    summary: string;
-    isComplete: boolean;
-    nextSteps?: string;
-}
-
-type LongTermGoal = {
-    id: string;
-    name: string;
-    description: string;
-    status: "active" | "paused" | "completed" | "abandoned";
-    assistantId?: string;
-    cwd?: string;
-    retryInterval: number;
-    maxRuns: number;
-    totalRuns: number;
-    progressLog: GoalProgressEntry[];
-    nextRunAt?: string;
-    consecutiveErrors?: number;
-    createdAt: string;
-    updatedAt: string;
-    completedAt?: string;
-}
+// Goals module removed — long-term goals are now handled via SOP + scheduler
 
 type WorkCategory = "客户服务" | "情报监控" | "内部运营" | "增长销售" | "";
 
@@ -566,14 +629,7 @@ type PlanItem = {
     updatedAt: string;
 }
 
-type GoalAddInput = {
-    name: string;
-    description: string;
-    cwd?: string;
-    assistantId?: string;
-    retryInterval: number;
-    maxRuns: number;
-}
+// GoalAddInput removed with Goals module
 
 type UnsubscribeFunction = () => void;
 
@@ -638,7 +694,7 @@ type EventPayloadMapping = {
     "stop-feishu-bot": void;
     "get-feishu-bot-status": FeishuBotStatusResult;
     "is-sidecar-running": boolean;
-    // OpenAI Codex OAuth
+    // OpenAI OAuth
     "openai-login": OpenAILoginResult;
     "openai-logout": { success: boolean };
     "openai-auth-status": OpenAIAuthStatus;
@@ -655,6 +711,12 @@ type EventPayloadMapping = {
     "add-scheduled-task": ScheduledTask;
     "update-scheduled-task": ScheduledTask | null;
     "delete-scheduled-task": boolean;
+    "run-task-now": boolean;
+    "get-task-run-history": TaskRunRecord[];
+    "get-usage-logs": UsageRecord[];
+    "get-usage-summary": UsageSummary;
+    "get-provider-stats": ProviderStat[];
+    "clear-usage-logs": boolean;
     "read-dir": DirEntry[];
     "generate-skill-tags": string[];
     // Plan table
@@ -664,12 +726,7 @@ type EventPayloadMapping = {
     "update-plan-item-session": { ok: boolean; error?: string };
     "get-quick-window-shortcut": string;
     "save-quick-window-shortcut": boolean;
-    // Goals
-    "goals-list": LongTermGoal[];
-    "goals-add": LongTermGoal;
-    "goals-update": LongTermGoal | null;
-    "goals-delete": boolean;
-    "goals-run-now": void;
+    // Goals module removed
     // SOP Hands
     "sop.list": HandSopResult[];
     "sop.generate": HandSopResult;
@@ -815,7 +872,7 @@ interface Window {
         onFeishuBotStatus: (cb: (assistantId: string, status: FeishuBotStatus, detail?: string) => void) => UnsubscribeFunction;
         onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => UnsubscribeFunction;
         onAssistantsConfigChanged: (cb: (config: AssistantsConfig) => void) => UnsubscribeFunction;
-        // OpenAI Codex OAuth
+        // OpenAI OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;
         openaiAuthStatus: () => Promise<OpenAIAuthStatus>;
@@ -832,6 +889,12 @@ interface Window {
         addScheduledTask: (task: ScheduledTaskInput) => Promise<ScheduledTask>;
         updateScheduledTask: (id: string, updates: Partial<ScheduledTask>) => Promise<ScheduledTask | null>;
         deleteScheduledTask: (id: string) => Promise<boolean>;
+        runTaskNow: (id: string) => Promise<boolean>;
+        getTaskRunHistory: (taskId: string, limit?: number) => Promise<TaskRunRecord[]>;
+        getUsageLogs: (filter?: UsageFilter) => Promise<UsageRecord[]>;
+        getUsageSummary: (filter?: UsageFilter) => Promise<UsageSummary>;
+        getProviderStats: (filter?: UsageFilter) => Promise<ProviderStat[]>;
+        clearUsageLogs: () => Promise<boolean>;
         onSchedulerRunTask: (callback: (task: SchedulerRunTaskPayload) => void) => UnsubscribeFunction;
         // SOP schedule management
         sopSetSopSchedule: (params: {
@@ -872,13 +935,7 @@ interface Window {
         windowIsMaximized: () => Promise<boolean>;
         onWindowMaximizedChange: (callback: (isMaximized: boolean) => void) => UnsubscribeFunction;
         getPlatform: () => string;
-        // Goals
-        goalsList: () => Promise<LongTermGoal[]>;
-        goalsAdd: (input: GoalAddInput) => Promise<LongTermGoal>;
-        goalsUpdate: (id: string, updates: Partial<LongTermGoal>) => Promise<LongTermGoal | null>;
-        goalsDelete: (id: string) => Promise<boolean>;
-        goalsRunNow: (id: string) => Promise<void>;
-        onGoalCompleted: (callback: () => void) => UnsubscribeFunction;
+        // Goals module removed
         // SOP Hands
         sopList: () => Promise<HandSopResult[]>;
         sopGenerate: (description: string) => Promise<HandSopResult>;

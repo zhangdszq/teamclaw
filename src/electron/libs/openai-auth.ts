@@ -11,9 +11,6 @@
 import { createServer, type Server } from "http";
 import { net, shell } from "electron";
 import { randomBytes, createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
 import { loadUserSettings, saveUserSettings } from "./user-settings.js";
 
 // OAuth constants (same as openai/codex)
@@ -94,56 +91,13 @@ export function getOpenAIAuthStatus(): OpenAIAuthStatus {
 }
 
 /**
- * Ensure tokens are in sync between user-settings.json and ~/.codex/auth.json.
- * - If user-settings has tokens → sync to auth.json (normal case)
- * - If user-settings lost tokens but auth.json exists → restore to user-settings
- * Call on app startup so credentials are always available.
+ * Verify stored tokens are still present and valid on startup.
  */
-export function ensureCodexAuthSync(): void {
+export function ensureOpenAIAuthSync(): void {
   const settings = loadUserSettings();
   const tokens = settings.openaiTokens;
-
   if (tokens?.accessToken && tokens?.refreshToken) {
-    // Normal case: sync settings → auth.json
-    syncTokensToCodexAuth(tokens);
-    return;
-  }
-
-  // Settings lost tokens — try to recover from ~/.codex/auth.json
-  try {
-    const authFilePath = join(homedir(), ".codex", "auth.json");
-    if (!existsSync(authFilePath)) return;
-
-    const raw = readFileSync(authFilePath, "utf8");
-    const authJson = JSON.parse(raw) as {
-      auth_mode?: string;
-      tokens?: {
-        id_token?: string;
-        access_token?: string;
-        refresh_token?: string;
-      };
-    };
-
-    const at = authJson.tokens?.access_token;
-    const rt = authJson.tokens?.refresh_token;
-    if (!at || !rt) return;
-
-    // Decode access_token to get expiry
-    const decoded = decodeJWT(at);
-    const exp = decoded?.exp ? decoded.exp * 1000 : Date.now() + 864_000_000; // fallback 10 days
-
-    const recovered: OpenAIAuthTokens = {
-      accessToken: at,
-      refreshToken: rt,
-      idToken: authJson.tokens?.id_token,
-      expiresAt: exp,
-    };
-
-    settings.openaiTokens = recovered;
-    saveUserSettings(settings);
-    console.log("[openai-auth] Recovered tokens from ~/.codex/auth.json to user-settings");
-  } catch (error) {
-    console.error("[openai-auth] Failed to recover tokens from auth.json:", error);
+    console.log("[openai-auth] Stored OpenAI tokens found");
   }
 }
 
@@ -241,7 +195,6 @@ export function openAILogin(_parentWindow?: unknown): Promise<{ success: boolean
           expiresAt: tokens.expiresAt,
         };
         saveUserSettings(settings);
-        syncTokensToCodexAuth(tokens);
 
         const decoded = decodeJWT(tokens.accessToken);
         finish({ success: true, email: decoded?.email ?? undefined });
@@ -374,83 +327,10 @@ export async function refreshOpenAIToken(): Promise<boolean> {
     };
     settings.openaiTokens = newTokens;
     saveUserSettings(settings);
-
-    // Sync refreshed tokens to Codex CLI auth
-    syncTokensToCodexAuth(newTokens);
     return true;
   } catch (error) {
     console.error("[openai-auth] Token refresh error:", error);
     return false;
-  }
-}
-
-// ─── Codex CLI auth.json Sync ────────────────────────────────
-
-const CODEX_HOME = join(homedir(), ".codex");
-const CODEX_AUTH_FILE = join(CODEX_HOME, "auth.json");
-
-/**
- * Sync OAuth tokens to ~/.codex/auth.json so that the embedded Codex SDK
- * can pick up credentials. The file format matches what the Codex Rust CLI
- * expects:
- * 
- * {
- *   "auth_mode": "chatgpt",
- *   "tokens": {
- *     "id_token": "<raw JWT>",
- *     "access_token": "<JWT>",
- *     "refresh_token": "<string>",
- *     "account_id": "<optional>"
- *   },
- *   "last_refresh": "<ISO date>"
- * }
- */
-function syncTokensToCodexAuth(tokens: OpenAIAuthTokens): void {
-  try {
-    // Extract account_id from id_token JWT if available
-    let accountId: string | undefined;
-    if (tokens.idToken) {
-      const decoded = decodeJWT(tokens.idToken);
-      accountId = decoded?.["https://api.openai.com/auth"]?.chatgpt_account_id;
-    }
-
-    const authJson = {
-      auth_mode: "chatgpt",
-      tokens: {
-        id_token: tokens.idToken ?? "",
-        access_token: tokens.accessToken,
-        refresh_token: tokens.refreshToken,
-        ...(accountId ? { account_id: accountId } : {}),
-      },
-      last_refresh: new Date().toISOString(),
-    };
-
-    // Ensure ~/.codex directory exists
-    if (!existsSync(CODEX_HOME)) {
-      mkdirSync(CODEX_HOME, { recursive: true, mode: 0o700 });
-    }
-
-    // Write auth.json with restricted permissions (0600)
-    writeFileSync(CODEX_AUTH_FILE, JSON.stringify(authJson, null, 2), {
-      mode: 0o600,
-    });
-    console.log("[openai-auth] Synced tokens to", CODEX_AUTH_FILE);
-  } catch (error) {
-    console.error("[openai-auth] Failed to sync tokens to Codex auth.json:", error);
-  }
-}
-
-/**
- * Remove ~/.codex/auth.json on logout to avoid stale credentials.
- */
-function removeCodexAuth(): void {
-  try {
-    if (existsSync(CODEX_AUTH_FILE)) {
-      unlinkSync(CODEX_AUTH_FILE);
-      console.log("[openai-auth] Removed", CODEX_AUTH_FILE);
-    }
-  } catch (error) {
-    console.error("[openai-auth] Failed to remove Codex auth.json:", error);
   }
 }
 
@@ -460,7 +340,6 @@ export function openAILogout(): void {
   const settings = loadUserSettings();
   delete settings.openaiTokens;
   saveUserSettings(settings);
-  removeCodexAuth();
 }
 
 // ─── Get Valid Access Token (auto-refresh if needed) ─────────

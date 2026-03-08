@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
-export type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk";
+export type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk" | "qqbot";
 
 export type TelegramBotConfig = {
   platform: "telegram";
@@ -88,12 +88,24 @@ export type DingtalkBotConfig = {
   connected: boolean;
 };
 
+export type QQBotConfig = {
+  platform: "qqbot";
+  appId: string;
+  clientSecret: string;
+  dmPolicy?: "open" | "allowlist";
+  groupPolicy?: "open" | "allowlist";
+  allowFrom?: string[];
+  ownerOpenIds?: string[];
+  connected: boolean;
+};
+
 export type BotPlatformConfig =
   | TelegramBotConfig
   | FeishuBotConfig
   | WecomBotConfig
   | DiscordBotConfig
-  | DingtalkBotConfig;
+  | DingtalkBotConfig
+  | QQBotConfig;
 
 export type BotConfig = {
   platforms: Partial<Record<BotPlatformType, BotPlatformConfig>>;
@@ -209,6 +221,25 @@ export async function testBotConnection(
         return { success: true, message: "凭证验证成功" };
       }
       return { success: false, message: `验证失败：${data.errmsg}` };
+    }
+
+    if (platformConfig.platform === "qqbot") {
+      const { appId, clientSecret } = platformConfig;
+      if (!appId || !clientSecret) return { success: false, message: "App ID 和 App Secret 不能为空" };
+
+      const resp = await fetch("https://bots.qq.com/app/getAppAccessToken", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appId, clientSecret }),
+      });
+      if (!resp.ok) {
+        return { success: false, message: `请求失败：HTTP ${resp.status}` };
+      }
+      const data = (await resp.json()) as { access_token?: string; expires_in?: number };
+      if (data.access_token) {
+        return { success: true, message: "凭证验证成功" };
+      }
+      return { success: false, message: `验证失败：${JSON.stringify(data)}` };
     }
 
     if (platformConfig.platform === "discord") {

@@ -430,7 +430,7 @@ export function AssistantManagerModal({
                         }
                       >
                         <option value="claude">Claude</option>
-                        <option value="openai">OpenAI (via OAuth)</option>
+                        <option value="openai">OpenAI</option>
                       </select>
                     </div>
 

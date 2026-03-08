@@ -63,6 +63,9 @@ type UserSettings = {
     proxyEnabled?: boolean;
     proxyUrl?: string;
     openaiTokens?: OpenAITokens;
+    openaiApiKey?: string;
+    openaiBaseUrl?: string;
+    openaiModel?: string;
     webhookToken?: string;
     userName?: string;
     workDescription?: string;
@@ -360,7 +363,7 @@ type MemoryListResult = {
     lastCompactionAt?: string | null;
 }
 
-type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk";
+type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk" | "qqbot";
 
 type TelegramBotConfig = {
     platform: "telegram";
@@ -456,12 +459,28 @@ type DingtalkBotConfig = {
     connected: boolean;
 };
 
+type QQBotConfig = {
+    platform: "qqbot";
+    appId: string;
+    clientSecret: string;
+    /** Private chat policy */
+    dmPolicy?: "open" | "allowlist";
+    /** Group chat policy */
+    groupPolicy?: "open" | "allowlist";
+    /** Allowlisted user openids or group openids */
+    allowFrom?: string[];
+    /** Owner user openids for proactive messaging */
+    ownerOpenIds?: string[];
+    connected: boolean;
+};
+
 type BotPlatformConfig =
     | TelegramBotConfig
     | FeishuBotConfig
     | WecomBotConfig
     | DiscordBotConfig
-    | DingtalkBotConfig;
+    | DingtalkBotConfig
+    | QQBotConfig;
 
 type BotConfig = {
     platforms: Partial<Record<BotPlatformType, BotPlatformConfig>>;
@@ -605,6 +624,44 @@ type FeishuBotStatusResult = {
     detail?: string;
 };
 
+type QQBotStatus = "disconnected" | "connecting" | "connected" | "error";
+
+type StartQQBotInput = {
+    appId: string;
+    clientSecret: string;
+    assistantId: string;
+    assistantName: string;
+    persona?: string;
+    coreValues?: string;
+    relationship?: string;
+    cognitiveStyle?: string;
+    operatingGuidelines?: string;
+    userContext?: string;
+    provider?: "claude" | "openai";
+    model?: string;
+    defaultCwd?: string;
+    dmPolicy?: "open" | "allowlist";
+    groupPolicy?: "open" | "allowlist";
+    allowFrom?: string[];
+    ownerOpenIds?: string[];
+};
+
+type QQBotStatusResult = {
+    status: QQBotStatus;
+    detail?: string;
+};
+
+type SendProactiveQQBotInput = {
+    assistantId: string;
+    text: string;
+    targets?: string[];
+};
+
+type SendProactiveQQBotResult = {
+    ok: boolean;
+    error?: string;
+};
+
 // Goals module removed — long-term goals are now handled via SOP + scheduler
 
 type WorkCategory = "客户服务" | "情报监控" | "内部运营" | "增长销售" | "";
@@ -693,6 +750,10 @@ type EventPayloadMapping = {
     "start-feishu-bot": FeishuBotStatusResult;
     "stop-feishu-bot": void;
     "get-feishu-bot-status": FeishuBotStatusResult;
+    "start-qqbot": QQBotStatusResult;
+    "stop-qqbot": void;
+    "get-qqbot-status": QQBotStatusResult;
+    "send-proactive-qqbot": SendProactiveQQBotResult;
     "is-sidecar-running": boolean;
     // OpenAI OAuth
     "openai-login": OpenAILoginResult;
@@ -870,6 +931,12 @@ interface Window {
         stopFeishuBot: (assistantId: string) => Promise<void>;
         getFeishuBotStatus: (assistantId: string) => Promise<FeishuBotStatusResult>;
         onFeishuBotStatus: (cb: (assistantId: string, status: FeishuBotStatus, detail?: string) => void) => UnsubscribeFunction;
+        // QQ Bot lifecycle
+        startQQBot: (input: StartQQBotInput) => Promise<QQBotStatusResult>;
+        stopQQBot: (assistantId: string) => Promise<void>;
+        getQQBotStatus: (assistantId: string) => Promise<QQBotStatusResult>;
+        onQQBotStatus: (cb: (assistantId: string, status: QQBotStatus, detail?: string) => void) => UnsubscribeFunction;
+        sendProactiveQQBot: (input: SendProactiveQQBotInput) => Promise<SendProactiveQQBotResult>;
         onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => UnsubscribeFunction;
         onAssistantsConfigChanged: (cb: (config: AssistantsConfig) => void) => UnsubscribeFunction;
         // OpenAI OAuth

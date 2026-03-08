@@ -221,7 +221,7 @@ export function saveAssistantsConfig(config: AssistantsConfig): AssistantsConfig
  */
 export function patchAssistantBotOwnerIds(
   assistantId: string,
-  platform: "telegram" | "dingtalk" | "feishu",
+  platform: "telegram" | "dingtalk" | "feishu" | "qqbot",
   userId: string,
 ): boolean {
   const config = loadAssistantsConfig();
@@ -235,6 +235,7 @@ export function patchAssistantBotOwnerIds(
   const field =
     platform === "telegram" ? "ownerUserIds" :
     platform === "feishu"   ? "ownerOpenIds" :
+    platform === "qqbot"    ? "ownerOpenIds" :
                               "ownerStaffIds";
   const existing = (botCfg[field] as string[] | undefined) ?? [];
   if (existing.includes(userId)) return false;

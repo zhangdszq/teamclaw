@@ -170,6 +170,11 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
   const [openaiExpiresAt, setOpenaiExpiresAt] = useState<number | undefined>();
   const [openaiLoggingIn, setOpenaiLoggingIn] = useState(false);
   const [openaiError, setOpenaiError] = useState<string | null>(null);
+  const [openaiAuthMode, setOpenaiAuthMode] = useState<"oauth" | "api">("oauth");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
+  const [openaiModel, setOpenaiModel] = useState("");
+  const [showOpenaiApiKey, setShowOpenaiApiKey] = useState(false);
 
   // Google auth state
   const [googleLoggedIn, setGoogleLoggedIn] = useState(false);
@@ -280,6 +285,10 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
         setProxyUrl(settings.proxyUrl ?? "");
         setAlertWebhook(settings.alertDingtalkWebhook ?? "");
         setAlertSecret(settings.alertDingtalkSecret ?? "");
+        setOpenaiApiKey(settings.openaiApiKey ?? "");
+        setOpenaiBaseUrl(settings.openaiBaseUrl ?? "");
+        setOpenaiModel(settings.openaiModel ?? "");
+        if (settings.openaiApiKey) setOpenaiAuthMode("api");
         setSaved(false);
         setValidationError(null);
         setAlertTestResult(null);
@@ -355,6 +364,9 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
           globalPrompt: globalPrompt.trim(),
           alertDingtalkWebhook: alertWebhook.trim() || undefined,
           alertDingtalkSecret: alertSecret.trim() || undefined,
+          openaiApiKey: openaiApiKey.trim() || undefined,
+          openaiBaseUrl: openaiBaseUrl.trim() || undefined,
+          openaiModel: openaiModel.trim() || undefined,
         });
         if (activeSection === "personalize") {
           const assistantsConfig = await window.electron.getAssistantsConfig();
@@ -575,7 +587,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                       className={`relative px-4 py-2.5 text-[14px] font-medium transition-colors flex items-center gap-1.5 ${modelTab === "openai" ? "text-ink-900" : "text-ink-400 hover:text-ink-600"}`}
                     >
                       OpenAI
-                      {openaiLoggedIn && (
+                      {(openaiLoggedIn || openaiApiKey.trim()) && (
                         <span className="h-1.5 w-1.5 rounded-full bg-success flex-shrink-0" />
                       )}
                       {modelTab === "openai" && (
@@ -678,135 +690,252 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                   {/* OpenAI tab */}
                   {modelTab === "openai" && (
                     <div className="grid gap-5">
-                      {openaiLoggedIn ? (
+                      {/* Segmented control */}
+                      <div className="flex rounded-xl bg-ink-900/5 p-1">
+                        {(["oauth", "api"] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setOpenaiAuthMode(mode)}
+                            className={`flex-1 rounded-lg px-4 py-2 text-[13px] font-medium transition-all ${
+                              openaiAuthMode === mode
+                                ? "bg-surface text-ink-900 shadow-sm"
+                                : "text-ink-400 hover:text-ink-600"
+                            }`}
+                          >
+                            {mode === "oauth" ? "网页授权" : "API 密钥"}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* OAuth mode */}
+                      {openaiAuthMode === "oauth" && (
                         <>
-                          <div className="rounded-xl border border-success/20 bg-success/5 p-4">
-                            <div className="flex items-center gap-3">
-                              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/10 flex-shrink-0">
-                                <svg viewBox="0 0 24 24" className="h-5 w-5 text-success" fill="none" stroke="currentColor" strokeWidth="2">
-                                  <path d="M5 12l4 4L19 6" />
-                                </svg>
+                          {openaiLoggedIn ? (
+                            <>
+                              <div className="rounded-xl border border-success/20 bg-success/5 p-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/10 flex-shrink-0">
+                                    <svg viewBox="0 0 24 24" className="h-5 w-5 text-success" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <path d="M5 12l4 4L19 6" />
+                                    </svg>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[14px] font-medium text-ink-800">已登录 OpenAI</p>
+                                    {openaiEmail && (
+                                      <p className="text-[13px] text-ink-500 truncate">{openaiEmail}</p>
+                                    )}
+                                    {openaiExpiresAt && (
+                                      <p className="text-[12px] text-ink-400 mt-0.5">
+                                        Token 过期: {new Date(openaiExpiresAt).toLocaleString("zh-CN")}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-[14px] font-medium text-ink-800">已登录 OpenAI</p>
-                                {openaiEmail && (
-                                  <p className="text-[13px] text-ink-500 truncate">{openaiEmail}</p>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await window.electron.openaiLogout();
+                                  setOpenaiLoggedIn(false);
+                                  setOpenaiEmail(undefined);
+                                  setOpenaiExpiresAt(undefined);
+                                }}
+                                className="w-full rounded-xl border border-error/20 bg-surface px-4 py-3 text-[14px] font-medium text-error hover:bg-error/5 transition-colors"
+                              >
+                                退出登录
+                              </button>
+
+                              <div className="rounded-xl border border-ink-900/8 bg-surface/60 p-4 grid gap-3">
+                                <p className="text-[13px] font-semibold text-ink-800">如何让 Claude Agent 使用 OpenAI API</p>
+                                <ol className="grid gap-2 list-none">
+                                  {[
+                                    { n: "1", text: "前往「助手管理」，新建或编辑一个助手" },
+                                    { n: "2", text: "将 Provider 下拉改为「OpenAI」" },
+                                    { n: "3", text: "保存后，该助手的所有对话将通过本地代理转发至 OpenAI API，使用当前登录的 ChatGPT 令牌" },
+                                  ].map((step) => (
+                                    <li key={step.n} className="flex items-start gap-2.5">
+                                      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-bold text-accent mt-0.5">{step.n}</span>
+                                      <span className="text-[13px] text-ink-500 leading-relaxed">{step.text}</span>
+                                    </li>
+                                  ))}
+                                </ol>
+                                <p className="text-[12px] text-ink-400 pt-2 border-t border-ink-900/5">
+                                  无需额外 API Key，请求由本地 HTTP 代理（Anthropic → OpenAI 格式翻译）自动处理。
+                                </p>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="rounded-xl border border-ink-900/8 bg-surface/70 p-5">
+                                <div className="flex items-center gap-3 mb-4">
+                                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-ink-900/5 flex-shrink-0">
+                                    <svg viewBox="0 0 24 24" className="h-5 w-5 text-ink-700" fill="currentColor">
+                                      <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
+                                    </svg>
+                                  </div>
+                                  <div>
+                                    <p className="text-[14px] font-medium text-ink-800">ChatGPT 登录</p>
+                                    <p className="text-[12px] text-ink-400 mt-0.5">使用 Plus/Pro 订阅访问 OpenAI 模型，无需额外 API 费用</p>
+                                  </div>
+                                </div>
+                                <p className="text-[13px] text-ink-500 leading-relaxed">
+                                  通过 ChatGPT 账号 OAuth 授权，使用与 OpenAI CLI 相同的认证流程。需要有效的 ChatGPT Plus 或 Pro 订阅。
+                                </p>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  setOpenaiLoggingIn(true);
+                                  setOpenaiError(null);
+                                  try {
+                                    const result = await window.electron.openaiLogin();
+                                    if (result.success) {
+                                      setOpenaiLoggedIn(true);
+                                      setOpenaiEmail(result.email);
+                                      await loadOpenAIStatus();
+                                    } else {
+                                      setOpenaiError(result.error || "登录失败");
+                                    }
+                                  } catch (err) {
+                                    setOpenaiError("登录出错: " + (err instanceof Error ? err.message : String(err)));
+                                  } finally {
+                                    setOpenaiLoggingIn(false);
+                                  }
+                                }}
+                                disabled={openaiLoggingIn}
+                                className="w-full rounded-xl px-4 py-3 text-[14px] font-medium text-white shadow-soft transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                                style={{ background: '#10a37f' }}
+                              >
+                                {openaiLoggingIn ? (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <svg aria-hidden="true" className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+                                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                    </svg>
+                                    正在打开登录窗口...
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
+                                      <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
+                                    </svg>
+                                    使用 ChatGPT 登录
+                                  </span>
                                 )}
-                                {openaiExpiresAt && (
-                                  <p className="text-[12px] text-ink-400 mt-0.5">
-                                    Token 过期: {new Date(openaiExpiresAt).toLocaleString("zh-CN")}
+                              </button>
+
+                              {openaiError && (
+                                <div className="rounded-xl border border-error/20 bg-error/5 px-4 py-3">
+                                  <p className="text-[13px] text-error flex items-start gap-2">
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <circle cx="12" cy="12" r="10" />
+                                      <line x1="15" y1="9" x2="9" y2="15" />
+                                      <line x1="9" y1="9" x2="15" y2="15" />
+                                    </svg>
+                                    <span>{openaiError}</span>
                                   </p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              await window.electron.openaiLogout();
-                              setOpenaiLoggedIn(false);
-                              setOpenaiEmail(undefined);
-                              setOpenaiExpiresAt(undefined);
-                            }}
-                            className="w-full rounded-xl border border-error/20 bg-surface px-4 py-3 text-[14px] font-medium text-error hover:bg-error/5 transition-colors"
-                          >
-                            退出登录
-                          </button>
-
-                          {/* How to use with Claude Agent */}
-                          <div className="rounded-xl border border-ink-900/8 bg-surface/60 p-4 grid gap-3">
-                            <p className="text-[13px] font-semibold text-ink-800">如何让 Claude Agent 使用 OpenAI API</p>
-                            <ol className="grid gap-2 list-none">
-                              {[
-                                { n: "1", text: "前往「助手管理」，新建或编辑一个助手" },
-                                { n: "2", text: "将 Provider 下拉改为「OpenAI (via OAuth)」" },
-                                { n: "3", text: "保存后，该助手的所有对话将通过本地代理转发至 OpenAI API，使用当前登录的 ChatGPT 令牌" },
-                              ].map((step) => (
-                                <li key={step.n} className="flex items-start gap-2.5">
-                                  <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-bold text-accent mt-0.5">{step.n}</span>
-                                  <span className="text-[13px] text-ink-500 leading-relaxed">{step.text}</span>
-                                </li>
-                              ))}
-                            </ol>
-                            <p className="text-[12px] text-ink-400 pt-2 border-t border-ink-900/5">
-                              无需额外 API Key，请求由本地 HTTP 代理（Anthropic → OpenAI 格式翻译）自动处理。
-                            </p>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="rounded-xl border border-ink-900/8 bg-surface/70 p-5">
-                            <div className="flex items-center gap-3 mb-4">
-                              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-ink-900/5 flex-shrink-0">
-                                <svg viewBox="0 0 24 24" className="h-5 w-5 text-ink-700" fill="currentColor">
-                                  <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
-                                </svg>
-                              </div>
-                              <div>
-                                <p className="text-[14px] font-medium text-ink-800">ChatGPT 登录</p>
-                                <p className="text-[12px] text-ink-400 mt-0.5">使用 Plus/Pro 订阅访问 OpenAI 模型，无需额外 API 费用</p>
-                              </div>
-                            </div>
-                            <p className="text-[13px] text-ink-500 leading-relaxed">
-                              通过 ChatGPT 账号 OAuth 授权，使用与 OpenAI CLI 相同的认证流程。需要有效的 ChatGPT Plus 或 Pro 订阅。
-                            </p>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              setOpenaiLoggingIn(true);
-                              setOpenaiError(null);
-                              try {
-                                const result = await window.electron.openaiLogin();
-                                if (result.success) {
-                                  setOpenaiLoggedIn(true);
-                                  setOpenaiEmail(result.email);
-                                  await loadOpenAIStatus();
-                                } else {
-                                  setOpenaiError(result.error || "登录失败");
-                                }
-                              } catch (err) {
-                                setOpenaiError("登录出错: " + (err instanceof Error ? err.message : String(err)));
-                              } finally {
-                                setOpenaiLoggingIn(false);
-                              }
-                            }}
-                            disabled={openaiLoggingIn}
-                            className="w-full rounded-xl px-4 py-3 text-[14px] font-medium text-white shadow-soft transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                            style={{ background: '#10a37f' }}
-                          >
-                            {openaiLoggingIn ? (
-                              <span className="flex items-center justify-center gap-2">
-                                <svg aria-hidden="true" className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
-                                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                </svg>
-                                正在打开登录窗口...
-                              </span>
-                            ) : (
-                              <span className="flex items-center justify-center gap-2">
-                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-                                  <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
-                                </svg>
-                                使用 ChatGPT 登录
-                              </span>
-                            )}
-                          </button>
-
-                          {openaiError && (
-                            <div className="rounded-xl border border-error/20 bg-error/5 px-4 py-3">
-                              <p className="text-[13px] text-error flex items-start gap-2">
-                                <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2">
-                                  <circle cx="12" cy="12" r="10" />
-                                  <line x1="15" y1="9" x2="9" y2="15" />
-                                  <line x1="9" y1="9" x2="15" y2="15" />
-                                </svg>
-                                <span>{openaiError}</span>
-                              </p>
-                            </div>
+                                </div>
+                              )}
+                            </>
                           )}
                         </>
+                      )}
+
+                      {/* API key mode */}
+                      {openaiAuthMode === "api" && (
+                        <div className="grid gap-5">
+                          <label className="grid gap-2">
+                            <span className="text-[12px] font-medium text-ink-500 uppercase tracking-wide">API 地址</span>
+                            <input
+                              type="url"
+                              className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-3 text-[14px] text-ink-800 placeholder:text-ink-300 focus:outline-none transition-colors"
+                              onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
+                              onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                              placeholder="https://api.openai.com（可选）"
+                              value={openaiBaseUrl}
+                              onChange={(e) => setOpenaiBaseUrl(e.target.value)}
+                            />
+                            <span className="text-[12px] text-ink-400">自定义 API 端点，留空则使用 OpenAI 官方地址</span>
+                          </label>
+
+                          <label className="grid gap-2">
+                            <span className="text-[12px] font-medium text-ink-500 uppercase tracking-wide">API Key</span>
+                            <div className="relative">
+                              <input
+                                type={showOpenaiApiKey ? "text" : "password"}
+                                className="w-full rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-3 pr-12 text-[14px] text-ink-800 placeholder:text-ink-300 focus:outline-none transition-colors font-mono"
+                                onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
+                                onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                                placeholder="sk-..."
+                                value={openaiApiKey}
+                                onChange={(e) => setOpenaiApiKey(e.target.value)}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowOpenaiApiKey(!showOpenaiApiKey)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1 text-ink-400 hover:text-ink-700 transition-colors"
+                                aria-label={showOpenaiApiKey ? "Hide API key" : "Show API key"}
+                              >
+                                {showOpenaiApiKey ? (
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                                    <line x1="1" y1="1" x2="23" y2="23" />
+                                  </svg>
+                                ) : (
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                  </svg>
+                                )}
+                              </button>
+                            </div>
+                            <span className="text-[12px] text-ink-400">
+                              从{" "}
+                              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--color-accent)' }}>
+                                platform.openai.com
+                              </a>
+                              {" "}获取 API Key
+                            </span>
+                          </label>
+
+                          <label className="grid gap-2">
+                            <span className="text-[12px] font-medium text-ink-500 uppercase tracking-wide">模型</span>
+                            <input
+                              type="text"
+                              className="rounded-xl border border-ink-900/10 bg-surface/70 px-4 py-3 text-[14px] text-ink-800 placeholder:text-ink-300 focus:outline-none transition-colors font-mono"
+                              onFocus={(e) => e.currentTarget.style.borderColor = 'var(--color-accent)'}
+                              onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                              placeholder="gpt-5.4（可选，留空使用默认映射）"
+                              value={openaiModel}
+                              onChange={(e) => setOpenaiModel(e.target.value)}
+                            />
+                            <span className="text-[12px] text-ink-400">
+                              填写后将忽略模型映射，直接使用指定的模型名称
+                            </span>
+                          </label>
+
+                          {(openaiApiKey.trim() || openaiBaseUrl.trim() || openaiModel.trim()) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenaiApiKey("");
+                                setOpenaiBaseUrl("");
+                                setOpenaiModel("");
+                              }}
+                              className="text-left text-[12px] text-ink-400 hover:text-error transition-colors"
+                            >
+                              清除 API 设置
+                            </button>
+                          )}
+
+                          <div className="rounded-xl border border-info/20 bg-info/5 px-4 py-3">
+                            <p className="text-[13px] text-info leading-relaxed">
+                              <strong>说明：</strong>配置 API Key 后，OpenAI 请求将直接使用此密钥认证，优先于网页授权。支持 OpenAI 官方 API 及兼容服务。
+                            </p>
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}

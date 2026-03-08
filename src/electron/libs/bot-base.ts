@@ -34,6 +34,12 @@ export interface BaseBotOptions {
   skillNames?: string[];
 }
 
+export interface OpenAIOverrides {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Matches absolute file paths in assistant replies — used to scrub history. */
@@ -62,6 +68,21 @@ export function buildQueryEnv(assistantConfig?: { apiAuthToken?: string; apiBase
     ...(apiKey ? { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: apiKey } : {}),
     ...(baseURL ? { ANTHROPIC_BASE_URL: baseURL } : {}),
   };
+}
+
+/**
+ * Build per-assistant OpenAI overrides for proxy routing.
+ * Uses assistant-level settings when provided, with optional model fallback.
+ */
+export function buildOpenAIOverrides(
+  assistantConfig?: { apiAuthToken?: string; apiBaseUrl?: string; model?: string },
+  fallbackModel?: string,
+): OpenAIOverrides | undefined {
+  const apiKey = assistantConfig?.apiAuthToken?.trim() || undefined;
+  const baseUrl = assistantConfig?.apiBaseUrl?.trim() || undefined;
+  const model = (fallbackModel || assistantConfig?.model || "").trim() || undefined;
+  if (!apiKey && !baseUrl && !model) return undefined;
+  return { apiKey, baseUrl, model };
 }
 
 // ─── buildStructuredPersona ───────────────────────────────────────────────────

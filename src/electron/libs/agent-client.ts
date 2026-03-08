@@ -11,7 +11,7 @@ import { query, unstable_v2_prompt } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKMessage, PermissionResult, SDKResultMessage, McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { getClaudeCodePath, getEnhancedEnv } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
-import { startProxy, getProxyBaseUrl } from "./openai-proxy.js";
+import { startProxy, getProxyBaseUrl, registerProxyRoute, unregisterProxyRoute, type OpenAIProxyOverrides } from "./openai-proxy.js";
 import { recordUsage } from "./usage-tracker.js";
 import { homedir } from "os";
 
@@ -23,6 +23,7 @@ export interface PromptOnceOpts {
   env?: Record<string, string | undefined>;
   pathToClaudeCodeExecutable?: string;
   provider?: AgentProvider;
+  openaiOverrides?: OpenAIProxyOverrides;
 }
 
 export interface RunAgentOpts {
@@ -41,22 +42,34 @@ export interface RunAgentOpts {
   ) => Promise<PermissionResult>;
   includePartialMessages?: boolean;
   provider?: AgentProvider;
+  openaiOverrides?: OpenAIProxyOverrides;
 }
+
+type ProviderEnvResult = {
+  env: Record<string, string | undefined>;
+  cleanup?: () => void;
+};
 
 async function getEnvForProvider(
   provider: AgentProvider | undefined,
   baseEnv?: Record<string, string | undefined>,
-): Promise<Record<string, string | undefined>> {
+  openaiOverrides?: OpenAIProxyOverrides,
+): Promise<ProviderEnvResult> {
   const env = { ...(baseEnv ?? getEnhancedEnv()) };
   if (provider === "openai") {
     await startProxy();
-    const proxyUrl = getProxyBaseUrl();
+    const routeId = registerProxyRoute(openaiOverrides);
+    const proxyUrl = getProxyBaseUrl(routeId);
     if (proxyUrl) {
       env.ANTHROPIC_BASE_URL = proxyUrl;
       env.ANTHROPIC_API_KEY = "openai-proxy-dummy";
     }
+    return {
+      env,
+      cleanup: () => unregisterProxyRoute(routeId),
+    };
   }
-  return env;
+  return { env };
 }
 
 /**
@@ -64,16 +77,20 @@ async function getEnvForProvider(
  * Wraps `unstable_v2_prompt` with shared defaults.
  */
 export async function promptOnce(prompt: string, opts?: PromptOnceOpts): Promise<string | null> {
-  const env = await getEnvForProvider(opts?.provider, opts?.env);
+  const { env, cleanup } = await getEnvForProvider(opts?.provider, opts?.env, opts?.openaiOverrides);
   const model = opts?.model ?? (env.ANTHROPIC_MODEL as string | undefined) ?? "claude-sonnet-4-20250514";
-  const result: SDKResultMessage = await unstable_v2_prompt(prompt, {
-    model,
-    env,
-    pathToClaudeCodeExecutable: opts?.pathToClaudeCodeExecutable ?? getClaudeCodePath(),
-  });
-  if (result.subtype === "success") return result.result;
-  console.warn("[agent-client] promptOnce returned non-success:", result.subtype);
-  return null;
+  try {
+    const result: SDKResultMessage = await unstable_v2_prompt(prompt, {
+      model,
+      env,
+      pathToClaudeCodeExecutable: opts?.pathToClaudeCodeExecutable ?? getClaudeCodePath(),
+    });
+    if (result.subtype === "success") return result.result;
+    console.warn("[agent-client] promptOnce returned non-success:", result.subtype);
+    return null;
+  } finally {
+    cleanup?.();
+  }
 }
 
 /**
@@ -86,30 +103,50 @@ export async function promptOnce(prompt: string, opts?: PromptOnceOpts): Promise
  * - provider "claude": extracted from the result message and recorded once
  */
 export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise<AsyncIterable<SDKMessage>> {
-  const env = await getEnvForProvider(opts.provider, opts.env);
+  const { env, cleanup } = await getEnvForProvider(opts.provider, opts.env, opts.openaiOverrides);
   console.log("[agent-client] runAgent called, provider:", opts.provider ?? "claude", "cwd:", opts.cwd, "resume:", opts.resume ?? "none");
 
-  const iterable = await query({
-    prompt,
-    options: {
-      cwd: opts.cwd ?? homedir(),
-      resume: opts.resume,
-      abortController: opts.abortController,
-      env,
-      pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable ?? getClaudeCodePath(),
-      permissionMode: "bypassPermissions",
-      includePartialMessages: opts.includePartialMessages ?? true,
-      allowDangerouslySkipPermissions: true,
-      maxTurns: opts.maxTurns ?? 300,
-      settingSources: getSettingSources(),
-      mcpServers: opts.mcpServers,
-      systemPrompt: opts.systemPrompt,
-      canUseTool: opts.canUseTool,
-    },
-  });
+  if (opts.provider === "openai") {
+    console.log("[agent-client] OpenAI env: ANTHROPIC_BASE_URL=", env.ANTHROPIC_BASE_URL, "ANTHROPIC_API_KEY=", env.ANTHROPIC_API_KEY ? `${env.ANTHROPIC_API_KEY.slice(0, 12)}...` : "unset");
+  }
 
-  // Only track Anthropic direct calls; OpenAI calls are tracked per-request in openai-proxy.ts
-  if (opts.provider === "openai") return iterable;
+  let iterable: AsyncIterable<SDKMessage>;
+  try {
+    iterable = await query({
+      prompt,
+      options: {
+        cwd: opts.cwd ?? homedir(),
+        resume: opts.resume,
+        abortController: opts.abortController,
+        env,
+        pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable ?? getClaudeCodePath(),
+        permissionMode: "bypassPermissions",
+        includePartialMessages: opts.includePartialMessages ?? true,
+        allowDangerouslySkipPermissions: true,
+        maxTurns: opts.maxTurns ?? 300,
+        settingSources: getSettingSources(),
+        mcpServers: opts.mcpServers,
+        systemPrompt: opts.systemPrompt,
+        canUseTool: opts.canUseTool,
+      },
+    });
+  } catch (err) {
+    cleanup?.();
+    throw err;
+  }
+
+  if (opts.provider === "openai") {
+    async function* withOpenAICleanup(): AsyncGenerator<SDKMessage> {
+      try {
+        for await (const message of iterable) {
+          yield message;
+        }
+      } finally {
+        cleanup?.();
+      }
+    }
+    return withOpenAICleanup();
+  }
 
   const startedAt = Date.now();
 

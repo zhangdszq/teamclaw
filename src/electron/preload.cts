@@ -175,6 +175,22 @@ electron.contextBridge.exposeInMainWorld("electron", {
         electron.ipcRenderer.on("dingtalk-bot-status", handler);
         return () => electron.ipcRenderer.off("dingtalk-bot-status", handler);
     },
+    // QQ Bot lifecycle
+    startQQBot: (input: StartQQBotInput) =>
+        ipcInvoke("start-qqbot", input),
+    stopQQBot: (assistantId: string) =>
+        ipcInvoke("stop-qqbot", assistantId),
+    getQQBotStatus: (assistantId: string) =>
+        ipcInvoke("get-qqbot-status", assistantId),
+    sendProactiveQQBot: (input: SendProactiveQQBotInput) =>
+        ipcInvoke("send-proactive-qqbot", input),
+    onQQBotStatus: (cb: (assistantId: string, status: QQBotStatus, detail?: string) => void) => {
+        const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; status: QQBotStatus; detail?: string }) => {
+            cb(payload.assistantId, payload.status, payload.detail);
+        };
+        electron.ipcRenderer.on("qqbot-bot-status", handler);
+        return () => electron.ipcRenderer.off("qqbot-bot-status", handler);
+    },
     onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => {
         const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; platform: string }) => {
             cb(payload.assistantId, payload.platform);

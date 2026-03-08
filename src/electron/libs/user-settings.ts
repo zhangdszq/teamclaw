@@ -33,6 +33,10 @@ export interface UserSettings {
   proxyUrl?: string;  // e.g., http://127.0.0.1:7890 or socks5://127.0.0.1:1080
   // OpenAI Codex OAuth tokens
   openaiTokens?: OpenAITokens;
+  // OpenAI API key auth (alternative to OAuth)
+  openaiApiKey?: string;
+  openaiBaseUrl?: string;
+  openaiModel?: string;
   // Webhook auth token — set to require Authorization: Bearer <token> on /webhook routes
   webhookToken?: string;
   // Personalization
@@ -178,6 +182,26 @@ function validateUserSettings(settings: unknown): asserts settings is UserSettin
     validateOpenAITokens(s.openaiTokens);
   }
 
+  // Validate openaiApiKey if provided
+  if (s.openaiApiKey !== undefined && typeof s.openaiApiKey !== 'string') {
+    throw new UserSettingsValidationError('openaiApiKey must be a string');
+  }
+
+  // Validate openaiBaseUrl if provided
+  if (s.openaiBaseUrl !== undefined) {
+    if (typeof s.openaiBaseUrl !== 'string') {
+      throw new UserSettingsValidationError('openaiBaseUrl must be a string');
+    }
+    if (s.openaiBaseUrl && !isValidUrl(s.openaiBaseUrl)) {
+      throw new UserSettingsValidationError('openaiBaseUrl must be a valid URL');
+    }
+  }
+
+  // Validate openaiModel if provided
+  if (s.openaiModel !== undefined && typeof s.openaiModel !== 'string') {
+    throw new UserSettingsValidationError('openaiModel must be a string');
+  }
+
   // Validate webhookToken if provided
   if (s.webhookToken !== undefined && typeof s.webhookToken !== 'string') {
     throw new UserSettingsValidationError('webhookToken must be a string');
@@ -295,38 +319,32 @@ export function saveUserSettings(settings: UserSettings): void {
   ensureDirectory();
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
 
-  // Sync API key/url into ~/.claude/settings.json so claude CLI reads the latest config,
-  // preventing stale values in that file from overriding user settings.
-  syncToClaudeSettings(settings);
+  // Migration cleanup: stop syncing ANTHROPIC_* into ~/.claude/settings.json.
+  // Remove previously synced keys once so they no longer interfere.
+  cleanupLegacyClaudeEnvSync();
 }
 
-function syncToClaudeSettings(settings: UserSettings): void {
+function cleanupLegacyClaudeEnvSync(): void {
   const claudeSettingsPath = join(homedir(), ".claude", "settings.json");
   try {
-    let parsed: { env?: Record<string, string>; [key: string]: unknown } = {};
-    if (existsSync(claudeSettingsPath)) {
-      parsed = JSON.parse(readFileSync(claudeSettingsPath, "utf8"));
-    }
-    const env: Record<string, string> = { ...(parsed.env ?? {}) };
+    if (!existsSync(claudeSettingsPath)) return;
+    const parsed = JSON.parse(readFileSync(claudeSettingsPath, "utf8")) as {
+      env?: Record<string, string>;
+      [key: string]: unknown;
+    };
+    if (!parsed.env) return;
 
-    if (settings.anthropicAuthToken) {
-      env.ANTHROPIC_API_KEY = settings.anthropicAuthToken;
-      env.ANTHROPIC_AUTH_TOKEN = settings.anthropicAuthToken;
-    } else {
-      delete env.ANTHROPIC_API_KEY;
-      delete env.ANTHROPIC_AUTH_TOKEN;
-    }
-
-    if (settings.anthropicBaseUrl) {
-      env.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
-    } else {
-      delete env.ANTHROPIC_BASE_URL;
-    }
+    const env = { ...parsed.env };
+    const beforeSize = Object.keys(env).length;
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.ANTHROPIC_BASE_URL;
+    if (Object.keys(env).length === beforeSize) return;
 
     parsed.env = env;
     writeFileSync(claudeSettingsPath, JSON.stringify(parsed, null, 2), "utf8");
   } catch {
-    // best-effort, don't block saving user settings
+    // best-effort cleanup, don't block saving user settings
   }
 }
 

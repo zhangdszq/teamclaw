@@ -30,6 +30,7 @@ import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
 import {
   type ConvMessage,
+  buildOpenAIOverrides,
   buildQueryEnv,
   buildStructuredPersona,
   buildHistoryContext,
@@ -900,6 +901,7 @@ class FeishuConnection {
       prompt = `${userText}\n\n[图片内容已附加，请分析图片并结合文字消息回复]`;
     }
 
+    const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId);
     const q = await runAgent(prompt, {
       systemPrompt: system,
       resume: claudeSessionId,
@@ -912,7 +914,10 @@ class FeishuConnection {
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
       ...(provider !== "openai" && {
-        env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)),
+        env: buildQueryEnv(assistantConfig),
+      }),
+      ...(provider === "openai" && {
+        openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model),
       }),
     });
 

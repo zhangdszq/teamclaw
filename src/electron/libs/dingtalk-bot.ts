@@ -30,6 +30,7 @@ import { createSharedMcpServer } from "./shared-mcp.js";
 import {
   type ConvMessage,
   FILE_PATH_RE,
+  buildOpenAIOverrides,
   buildQueryEnv,
   buildStructuredPersona,
   buildHistoryContext,
@@ -1980,6 +1981,7 @@ class DingtalkConnection {
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(this.opts.assistantId);
     const claudeCodePath = getClaudeCodePath();
+    const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId);
 
     let finalText = "";
     const q = await runAgent(userText, {
@@ -1989,7 +1991,8 @@ class DingtalkConnection {
       mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
-      ...(provider !== "openai" && { env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)) }),
+      ...(provider !== "openai" && { env: buildQueryEnv(assistantConfig) }),
+      ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
     });
 
     for await (const message of q) {
@@ -2053,6 +2056,7 @@ class DingtalkConnection {
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(this.opts.assistantId);
     const claudeCodePath = getClaudeCodePath();
+    const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId);
 
     let finalText = "";
     let accum = "";
@@ -2066,7 +2070,8 @@ class DingtalkConnection {
       mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
-      ...(provider !== "openai" && { env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)) }),
+      ...(provider !== "openai" && { env: buildQueryEnv(assistantConfig) }),
+      ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
     });
 
     try {

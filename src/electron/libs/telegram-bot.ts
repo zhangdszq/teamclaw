@@ -38,6 +38,7 @@ import {
   type BaseBotOptions,
   FILE_PATH_RE,
   FILE_SEND_RULE,
+  buildOpenAIOverrides,
   buildQueryEnv,
   buildStructuredPersona as buildStructuredPersonaBase,
   buildHistoryContext,
@@ -1386,6 +1387,7 @@ class TelegramConnection {
     let accumulatedText = "";
     let draftMessageId: number | null = null;
     let lastEditTime = 0;
+    const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId);
 
     try {
       const q = await runAgent(userText, {
@@ -1395,7 +1397,8 @@ class TelegramConnection {
         mcpServers: { "vk-shared": sharedMcp, "tg-session": sessionMcp },
         pathToClaudeCodeExecutable: claudeCodePath,
         provider,
-        ...(provider !== "openai" && { env: buildQueryEnv(loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId)) }),
+        ...(provider !== "openai" && { env: buildQueryEnv(assistantConfig) }),
+        ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
       });
 
       for await (const message of q) {

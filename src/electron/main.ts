@@ -10,11 +10,12 @@ import { buildConversationDigest, extractExperienceViaAI } from "./libs/experien
 setSessionStore(sessions);
 setFeishuSessionStore(sessions);
 setTelegramSessionStore(sessions);
+setQQBotSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
 import { loadAssistantsConfig, saveAssistantsConfig, assistantConfigEvents, resolveDefaultProvider, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
-import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type TelegramBotConfig } from "./libs/bot-config.js";
+import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type TelegramBotConfig, type QQBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
   stopDingtalkBot,
@@ -48,6 +49,16 @@ import {
   sendProactiveTelegramMessage,
   type TelegramBotOptions,
 } from "./libs/telegram-bot.js";
+import {
+  startQQBot,
+  stopQQBot,
+  getQQBotStatus,
+  updateQQBotConfig,
+  onQQBotStatusChange,
+  setQQBotSessionStore,
+  sendProactiveQQMessage,
+  type QQBotOptions,
+} from "./libs/qqbot-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { ensureBuiltinMcpServers } from "./libs/builtin-mcps.js";
 import { seedBuiltinSkills } from "./libs/builtin-skills.js";
@@ -253,6 +264,41 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
             } catch (err) {
                 console.error(`[AutoConnect] Failed to connect Feishu bot for ${assistant.name}:`, err);
                 win.webContents.send("feishu-bot-status", {
+                    assistantId: assistant.id,
+                    status: "error",
+                    detail: err instanceof Error ? err.message : String(err),
+                });
+            }
+        }
+
+        // QQ Bot
+        const qqbot = assistant.bots?.qqbot as QQBotConfig | undefined;
+        if (qqbot?.connected && qqbot.appId && qqbot.clientSecret) {
+            console.log(`[AutoConnect] Starting QQ bot for assistant: ${assistant.name}`);
+            try {
+                await startQQBot({
+                    appId: qqbot.appId,
+                    clientSecret: qqbot.clientSecret,
+                    assistantId: assistant.id,
+                    assistantName: assistant.name,
+                    persona: assistant.persona,
+                    coreValues: assistant.coreValues,
+                    relationship: assistant.relationship,
+                    cognitiveStyle: assistant.cognitiveStyle,
+                    operatingGuidelines: assistant.operatingGuidelines,
+                    userContext: config.userContext,
+                    provider: assistant.provider,
+                    model: assistant.model,
+                    defaultCwd: assistant.defaultCwd,
+                    dmPolicy: qqbot.dmPolicy,
+                    groupPolicy: qqbot.groupPolicy,
+                    allowFrom: qqbot.allowFrom,
+                    ownerOpenIds: qqbot.ownerOpenIds,
+                });
+                console.log(`[AutoConnect] QQ bot connected for: ${assistant.name}`);
+            } catch (err) {
+                console.error(`[AutoConnect] Failed to connect QQ bot for ${assistant.name}:`, err);
+                win.webContents.send("qqbot-bot-status", {
                     assistantId: assistant.id,
                     status: "error",
                     detail: err instanceof Error ? err.message : String(err),
@@ -930,6 +976,7 @@ app.on("ready", async () => {
             });
             updateTelegramBotConfig(assistant.id, updates);
             updateFeishuBotConfig(assistant.id, updates);
+            updateQQBotConfig(assistant.id, updates);
         }
 
         // Notify all renderer windows so Sidebar refreshes without restart
@@ -1082,6 +1129,41 @@ app.on("ready", async () => {
         for (const win of windows) {
             if (!win.isDestroyed()) {
                 win.webContents.send("server-event", event);
+            }
+        }
+    });
+
+    // QQ Bot lifecycle handlers
+    ipcMainHandle("start-qqbot", async (_: any, input: QQBotOptions) => {
+        try {
+            await startQQBot(input);
+            return { status: getQQBotStatus(input.assistantId) as QQBotStatus };
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            return { status: "error" as QQBotStatus, detail };
+        }
+    });
+
+    ipcMainHandle("stop-qqbot", (_: any, assistantId: string) => {
+        stopQQBot(assistantId);
+    });
+
+    ipcMainHandle("get-qqbot-status", (_: any, assistantId: string) => {
+        return { status: getQQBotStatus(assistantId) as QQBotStatus };
+    });
+
+    ipcMainHandle("send-proactive-qqbot", async (_: any, input: { assistantId: string; text: string; targets?: string[] }) => {
+        return await sendProactiveQQMessage(input.assistantId, input.text, {
+            targets: input.targets,
+        });
+    });
+
+    // Forward QQ Bot status changes to renderer
+    onQQBotStatusChange((assistantId, status, detail) => {
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            if (!win.isDestroyed()) {
+                win.webContents.send("qqbot-bot-status", { assistantId, status, detail });
             }
         }
     });

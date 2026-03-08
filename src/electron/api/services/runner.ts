@@ -153,6 +153,20 @@ function getEnhancedEnv(assistantId?: string): Record<string, string | undefined
   };
 }
 
+function buildOpenAIOverrides(
+  assistantId?: string,
+  sessionModel?: string,
+): { apiKey?: string; baseUrl?: string; model?: string } | undefined {
+  const assistant = assistantId
+    ? loadAssistantsConfig().assistants.find((a) => a.id === assistantId)
+    : undefined;
+  const apiKey = assistant?.apiAuthToken?.trim() || undefined;
+  const baseUrl = assistant?.apiBaseUrl?.trim() || undefined;
+  const model = (sessionModel || assistant?.model || "").trim() || undefined;
+  if (!apiKey && !baseUrl && !model) return undefined;
+  return { apiKey, baseUrl, model };
+}
+
 // Stop a session by ID (supports both internal and external IDs)
 export function stopSession(sessionId: string): boolean {
   console.log('[Runner] Stopping session:', sessionId);
@@ -173,6 +187,7 @@ export function stopSession(sessionId: string): boolean {
 export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerEvent> {
   const { prompt, session, resumeSessionId, model, provider, onSessionUpdate } = options;
   const abortController = new AbortController();
+  const effectiveProvider = provider ?? session.provider ?? 'claude';
 
   // Track this controller - use externalId if available for cross-process stop
   const trackingId = session.externalId || session.id;
@@ -187,6 +202,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   // Get CLI path and environment dynamically (env vars are set after module load)
   const claudeCodePath = getClaudeCodePath();
   const enhancedEnv = getEnhancedEnv(session.assistantId);
+  const openaiOverrides = buildOpenAIOverrides(session.assistantId, model || session.model);
   // Per-assistant model override: if the assistant has an explicit model configured,
   // use it instead of the global ANTHROPIC_MODEL environment variable.
   if (model) {
@@ -215,9 +231,10 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
       cwd: session.cwd ?? DEFAULT_CWD,
       resume: resumeSessionId,
       abortController,
-      ...((!provider || provider === 'claude') && { env: enhancedEnv }),
+      ...(effectiveProvider === 'claude' && { env: enhancedEnv }),
+      ...(effectiveProvider === 'openai' && { openaiOverrides }),
       pathToClaudeCodeExecutable: claudeCodePath,
-      provider: provider ?? 'claude',
+      provider: effectiveProvider,
       mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
       canUseTool: async (toolName, input, { signal, toolUseID }) => {
         if (toolName === 'AskUserQuestion') {

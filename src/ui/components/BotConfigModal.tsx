@@ -86,6 +86,17 @@ const PLATFORMS: PlatformMeta[] = [
       </svg>
     ),
   },
+  {
+    id: "qqbot",
+    name: "QQ",
+    description: "在 QQ 开放平台创建机器人并获取 AppID 和 AppSecret",
+    color: "#12B7F5",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-full w-full" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c2.03 0 3.67 1.91 3.67 4.26 0 .64-.12 1.24-.34 1.79C16.9 11.7 18 13.26 18 14.5c0 .62-.2 1.25-.56 1.77.13.42.37 1.06.37 1.48 0 .55-.3.75-.75.75-.26 0-.53-.08-.82-.23a7.1 7.1 0 01-4.24 1.48c-1.57 0-3.04-.53-4.24-1.48-.29.15-.56.23-.82.23-.45 0-.75-.2-.75-.75 0-.42.24-1.06.37-1.48A3.1 3.1 0 016 14.5c0-1.24 1.1-2.8 2.67-3.45a5.1 5.1 0 01-.34-1.79C8.33 6.91 9.97 5 12 5z" />
+      </svg>
+    ),
+  },
 ];
 
 type FormState = {
@@ -126,6 +137,14 @@ type FormState = {
     ownerStaffIds: string;
     maxConnectionAttempts: string;
   };
+  qqbot: {
+    appId: string;
+    clientSecret: string;
+    dmPolicy: "open" | "allowlist";
+    groupPolicy: "open" | "allowlist";
+    allowFrom: string;
+    ownerOpenIds: string;
+  };
 };
 
 function buildDefaultForm(): FormState {
@@ -146,6 +165,14 @@ function buildDefaultForm(): FormState {
       allowFrom: "",
       ownerStaffIds: "",
       maxConnectionAttempts: "10",
+    },
+    qqbot: {
+      appId: "",
+      clientSecret: "",
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: "",
+      ownerOpenIds: "",
     },
   };
 }
@@ -204,6 +231,17 @@ function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): 
       maxConnectionAttempts: String(dt.maxConnectionAttempts ?? 10),
     };
   }
+  const qq = bots.qqbot as any;
+  if (qq) {
+    form.qqbot = {
+      appId: qq.appId ?? "",
+      clientSecret: qq.clientSecret ?? "",
+      dmPolicy: qq.dmPolicy ?? "open",
+      groupPolicy: qq.groupPolicy ?? "open",
+      allowFrom: (qq.allowFrom ?? []).join(","),
+      ownerOpenIds: (qq.ownerOpenIds ?? []).join(","),
+    };
+  }
   return form;
 }
 
@@ -251,6 +289,22 @@ function formToPlatformConfig(
   }
   if (platform === "discord") {
     return { platform: "discord", token: form.discord.token, connected };
+  }
+  if (platform === "qqbot") {
+    return {
+      platform: "qqbot",
+      appId: form.qqbot.appId,
+      clientSecret: form.qqbot.clientSecret,
+      dmPolicy: form.qqbot.dmPolicy,
+      groupPolicy: form.qqbot.groupPolicy,
+      allowFrom: form.qqbot.allowFrom
+        ? form.qqbot.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined,
+      ownerOpenIds: form.qqbot.ownerOpenIds
+        ? form.qqbot.ownerOpenIds.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined,
+      connected,
+    };
   }
   return {
     platform: "dingtalk",
@@ -329,9 +383,11 @@ export function BotConfigModal({
   const [dingtalkStatus, setDingtalkStatus] = useState<DingtalkStatus>(null);
   const [feishuStatus, setFeishuStatus] = useState<FeishuStatus>(null);
   const [telegramStatus, setTelegramStatus] = useState<TgStatus>(null);
+  const [qqbotStatus, setQqbotStatus] = useState<QQBotStatus | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
   const unsubFeishuRef = useRef<(() => void) | null>(null);
   const unsubTelegramRef = useRef<(() => void) | null>(null);
+  const unsubQqbotRef = useRef<(() => void) | null>(null);
 
   // Load initial status and subscribe to updates for real-time bot platforms
   useEffect(() => {
@@ -359,6 +415,11 @@ export function BotConfigModal({
     // Get current Feishu status
     window.electron.getFeishuBotStatus(assistantId).then((r) => {
       setFeishuStatus(r.status);
+    });
+
+    // Get current QQ Bot status
+    window.electron.getQQBotStatus(assistantId).then((r) => {
+      setQqbotStatus(r.status);
     });
 
     // Subscribe to Telegram live status updates
@@ -400,6 +461,19 @@ export function BotConfigModal({
     });
     unsubFeishuRef.current = unsubFs;
 
+    // Subscribe to QQ Bot live status updates
+    const unsubQq = window.electron.onQQBotStatus((id, status, detail) => {
+      if (id !== assistantId) return;
+      setQqbotStatus(status);
+      if (status === "error" && detail) {
+        setTestResult({ success: false, message: detail });
+      }
+      if (status === "connected") {
+        setTestResult({ success: true, message: "QQ Bot 连接成功，机器人正在监听消息" });
+      }
+    });
+    unsubQqbotRef.current = unsubQq;
+
     // Subscribe to auto-populated ownerUserIds/ownerStaffIds changes
     const unsubOwner = window.electron.onAssistantBotOwnerIdsChanged((id, platform) => {
       if (id !== assistantId) return;
@@ -429,10 +503,12 @@ export function BotConfigModal({
       unsubTg();
       unsubDt();
       unsubFs();
+      unsubQq();
       unsubOwner();
       unsubTelegramRef.current = null;
       unsubRef.current = null;
       unsubFeishuRef.current = null;
+      unsubQqbotRef.current = null;
     };
   }, [open, assistantId, initialBots]);
 
@@ -451,6 +527,8 @@ export function BotConfigModal({
       ? dingtalkStatus ?? (isConnected ? "connected" : "disconnected")
       : selectedPlatform === "feishu"
       ? feishuStatus ?? (isConnected ? "connected" : "disconnected")
+      : selectedPlatform === "qqbot"
+      ? qqbotStatus ?? (isConnected ? "connected" : "disconnected")
       : isConnected
       ? "connected"
       : "disconnected";
@@ -647,6 +725,59 @@ export function BotConfigModal({
           setConnecting(false);
         }
       }
+    } else if (selectedPlatform === "qqbot") {
+      if (effectiveStatus === "connected" || effectiveStatus === "connecting") {
+        await window.electron.stopQQBot(assistantId);
+        const platformCfg = formToPlatformConfig("qqbot", form, false);
+        const nextBots = { ...bots, qqbot: platformCfg };
+        setBots(nextBots);
+        onSave(nextBots);
+      } else {
+        const qq = form.qqbot;
+        if (!qq.appId || !qq.clientSecret) {
+          setTestResult({ success: false, message: "请先填写 App ID 和 App Secret" });
+          return;
+        }
+        setConnecting(true);
+        setTestResult(null);
+        try {
+          const result = await window.electron.startQQBot({
+            appId: qq.appId,
+            clientSecret: qq.clientSecret,
+            assistantId,
+            assistantName,
+            provider,
+            model,
+            defaultCwd,
+            persona,
+            coreValues,
+            relationship,
+            cognitiveStyle,
+            operatingGuidelines,
+            userContext,
+            dmPolicy: qq.dmPolicy,
+            groupPolicy: qq.groupPolicy,
+            allowFrom: qq.allowFrom
+              ? qq.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+              : undefined,
+            ownerOpenIds: qq.ownerOpenIds
+              ? qq.ownerOpenIds.split(",").map((s) => s.trim()).filter(Boolean)
+              : undefined,
+          });
+          if (result.status === "error") {
+            setTestResult({ success: false, message: result.detail ?? "连接失败" });
+          } else {
+            const platformCfg = formToPlatformConfig("qqbot", form, true);
+            const nextBots = { ...bots, qqbot: platformCfg };
+            setBots(nextBots);
+            onSave(nextBots);
+          }
+        } catch (err) {
+          setTestResult({ success: false, message: `连接异常: ${err instanceof Error ? err.message : String(err)}` });
+        } finally {
+          setConnecting(false);
+        }
+      }
     } else {
       const newConnected = !isConnected;
       const platformCfg = formToPlatformConfig(selectedPlatform, form, newConnected);
@@ -666,9 +797,12 @@ export function BotConfigModal({
     setForm((f) => ({ ...f, discord: { ...f.discord, ...u } }));
   const updateDingtalk = (u: Partial<FormState["dingtalk"]>) =>
     setForm((f) => ({ ...f, dingtalk: { ...f.dingtalk, ...u } }));
+  const updateQqbot = (u: Partial<FormState["qqbot"]>) =>
+    setForm((f) => ({ ...f, qqbot: { ...f.qqbot, ...u } }));
 
   const [dingtalkAdvanced, setDingtalkAdvanced] = useState(false);
   const [feishuAdvanced, setFeishuAdvanced] = useState(false);
+  const [qqbotAdvanced, setQqbotAdvanced] = useState(false);
 
   const connectedCount = Object.values(bots).filter((b) => b?.connected).length;
 
@@ -738,6 +872,8 @@ export function BotConfigModal({
                       ? dingtalkStatus === "connected"
                       : platform.id === "feishu"
                       ? feishuStatus === "connected"
+                      : platform.id === "qqbot"
+                      ? qqbotStatus === "connected"
                       : connected) && (
                       <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
                     )}
@@ -757,6 +893,12 @@ export function BotConfigModal({
                       <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
                     )}
                     {platform.id === "feishu" && feishuStatus === "error" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-red-500 flex-shrink-0" />
+                    )}
+                    {platform.id === "qqbot" && qqbotStatus === "connecting" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                    )}
+                    {platform.id === "qqbot" && qqbotStatus === "error" && (
                       <div className="h-1.5 w-1.5 rounded-full bg-red-500 flex-shrink-0" />
                     )}
                   </button>
@@ -1073,6 +1215,59 @@ export function BotConfigModal({
                             <FormField label="最大重连次数" hint="（默认 10）">
                               <input type="number" min="1" max="100" className={INPUT_CLASS} placeholder="10"
                                 value={form.dingtalk.maxConnectionAttempts} onChange={(e) => updateDingtalk({ maxConnectionAttempts: e.target.value })} />
+                            </FormField>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {selectedPlatform === "qqbot" && (
+                      <>
+                        <FormField label="App ID">
+                          <input className={INPUT_CLASS} placeholder="102xxxxxx"
+                            value={form.qqbot.appId} onChange={(e) => updateQqbot({ appId: e.target.value })} />
+                        </FormField>
+                        <FormField label="App Secret">
+                          <input type="password" className={INPUT_CLASS} placeholder="xxxx"
+                            value={form.qqbot.clientSecret} onChange={(e) => updateQqbot({ clientSecret: e.target.value })} />
+                        </FormField>
+
+                        <button
+                          type="button"
+                          onClick={() => setQqbotAdvanced((v) => !v)}
+                          className="flex items-center gap-1.5 text-xs text-muted hover:text-ink-700 transition-colors mt-1"
+                        >
+                          <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform ${qqbotAdvanced ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M9 18l6-6-6-6" />
+                          </svg>
+                          高级设置（访问控制）
+                        </button>
+
+                        {qqbotAdvanced && (
+                          <div className="flex flex-col gap-3 pl-3 border-l-2 border-ink-900/8">
+                            <FormField label="私聊策略 (dmPolicy)">
+                              <select className={INPUT_CLASS} value={form.qqbot.dmPolicy}
+                                onChange={(e) => updateQqbot({ dmPolicy: e.target.value as "open" | "allowlist" })}>
+                                <option value="open">open — 任何人可私聊</option>
+                                <option value="allowlist">allowlist — 仅白名单用户</option>
+                              </select>
+                            </FormField>
+                            <FormField label="群聊策略 (groupPolicy)">
+                              <select className={INPUT_CLASS} value={form.qqbot.groupPolicy}
+                                onChange={(e) => updateQqbot({ groupPolicy: e.target.value as "open" | "allowlist" })}>
+                                <option value="open">open — 任何群可使用</option>
+                                <option value="allowlist">allowlist — 仅白名单群</option>
+                              </select>
+                            </FormField>
+                            {(form.qqbot.dmPolicy === "allowlist" || form.qqbot.groupPolicy === "allowlist") && (
+                              <FormField label="白名单 ID" hint="（逗号分隔，user_openid 或 group_openid）">
+                                <input className={INPUT_CLASS} placeholder="xxx,yyy,..."
+                                  value={form.qqbot.allowFrom} onChange={(e) => updateQqbot({ allowFrom: e.target.value })} />
+                              </FormField>
+                            )}
+                            <FormField label="我的 OpenID（主动推送）" hint="填入你的 QQ user_openid，机器人才能主动发消息给你。发 /myid 给机器人可获取。逗号分隔多人。">
+                              <input className={INPUT_CLASS} placeholder="xxxxxx"
+                                value={form.qqbot.ownerOpenIds} onChange={(e) => updateQqbot({ ownerOpenIds: e.target.value })} />
                             </FormField>
                           </div>
                         )}

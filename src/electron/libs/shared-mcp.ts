@@ -43,6 +43,7 @@ import {
 import { sendProactiveDingtalkMessage, getDingtalkBotStatus, getAnyConnectedDingtalkAssistantId } from "./dingtalk-bot.js";
 import { sendProactiveTelegramMessage, getTelegramBotStatus, getAnyConnectedTelegramAssistantId } from "./telegram-bot.js";
 import { sendProactiveFeishuMessage, getFeishuBotStatus, getAnyConnectedFeishuAssistantId } from "./feishu-bot.js";
+import { sendProactiveQQMessage, getQQBotStatus, getAnyConnectedQQBotAssistantId } from "./qqbot-bot.js";
 import { appendNotified } from "./notification-log.js";
 import { loadAssistantsConfig } from "./assistants-config.js";
 import { loadUserSettings } from "./user-settings.js";
@@ -1946,6 +1947,11 @@ export async function sendNotificationDirect(
       send: (id) => sendProactiveFeishuMessage(id, text),
     },
     {
+      name: "qqbot",
+      id: resolveId(assistantId, getQQBotStatus, getAnyConnectedQQBotAssistantId),
+      send: (id) => sendProactiveQQMessage(id, text),
+    },
+    {
       name: "dingtalk",
       id: resolveId(assistantId, getDingtalkBotStatus, getAnyConnectedDingtalkAssistantId),
       send: (id) => sendProactiveDingtalkMessage(id, text),
@@ -1969,7 +1975,7 @@ export async function sendNotificationDirect(
 function createSendNotificationTool(assistantId?: string) {
   return tool(
     "send_notification",
-    "向用户发送主动通知。自动按优先级选择已连接的渠道：Telegram > 飞书 > 钉钉，只发一个渠道。冷却时长与助理心跳间隔一致，防止多个助理心跳造成消息轰炸。",
+    "向用户发送主动通知。自动按优先级选择已连接的渠道：Telegram > 飞书 > QQ > 钉钉，只发一个渠道。冷却时长与助理心跳间隔一致，防止多个助理心跳造成消息轰炸。",
     {
       text: z.string().describe("通知内容（支持 Markdown）"),
       title: z.string().optional().describe("通知标题（可选，部分渠道会用到）"),
@@ -2051,7 +2057,7 @@ export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "fail_plan_item",      category: "计划", description: "将计划任务项标记为失败并记录原因", sopExclude: true },
   { name: "list_plan_items",     category: "计划", description: "列出计划表中的所有任务项", sopExclude: true },
   // Notification
-  { name: "send_notification", category: "通知", description: "向用户发送主动通知（Telegram > 飞书 > 钉钉 优先级）" },
+  { name: "send_notification", category: "通知", description: "向用户发送主动通知（Telegram > 飞书 > QQ > 钉钉 优先级）" },
   // News & Social
   { name: "news_latest",         category: "资讯", description: "获取最新加密货币/财经资讯（含 AI 评分和交易信号）" },
   { name: "news_search",         category: "资讯", description: "按关键词搜索加密货币/财经资讯" },

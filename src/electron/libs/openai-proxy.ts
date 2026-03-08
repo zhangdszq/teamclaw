@@ -1,48 +1,90 @@
 /**
  * Local HTTP proxy that translates Anthropic Messages API requests
- * into OpenAI Responses API format, using OpenAI OAuth tokens for auth.
+ * into OpenAI Responses API format, using OpenAI API key or OAuth tokens.
  *
- * Architecture inspired by codex-claude-proxy.
+ * Auth priority: API key (from settings) > OAuth token.
  * Runs an in-process HTTP server on 127.0.0.1 (auto-assigned port).
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
 import { getValidOpenAIToken } from "./openai-auth.js";
+import { loadUserSettings } from "./user-settings.js";
 import crypto from "crypto";
 import { recordUsage } from "./usage-tracker.js";
 
 let proxyServer: Server | null = null;
 let proxyPort: number | null = null;
+let proxyStartingPromise: Promise<number> | null = null;
+
+export interface OpenAIProxyOverrides {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+type ProxyRouteContext = {
+  overrides: OpenAIProxyOverrides;
+  createdAt: number;
+};
+
+const proxyRouteContexts = new Map<string, ProxyRouteContext>();
+const ROUTE_CONTEXT_TTL_MS = 2 * 60 * 60_000; // 2 hours
+
+function normalizeOverrides(overrides?: OpenAIProxyOverrides): OpenAIProxyOverrides {
+  const apiKey = overrides?.apiKey?.trim() || undefined;
+  const baseUrl = overrides?.baseUrl?.trim() || undefined;
+  const model = overrides?.model?.trim() || undefined;
+  return { apiKey, baseUrl, model };
+}
+
+function cleanupExpiredRouteContexts(now = Date.now()): void {
+  for (const [routeId, ctx] of proxyRouteContexts) {
+    if (now - ctx.createdAt > ROUTE_CONTEXT_TTL_MS) {
+      proxyRouteContexts.delete(routeId);
+    }
+  }
+}
+
+export function registerProxyRoute(overrides?: OpenAIProxyOverrides): string {
+  cleanupExpiredRouteContexts();
+  const routeId = crypto.randomBytes(16).toString("hex");
+  proxyRouteContexts.set(routeId, {
+    overrides: normalizeOverrides(overrides),
+    createdAt: Date.now(),
+  });
+  return routeId;
+}
+
+export function unregisterProxyRoute(routeId?: string): void {
+  if (!routeId) return;
+  proxyRouteContexts.delete(routeId);
+}
 
 // ─── Model Mapping ──────────────────────────────────────────
 
 const CLAUDE_MODEL_MAP: Record<string, string> = {
-  "claude-opus-4-6-20250219": "gpt-5.3-codex",
-  "claude-opus-4-6": "gpt-5.3-codex",
-  "claude-sonnet-4-6-20250219": "gpt-5.2",
-  "claude-sonnet-4-6": "gpt-5.2",
-  "claude-opus-4-5-20250514": "gpt-5.3-codex",
-  "claude-opus-4-5": "gpt-5.3-codex",
-  "claude-sonnet-4-5-20250514": "gpt-5.2",
-  "claude-sonnet-4-5": "gpt-5.2",
-  "claude-sonnet-4-20250514": "gpt-5.2",
-  "claude-haiku-4-5-20250219": "gpt-5.1-codex-mini",
-  "claude-haiku-4-5": "gpt-5.1-codex-mini",
-  "claude-haiku-4-20250514": "gpt-5.1-codex-mini",
-  "claude-3-5-sonnet-20240620": "gpt-5.2",
-  "claude-3-opus-20240229": "gpt-5.3-codex",
-  sonnet: "gpt-5.2",
-  opus: "gpt-5.3-codex",
-  haiku: "gpt-5.1-codex-mini",
+  "claude-opus-4-6-20250219": "gpt-5.4",
+  "claude-opus-4-6": "gpt-5.4",
+  "claude-sonnet-4-6-20250219": "gpt-5.4",
+  "claude-sonnet-4-6": "gpt-5.4",
+  "claude-opus-4-5-20250514": "gpt-5.4",
+  "claude-opus-4-5": "gpt-5.4",
+  "claude-sonnet-4-5-20250514": "gpt-5.4",
+  "claude-sonnet-4-5": "gpt-5.4",
+  "claude-sonnet-4-20250514": "gpt-5.4",
+  "claude-haiku-4-5-20250219": "gpt-5.4",
+  "claude-haiku-4-5": "gpt-5.4",
+  "claude-haiku-4-20250514": "gpt-5.4",
+  "claude-3-5-sonnet-20240620": "gpt-5.4",
+  "claude-3-opus-20240229": "gpt-5.4",
+  sonnet: "gpt-5.4",
+  opus: "gpt-5.4",
+  haiku: "gpt-5.4",
 };
 
 export function mapClaudeModel(model: string): string {
-  if (!model) return "gpt-5.2";
+  if (!model) return "gpt-5.4";
   if (CLAUDE_MODEL_MAP[model]) return CLAUDE_MODEL_MAP[model];
-  const lower = model.toLowerCase();
-  if (lower.includes("opus")) return "gpt-5.3-codex";
-  if (lower.includes("sonnet")) return "gpt-5.2";
-  if (lower.includes("haiku")) return "gpt-5.1-codex-mini";
-  return "gpt-5.2";
+  return "gpt-5.4";
 }
 
 // ─── Tool ID Conversion ─────────────────────────────────────
@@ -75,6 +117,7 @@ interface AnthropicContentBlock {
   content?: string | AnthropicContentBlock[];
   is_error?: boolean;
   cache_control?: unknown;
+  source?: { type: string; media_type?: string; data?: string; url?: string };
 }
 
 interface AnthropicMessage {
@@ -165,35 +208,79 @@ export function convertAnthropicToResponsesAPI(req: AnthropicRequest): Record<st
   const input: unknown[] = [];
   for (const msg of cleaned) {
     if (msg.role === "user") {
-      const textParts: string[] = [];
+      const contentParts: unknown[] = [];
       const toolResults: unknown[] = [];
 
       if (typeof msg.content === "string") {
-        textParts.push(msg.content);
+        contentParts.push({ type: "input_text", text: msg.content });
       } else {
+        const blockTypes = (msg.content as AnthropicContentBlock[]).map((b) => b.type);
+        if (blockTypes.some((t) => t !== "text")) {
+          console.log(`[openai-proxy] User message block types: [${blockTypes.join(", ")}]`);
+        }
         for (const block of msg.content as AnthropicContentBlock[]) {
           if (block.type === "text" && block.text) {
-            textParts.push(block.text);
+            contentParts.push({ type: "input_text", text: block.text });
+          } else if (block.type === "image" && block.source) {
+            if (block.source.type === "base64" && block.source.data) {
+              contentParts.push({
+                type: "input_image",
+                image_url: `data:${block.source.media_type || "image/png"};base64,${block.source.data}`,
+              });
+            } else if (block.source.type === "url" && block.source.url) {
+              contentParts.push({
+                type: "input_image",
+                image_url: block.source.url,
+              });
+            }
           } else if (block.type === "tool_result") {
-            const outputContent = typeof block.content === "string"
-              ? block.content
-              : Array.isArray(block.content)
-                ? (block.content as AnthropicContentBlock[]).filter((c) => c.type === "text").map((c) => c.text).join("\n")
-                : JSON.stringify(block.content);
+            let outputText = "";
+            const contentType = typeof block.content;
+            const contentIsArr = Array.isArray(block.content);
+            if (contentIsArr) {
+              const subTypes = (block.content as AnthropicContentBlock[]).map((c) => c.type);
+              console.log(`[openai-proxy] tool_result content: array [${subTypes.join(", ")}]`);
+            } else {
+              console.log(`[openai-proxy] tool_result content: ${contentType}, length=${typeof block.content === "string" ? block.content.length : "N/A"}`);
+            }
+            if (typeof block.content === "string") {
+              outputText = block.content;
+            } else if (Array.isArray(block.content)) {
+              const textBits: string[] = [];
+              for (const c of block.content as AnthropicContentBlock[]) {
+                if (c.type === "text" && c.text) {
+                  textBits.push(c.text);
+                } else if (c.type === "image" && c.source) {
+                  if (c.source.type === "base64" && c.source.data) {
+                    contentParts.push({
+                      type: "input_image",
+                      image_url: `data:${c.source.media_type || "image/png"};base64,${c.source.data}`,
+                    });
+                  } else if (c.source.type === "url" && c.source.url) {
+                    contentParts.push({ type: "input_image", image_url: c.source.url });
+                  }
+                }
+              }
+              outputText = textBits.join("\n");
+            } else {
+              outputText = JSON.stringify(block.content);
+            }
             toolResults.push({
               type: "function_call_output",
               call_id: toOpenAIToolId(block.tool_use_id!),
-              output: block.is_error ? `Error: ${outputContent}` : outputContent,
+              output: block.is_error ? `Error: ${outputText}` : (outputText || "(see attached image)"),
             });
           }
         }
       }
 
-      if (textParts.length > 0) {
+      if (contentParts.length > 0) {
         input.push({
           type: "message",
           role: "user",
-          content: textParts.length === 1 ? textParts[0] : textParts.map((t) => ({ type: "input_text", text: t })),
+          content: contentParts.length === 1 && (contentParts[0] as Record<string, unknown>).type === "input_text"
+            ? ((contentParts[0] as Record<string, unknown>).text as string)
+            : contentParts,
         });
       }
       input.push(...toolResults);
@@ -417,16 +504,50 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
     return;
   }
 
-  if (req.method !== "POST" || !req.url?.includes("/v1/messages")) {
+  const urlPath = (req.url ?? "").split("?")[0] || "";
+  const sessionMatch = urlPath.match(/^\/session\/([a-f0-9]+)\/v1\/messages$/);
+  const routeId = sessionMatch?.[1];
+  const isMessagesPath = urlPath === "/v1/messages" || !!routeId;
+
+  if (req.method !== "POST" || !isMessagesPath) {
     res.writeHead(404);
     res.end("Not found");
     return;
   }
+  cleanupExpiredRouteContexts();
+  const routeOverrides = routeId ? proxyRouteContexts.get(routeId)?.overrides : undefined;
 
-  const token = await getValidOpenAIToken();
+  // Resolve auth: session override API key > global API key > OAuth token
+  const settings = loadUserSettings();
+  let token: string | null = null;
+  let upstreamBase = "https://api.openai.com";
+
+  const routeApiKey = routeOverrides?.apiKey?.trim();
+  const routeBaseUrl = routeOverrides?.baseUrl?.trim();
+  const routeModel = routeOverrides?.model?.trim();
+
+  if (routeApiKey) {
+    token = routeApiKey;
+    const base = routeBaseUrl || settings.openaiBaseUrl;
+    if (base) {
+      upstreamBase = base.replace(/\/+$/, "").replace(/\/v1$/, "");
+    }
+  } else if (settings.openaiApiKey) {
+    token = settings.openaiApiKey;
+    const base = routeBaseUrl || settings.openaiBaseUrl;
+    if (base) {
+      upstreamBase = base.replace(/\/+$/, "").replace(/\/v1$/, "");
+    }
+  } else {
+    if (routeBaseUrl) {
+      upstreamBase = routeBaseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
+    }
+    token = await getValidOpenAIToken();
+  }
+
   if (!token) {
     res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "OpenAI OAuth token not available. Please login first." } }));
+    res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "OpenAI authentication not configured. Please set an API key or login via OAuth." } }));
     return;
   }
 
@@ -443,11 +564,18 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
   }
 
   const openAIPayload = convertAnthropicToResponsesAPI(anthropicReq);
+  if (routeModel) {
+    openAIPayload.model = routeModel;
+  } else if (settings.openaiModel) {
+    openAIPayload.model = settings.openaiModel;
+  }
   const mappedModel = openAIPayload.model as string;
+  const authMethod = routeApiKey ? "assistant-api-key" : (settings.openaiApiKey ? "global-api-key" : "oauth");
+  console.log(`[openai-proxy] → ${upstreamBase}/v1/responses model=${mappedModel} auth=${authMethod} route=${routeId ?? "default"}`);
   let finalUsage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
 
   try {
-    const upstream = await fetch("https://api.openai.com/v1/responses", {
+    const upstream = await fetch(`${upstreamBase}/v1/responses`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -513,22 +641,29 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
 
 export function startProxy(): Promise<number> {
   if (proxyServer && proxyPort) return Promise.resolve(proxyPort);
+  if (proxyStartingPromise) return proxyStartingPromise;
 
-  return new Promise((resolve, reject) => {
+  proxyStartingPromise = new Promise((resolve, reject) => {
     const server = createServer(handleProxyRequest);
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
+        proxyStartingPromise = null;
         reject(new Error("Failed to get proxy address"));
         return;
       }
       proxyPort = addr.port;
       proxyServer = server;
       console.log(`[openai-proxy] Started on 127.0.0.1:${proxyPort}`);
+      proxyStartingPromise = null;
       resolve(proxyPort);
     });
-    server.on("error", reject);
+    server.on("error", (err) => {
+      proxyStartingPromise = null;
+      reject(err);
+    });
   });
+  return proxyStartingPromise;
 }
 
 export function stopProxy(): void {
@@ -536,12 +671,15 @@ export function stopProxy(): void {
     proxyServer.close();
     proxyServer = null;
     proxyPort = null;
+    proxyStartingPromise = null;
+    proxyRouteContexts.clear();
     console.log("[openai-proxy] Stopped");
   }
 }
 
-export function getProxyBaseUrl(): string | null {
+export function getProxyBaseUrl(routeId?: string): string | null {
   if (!proxyPort) return null;
+  if (routeId) return `http://127.0.0.1:${proxyPort}/session/${routeId}`;
   return `http://127.0.0.1:${proxyPort}`;
 }
 

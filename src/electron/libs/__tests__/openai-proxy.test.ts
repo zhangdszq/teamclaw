@@ -1,4 +1,14 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { createServer } from "http";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const mockState = vi.hoisted(() => ({
+  settings: {} as {
+    openaiApiKey?: string;
+    openaiBaseUrl?: string;
+    openaiModel?: string;
+  },
+  oauthToken: "oauth-token",
+}));
 
 // Mock electron's app module (required by transitive imports)
 vi.mock("electron", () => ({
@@ -10,34 +20,47 @@ vi.mock("electron", () => ({
   shell: { openExternal: vi.fn() },
 }));
 
+vi.mock("../user-settings.js", () => ({
+  loadUserSettings: () => mockState.settings,
+}));
+
+vi.mock("../openai-auth.js", () => ({
+  getValidOpenAIToken: vi.fn(async () => mockState.oauthToken),
+}));
+
+vi.mock("../usage-tracker.js", () => ({
+  recordUsage: vi.fn(),
+}));
+
 import {
   mapClaudeModel,
   toOpenAIToolId,
   toAnthropicToolId,
   convertAnthropicToResponsesAPI,
+  startProxy,
+  stopProxy,
+  registerProxyRoute,
+  unregisterProxyRoute,
+  getProxyBaseUrl,
+  isProxyRunning,
 } from "../openai-proxy.js";
 
 describe("mapClaudeModel", () => {
   it("maps known Claude models to OpenAI equivalents", () => {
-    expect(mapClaudeModel("claude-sonnet-4-20250514")).toBe("gpt-5.2");
-    expect(mapClaudeModel("claude-opus-4-5")).toBe("gpt-5.3-codex");
-    expect(mapClaudeModel("claude-haiku-4-5")).toBe("gpt-5.1-codex-mini");
+    expect(mapClaudeModel("claude-sonnet-4-20250514")).toBe("gpt-5.4");
+    expect(mapClaudeModel("claude-opus-4-5")).toBe("gpt-5.4");
+    expect(mapClaudeModel("claude-haiku-4-5")).toBe("gpt-5.4");
   });
 
   it("maps short aliases", () => {
-    expect(mapClaudeModel("sonnet")).toBe("gpt-5.2");
-    expect(mapClaudeModel("opus")).toBe("gpt-5.3-codex");
-    expect(mapClaudeModel("haiku")).toBe("gpt-5.1-codex-mini");
+    expect(mapClaudeModel("sonnet")).toBe("gpt-5.4");
+    expect(mapClaudeModel("opus")).toBe("gpt-5.4");
+    expect(mapClaudeModel("haiku")).toBe("gpt-5.4");
   });
 
-  it("infers from partial model names", () => {
-    expect(mapClaudeModel("claude-sonnet-4-6-1m")).toBe("gpt-5.2");
-    expect(mapClaudeModel("my-custom-opus-model")).toBe("gpt-5.3-codex");
-  });
-
-  it("falls back to gpt-5.2 for unknown models", () => {
-    expect(mapClaudeModel("unknown-model-xyz")).toBe("gpt-5.2");
-    expect(mapClaudeModel("")).toBe("gpt-5.2");
+  it("falls back to gpt-5.4 for unknown models", () => {
+    expect(mapClaudeModel("unknown-model-xyz")).toBe("gpt-5.4");
+    expect(mapClaudeModel("")).toBe("gpt-5.4");
   });
 });
 
@@ -85,7 +108,7 @@ describe("convertAnthropicToResponsesAPI", () => {
       stream: true,
     });
 
-    expect(result.model).toBe("gpt-5.2");
+    expect(result.model).toBe("gpt-5.4");
     expect(result.stream).toBe(true);
     expect(result.store).toBe(false);
     expect(Array.isArray(result.input)).toBe(true);
@@ -257,5 +280,259 @@ describe("convertAnthropicToResponsesAPI", () => {
     const input = result.input as Array<Record<string, unknown>>;
     const errorResult = input.find((i) => (i as any).type === "function_call_output") as Record<string, unknown>;
     expect(errorResult.output).toBe("Error: File not found");
+  });
+});
+
+type MockUpstreamRequest = {
+  url: string;
+  authorization?: string;
+  body: Record<string, unknown>;
+};
+
+async function startMockUpstream() {
+  const requests: MockUpstreamRequest[] = [];
+  const server = createServer(async (req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/responses") {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
+    let raw = "";
+    for await (const chunk of req) raw += String(chunk);
+    requests.push({
+      url: req.url ?? "",
+      authorization: req.headers.authorization,
+      body: raw ? JSON.parse(raw) : {},
+    });
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.write(`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message" } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`);
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const addr = server.address();
+  if (!addr || typeof addr === "string") throw new Error("Failed to start mock upstream");
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  return {
+    baseUrl,
+    requests,
+    close: async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+async function postAnthropicMessages(proxyBaseUrl: string): Promise<Response> {
+  return fetch(`${proxyBaseUrl}/v1/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+    }),
+  });
+}
+
+describe("openai proxy routing overrides", () => {
+  beforeEach(() => {
+    mockState.settings = {};
+    mockState.oauthToken = "oauth-token";
+  });
+
+  afterEach(() => {
+    stopProxy();
+  });
+
+  it("reports running state and base url correctly", async () => {
+    expect(isProxyRunning()).toBe(false);
+    expect(getProxyBaseUrl()).toBeNull();
+
+    const port = await startProxy();
+    expect(port).toBeGreaterThan(0);
+    expect(isProxyRunning()).toBe(true);
+    expect(getProxyBaseUrl()).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+
+    stopProxy();
+    expect(isProxyRunning()).toBe(false);
+    expect(getProxyBaseUrl()).toBeNull();
+  });
+
+  it("uses per-route assistant overrides over global settings", async () => {
+    const upstreamGlobal = await startMockUpstream();
+    const upstreamAssistant = await startMockUpstream();
+
+    try {
+      mockState.settings = {
+        openaiApiKey: "global-key",
+        openaiBaseUrl: upstreamGlobal.baseUrl,
+        openaiModel: "global-model",
+      };
+
+      await startProxy();
+      const routeId = registerProxyRoute({
+        apiKey: "assistant-key",
+        baseUrl: upstreamAssistant.baseUrl,
+        model: "assistant-model",
+      });
+      const routeBaseUrl = getProxyBaseUrl(routeId);
+      if (!routeBaseUrl) throw new Error("Proxy base url unavailable");
+
+      const resp = await postAnthropicMessages(routeBaseUrl);
+      expect(resp.status).toBe(200);
+      await resp.text();
+
+      expect(upstreamAssistant.requests).toHaveLength(1);
+      expect(upstreamAssistant.requests[0].authorization).toBe("Bearer assistant-key");
+      expect(upstreamAssistant.requests[0].body.model).toBe("assistant-model");
+      expect(upstreamGlobal.requests).toHaveLength(0);
+    } finally {
+      await upstreamGlobal.close();
+      await upstreamAssistant.close();
+    }
+  });
+
+  it("uses global API settings on default route", async () => {
+    const upstreamGlobal = await startMockUpstream();
+    try {
+      mockState.settings = {
+        openaiApiKey: "global-key",
+        openaiBaseUrl: upstreamGlobal.baseUrl,
+        openaiModel: "global-model",
+      };
+
+      await startProxy();
+      const base = getProxyBaseUrl();
+      if (!base) throw new Error("Proxy base url unavailable");
+
+      const resp = await postAnthropicMessages(base);
+      expect(resp.status).toBe(200);
+      await resp.text();
+
+      expect(upstreamGlobal.requests).toHaveLength(1);
+      expect(upstreamGlobal.requests[0].authorization).toBe("Bearer global-key");
+      expect(upstreamGlobal.requests[0].body.model).toBe("global-model");
+    } finally {
+      await upstreamGlobal.close();
+    }
+  });
+
+  it("uses oauth token when no api key, while still honoring route base/model", async () => {
+    const upstreamAssistant = await startMockUpstream();
+    try {
+      mockState.settings = {};
+      mockState.oauthToken = "oauth-xyz";
+
+      await startProxy();
+      const routeId = registerProxyRoute({
+        baseUrl: upstreamAssistant.baseUrl,
+        model: "assistant-model",
+      });
+      const routeBaseUrl = getProxyBaseUrl(routeId);
+      if (!routeBaseUrl) throw new Error("Proxy base url unavailable");
+
+      const resp = await postAnthropicMessages(routeBaseUrl);
+      expect(resp.status).toBe(200);
+      await resp.text();
+
+      expect(upstreamAssistant.requests).toHaveLength(1);
+      expect(upstreamAssistant.requests[0].authorization).toBe("Bearer oauth-xyz");
+      expect(upstreamAssistant.requests[0].body.model).toBe("assistant-model");
+    } finally {
+      await upstreamAssistant.close();
+    }
+  });
+
+  it("falls back to global settings after route is unregistered", async () => {
+    const upstreamGlobal = await startMockUpstream();
+    const upstreamAssistant = await startMockUpstream();
+
+    try {
+      mockState.settings = {
+        openaiApiKey: "global-key",
+        openaiBaseUrl: upstreamGlobal.baseUrl,
+        openaiModel: "global-model",
+      };
+      await startProxy();
+
+      const routeId = registerProxyRoute({
+        apiKey: "assistant-key",
+        baseUrl: upstreamAssistant.baseUrl,
+        model: "assistant-model",
+      });
+      const routeBaseUrl = getProxyBaseUrl(routeId);
+      if (!routeBaseUrl) throw new Error("Proxy base url unavailable");
+
+      const first = await postAnthropicMessages(routeBaseUrl);
+      expect(first.status).toBe(200);
+      await first.text();
+      expect(upstreamAssistant.requests).toHaveLength(1);
+      expect(upstreamGlobal.requests).toHaveLength(0);
+
+      unregisterProxyRoute(routeId);
+
+      const second = await postAnthropicMessages(routeBaseUrl);
+      expect(second.status).toBe(200);
+      await second.text();
+      expect(upstreamGlobal.requests).toHaveLength(1);
+      expect(upstreamGlobal.requests[0].authorization).toBe("Bearer global-key");
+      expect(upstreamGlobal.requests[0].body.model).toBe("global-model");
+    } finally {
+      await upstreamGlobal.close();
+      await upstreamAssistant.close();
+    }
+  });
+
+  it("returns 401 when neither api key nor oauth token is available", async () => {
+    mockState.settings = {};
+    mockState.oauthToken = "";
+    await startProxy();
+    const base = getProxyBaseUrl();
+    if (!base) throw new Error("Proxy base url unavailable");
+
+    const resp = await postAnthropicMessages(base);
+    expect(resp.status).toBe(401);
+    const body = await resp.json() as { error?: { type?: string } };
+    expect(body.error?.type).toBe("authentication_error");
+  });
+
+  it("returns 400 for invalid json body", async () => {
+    mockState.settings = { openaiApiKey: "global-key" };
+    await startProxy();
+    const base = getProxyBaseUrl();
+    if (!base) throw new Error("Proxy base url unavailable");
+
+    const resp = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{invalid-json",
+    });
+    expect(resp.status).toBe(400);
+  });
+
+  it("returns 404 for unsupported path", async () => {
+    await startProxy();
+    const base = getProxyBaseUrl();
+    if (!base) throw new Error("Proxy base url unavailable");
+
+    const resp = await fetch(`${base}/v1/unknown`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(resp.status).toBe(404);
+  });
+
+  it("returns same port for concurrent startProxy calls", async () => {
+    const ports = await Promise.all(Array.from({ length: 12 }, () => startProxy()));
+    const uniquePorts = Array.from(new Set(ports));
+    expect(uniquePorts).toHaveLength(1);
   });
 });

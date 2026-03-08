@@ -98,6 +98,17 @@ function buildEnhancedEnv(assistantConfig?: AssistantConfig): Record<string, str
   };
 }
 
+function buildOpenAIOverrides(
+  assistantConfig?: AssistantConfig,
+  sessionModel?: string,
+): { apiKey?: string; baseUrl?: string; model?: string } | undefined {
+  const apiKey = assistantConfig?.apiAuthToken?.trim() || undefined;
+  const baseUrl = assistantConfig?.apiBaseUrl?.trim() || undefined;
+  const model = (sessionModel || assistantConfig?.model || "").trim() || undefined;
+  if (!apiKey && !baseUrl && !model) return undefined;
+  return { apiKey, baseUrl, model };
+}
+
 export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
   const { prompt, session, resumeSessionId, provider, onEvent, onSessionUpdate } = options;
   const abortController = new AbortController();
@@ -105,6 +116,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
 
   const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === session.assistantId);
   const enhancedEnv = buildEnhancedEnv(assistantConfig);
+  const openaiOverrides = buildOpenAIOverrides(assistantConfig, session.model);
 
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
@@ -134,6 +146,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
         resume: resumeSessionId,
         abortController,
         ...(effectiveProvider !== "openai" && { env: enhancedEnv }),
+        ...(effectiveProvider === "openai" && { openaiOverrides }),
         provider: effectiveProvider,
         mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }) },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {

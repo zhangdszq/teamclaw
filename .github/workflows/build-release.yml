@@ -153,46 +153,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 上传构建产物
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact-name }}
-          path: |
-            dist/*.dmg
-            dist/*.AppImage
-            dist/*.exe
-            dist/*.zip
-          if-no-files-found: warn
-          retention-days: 7
-
-  # 创建 Release（仅在 tag 推送或手动触发选择时）
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: List artifacts
-        run: find artifacts -type f -name "*"
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name || github.event.inputs.version }}
-          draft: false
-          generate_release_notes: true
-          files: |
-            artifacts/**/*.dmg
-            artifacts/**/*.AppImage
-            artifacts/**/*.exe
-            artifacts/**/*.zip
+      # 直接上传到 GitHub Release（绕过 artifact 配额限制）
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name || github.event.inputs.version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) {
+            throw "RELEASE_TAG is empty. For workflow_dispatch, please provide inputs.version."
+          }
+
+          $patterns = @("dist/*.dmg", "dist/*.AppImage", "dist/*.exe", "dist/*.zip")
+          $files = @()
+          foreach ($pattern in $patterns) {
+            $files += Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+          }
+
+          if ($files.Count -eq 0) {
+            Write-Host "No release files found for this matrix target, skip upload."
+            exit 0
+          }
+
+          gh release view "$env:RELEASE_TAG" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            # First finisher may create release; parallel creators can race safely.
+            gh release create "$env:RELEASE_TAG" --generate-notes
+          }
+
+          foreach ($file in $files) {
+            gh release upload "$env:RELEASE_TAG" "$file" --clobber
+          }

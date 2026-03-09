@@ -41,7 +41,7 @@ export function ToastHost() {
   if (!toasts.length) return null;
 
   return createPortal(
-    <div className="pointer-events-none fixed bottom-6 left-1/2 z-[9999] flex -translate-x-1/2 flex-col items-center gap-2">
+    <div className="pointer-events-none fixed bottom-6 left-1/2 z-[2147483647] flex -translate-x-1/2 flex-col items-center gap-2">
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -76,118 +76,384 @@ function normalizeImageSrc(src?: string): string | undefined {
   return src;
 }
 
+const IMAGE_DEST_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff|avif)(?:[?#][^)\s>]*)?$/i;
+
+function isLocalLikeImageDestination(dest: string): boolean {
+  return /^(\/|[A-Za-z]:[/\\]|file:\/\/|localfile:\/\/)/.test(dest) && IMAGE_DEST_RE.test(dest);
+}
+
+function normalizeMarkdownText(text: string): string {
+  if (!text) return "";
+  return text.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, (full, alt: string, rawDest: string) => {
+    const dest = String(rawDest).trim();
+    if (!dest || (dest.startsWith("<") && dest.endsWith(">"))) return full;
+    const unquoted = dest.replace(/^['"]|['"]$/g, "");
+    if (!isLocalLikeImageDestination(unquoted) || !/\s/.test(unquoted)) return full;
+    return `![${alt}](<${unquoted}>)`;
+  });
+}
+
+function hasRenderableImageMarkdown(text: string): boolean {
+  return /!\[[^\]]*\]\((?:<)?(?:\/|[A-Za-z]:[/\\]|file:\/\/|localfile:\/\/|https?:\/\/|data:)[^)>\n]+(?:>)?\)/i.test(text);
+}
+
+function resolveLocalImagePath(src: string): string | null {
+  if (/^[A-Za-z]:[/\\]/.test(src) || src.startsWith("/")) return src;
+  if (src.startsWith("localfile://")) {
+    const url = new URL(src);
+    let localPath = url.hostname ? `/${url.hostname}${url.pathname}` : url.pathname;
+    localPath = decodeURIComponent(localPath);
+    if (/^\/[A-Za-z]:\//.test(localPath)) localPath = localPath.slice(1);
+    return localPath;
+  }
+  if (src.startsWith("file://")) {
+    const url = new URL(src);
+    let localPath = decodeURIComponent(url.pathname);
+    if (/^\/[A-Za-z]:\//.test(localPath)) localPath = localPath.slice(1);
+    return localPath;
+  }
+  return null;
+}
+
+async function copyImageFromSrc(src: string) {
+  const localPath = resolveLocalImagePath(src);
+  if (localPath) {
+    const result = await window.electron.copyImageToClipboard(localPath);
+    if (!result.ok) throw new Error(result.reason || "copy_failed");
+    return;
+  }
+  const resp = await fetch(src);
+  const blob = await resp.blob();
+  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+}
+
+async function downloadImageFromSrc(src: string) {
+  if (/^(https?:\/\/|data:)/i.test(src)) {
+    const name = src.split("/").pop()?.split("?")[0] || "image";
+    const a = document.createElement("a");
+    a.href = src;
+    a.download = name;
+    a.click();
+    emitToast(`已开始下载：${name}`);
+    return;
+  }
+
+  const localPath = resolveLocalImagePath(src);
+  if (!localPath) {
+    emitToast("保存失败：无法解析本地图片路径", "err");
+    return;
+  }
+
+  const result = await window.electron.saveImage(localPath);
+  if (result.ok) {
+    const name = result.savedTo?.split(/[/\\]/).pop() ?? "图片";
+    emitToast(`下载成功：${name}`);
+  } else if (result.reason && result.reason !== "canceled") {
+    emitToast(`保存失败：${result.reason}`, "err");
+  }
+}
+
+function ImageActionButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void | Promise<void>;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-black/55 text-white/85 shadow-lg backdrop-blur-sm transition-colors hover:bg-white/20 hover:text-white"
+    >
+      {children}
+    </button>
+  );
+}
+
 // ─── Inline image with hover toolbar ────────────────────────────────────────
 
 function InlineImage({ src, alt, className }: { src: string; alt?: string; className?: string }) {
   const [hovered, setHovered] = useState(false);
   const [copyTip, setCopyTip] = useState<"idle" | "ok" | "err">("idle");
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewScale, setPreviewScale] = useState(1);
+  const [previewOffset, setPreviewOffset] = useState({ x: 0, y: 0 });
+  const [previewControlsVisible, setPreviewControlsVisible] = useState(false);
+  const [previewDragging, setPreviewDragging] = useState(false);
+  const previewControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewViewportRef = useRef<HTMLDivElement | null>(null);
+  const previewImageRef = useRef<HTMLImageElement | null>(null);
+  const previewDragStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+
+  const clearPreviewControlsTimer = useCallback(() => {
+    if (previewControlsTimerRef.current) {
+      clearTimeout(previewControlsTimerRef.current);
+      previewControlsTimerRef.current = null;
+    }
+  }, []);
+
+  const revealPreviewControls = useCallback(() => {
+    setPreviewControlsVisible(true);
+    clearPreviewControlsTimer();
+    previewControlsTimerRef.current = setTimeout(() => {
+      setPreviewControlsVisible(false);
+      previewControlsTimerRef.current = null;
+    }, 1400);
+  }, [clearPreviewControlsTimer]);
+
+  const clampPreviewOffset = useCallback((next: { x: number; y: number }, scale: number = previewScale) => {
+    const viewport = previewViewportRef.current;
+    const image = previewImageRef.current;
+    if (!viewport || !image || scale <= 1) return { x: 0, y: 0 };
+    const maxX = Math.max(0, (image.offsetWidth * scale - viewport.clientWidth) / 2);
+    const maxY = Math.max(0, (image.offsetHeight * scale - viewport.clientHeight) / 2);
+    return {
+      x: Math.min(maxX, Math.max(-maxX, next.x)),
+      y: Math.min(maxY, Math.max(-maxY, next.y)),
+    };
+  }, [previewScale]);
+
+  const stopPreviewDrag = useCallback(() => {
+    previewDragStartRef.current = null;
+    setPreviewDragging(false);
+  }, []);
 
   const handleCopy = useCallback(async () => {
     try {
-      const resp = await fetch(src);
-      const blob = await resp.blob();
-      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      await copyImageFromSrc(src);
       setCopyTip("ok");
+      emitToast("复制成功");
       setTimeout(() => setCopyTip("idle"), 1800);
     } catch {
       setCopyTip("err");
+      emitToast("复制失败", "err");
       setTimeout(() => setCopyTip("idle"), 1800);
     }
   }, [src]);
 
   const handleDownload = useCallback(async () => {
-    // Remote image (http/https/data) — let the browser handle the download
-    if (/^(https?:\/\/|data:)/i.test(src)) {
-      const name = src.split("/").pop()?.split("?")[0] || "image";
-      const a = document.createElement("a");
-      a.href = src;
-      a.download = name;
-      a.click();
-      return;
-    }
-
-    // Local image via localfile:// — reconstruct fs path and use Electron save dialog
-    let localPath = src;
-    if (src.startsWith("localfile://")) {
-      const url = new URL(src);
-      localPath = url.hostname ? `/${url.hostname}${url.pathname}` : url.pathname;
-      localPath = decodeURIComponent(localPath);
-      // Windows: "/C:/path/file.png" → "C:/path/file.png"
-      if (/^\/[A-Za-z]:\//.test(localPath)) localPath = localPath.slice(1);
-    }
-
-    const result = await window.electron.saveImage(localPath);
-    if (result.ok) {
-      const name = result.savedTo?.split(/[/\\]/).pop() ?? "图片";
-      emitToast(`已保存：${name}`);
-    } else if (result.reason && result.reason !== "canceled") {
-      emitToast(`保存失败：${result.reason}`, "err");
-    }
+    await downloadImageFromSrc(src);
   }, [src]);
 
+  useEffect(() => {
+    if (!previewOpen) {
+      setPreviewScale(1);
+      setPreviewOffset({ x: 0, y: 0 });
+      setPreviewControlsVisible(false);
+      stopPreviewDrag();
+      clearPreviewControlsTimer();
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPreviewOpen(false);
+      }
+    };
+    document.body.style.overflow = "hidden";
+    setPreviewScale(1);
+    setPreviewOffset({ x: 0, y: 0 });
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+      stopPreviewDrag();
+      clearPreviewControlsTimer();
+    };
+  }, [previewOpen, clearPreviewControlsTimer, stopPreviewDrag]);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    setPreviewOffset((prev) => clampPreviewOffset(prev, previewScale));
+  }, [previewOpen, previewScale, clampPreviewOffset]);
+
+  useEffect(() => {
+    if (!previewDragging) return;
+    const handleMouseUp = () => stopPreviewDrag();
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, [previewDragging, stopPreviewDrag]);
+
+  const handlePreviewWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const delta = event.deltaY < 0 ? 0.16 : -0.16;
+    setPreviewScale((prev) => Math.min(4, Math.max(1, Number((prev + delta).toFixed(2)))));
+    revealPreviewControls();
+  }, [revealPreviewControls]);
+
+  const handlePreviewMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || previewScale <= 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    previewDragStartRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      offsetX: previewOffset.x,
+      offsetY: previewOffset.y,
+    };
+    setPreviewDragging(true);
+    revealPreviewControls();
+  }, [previewScale, previewOffset.x, previewOffset.y, revealPreviewControls]);
+
+  const handlePreviewMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    revealPreviewControls();
+    const drag = previewDragStartRef.current;
+    if (!drag) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = {
+      x: drag.offsetX + (event.clientX - drag.x),
+      y: drag.offsetY + (event.clientY - drag.y),
+    };
+    setPreviewOffset(clampPreviewOffset(next, previewScale));
+  }, [clampPreviewOffset, previewScale, revealPreviewControls]);
+
   return (
-    <span
-      className="relative mt-3 inline-block max-w-full"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <img
-        src={src}
-        alt={alt || "image"}
-        loading="lazy"
-        className={`block max-w-full rounded-xl border border-ink-900/10 ${className ?? ""}`.trim()}
-      />
-
-      {/* Hover toolbar */}
+    <>
       <span
-        className={`absolute right-2 top-2 flex gap-1 rounded-lg bg-black/50 px-1 py-1 backdrop-blur-sm transition-opacity duration-150 ${hovered ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-        aria-hidden={!hovered}
+        className="relative mt-3 inline-block max-w-[50%] align-top"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
-        {/* Copy button */}
-        <button
-          title={copyTip === "ok" ? "已复制" : copyTip === "err" ? "复制失败" : "复制图片"}
-          onClick={handleCopy}
-          className="flex h-6 w-6 items-center justify-center rounded-md text-white/80 transition-colors hover:bg-white/20 hover:text-white"
-        >
-          {copyTip === "ok" ? (
-            // Checkmark
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 8 6.5 12 13 4" />
-            </svg>
-          ) : (
-            // Copy icon
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="5" y="5" width="8" height="8" rx="1.5" />
-              <path d="M3 11H2.5A1.5 1.5 0 0 1 1 9.5v-7A1.5 1.5 0 0 1 2.5 1h7A1.5 1.5 0 0 1 11 2.5V3" />
-            </svg>
-          )}
-        </button>
+        <img
+          src={src}
+          alt={alt || "image"}
+          loading="lazy"
+          onClick={() => setPreviewOpen(true)}
+          className={`block h-auto max-w-full cursor-zoom-in rounded-xl border border-ink-900/10 ${className ?? ""}`.trim()}
+        />
 
-        {/* Download button */}
-        <button
-          title="下载图片"
-          onClick={handleDownload}
-          className="flex h-6 w-6 items-center justify-center rounded-md text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+        {/* Hover toolbar */}
+        <span
+          className={`absolute right-2 top-2 flex gap-1 rounded-lg bg-black/50 px-1 py-1 backdrop-blur-sm transition-opacity duration-150 ${hovered ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+          aria-hidden={!hovered}
         >
-          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M8 2v8M5 7l3 3 3-3" />
-            <path d="M2 12h12" />
-          </svg>
-        </button>
+          <button
+            type="button"
+            title={copyTip === "ok" ? "已复制" : copyTip === "err" ? "复制失败" : "复制图片"}
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleCopy();
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+          >
+            {copyTip === "ok" ? (
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 8 6.5 12 13 4" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="5" width="8" height="8" rx="1.5" />
+                <path d="M3 11H2.5A1.5 1.5 0 0 1 1 9.5v-7A1.5 1.5 0 0 1 2.5 1h7A1.5 1.5 0 0 1 11 2.5V3" />
+              </svg>
+            )}
+          </button>
+
+          <button
+            type="button"
+            title="下载图片"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleDownload();
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+          >
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 2v8M5 7l3 3 3-3" />
+              <path d="M2 12h12" />
+            </svg>
+          </button>
+        </span>
       </span>
-    </span>
+
+      {previewOpen && createPortal(
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/78 p-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label={alt || "图片预览"}
+          onClick={() => setPreviewOpen(false)}
+          onMouseMove={handlePreviewMouseMove}
+          onMouseLeave={() => {
+            stopPreviewDrag();
+            clearPreviewControlsTimer();
+            setPreviewControlsVisible(false);
+          }}
+          onMouseUp={stopPreviewDrag}
+          onWheel={handlePreviewWheel}
+        >
+          <div
+            className={`absolute right-4 top-4 flex items-center gap-2 transition-opacity duration-200 ${previewControlsVisible ? "opacity-100" : "pointer-events-none opacity-0"}`}
+          >
+            <ImageActionButton
+              title="复制图片"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleCopy();
+              }}
+            >
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="5" width="8" height="8" rx="1.5" />
+                <path d="M3 11H2.5A1.5 1.5 0 0 1 1 9.5v-7A1.5 1.5 0 0 1 2.5 1h7A1.5 1.5 0 0 1 11 2.5V3" />
+              </svg>
+            </ImageActionButton>
+            <ImageActionButton
+              title="下载图片"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleDownload();
+              }}
+            >
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 2v8M5 7l3 3 3-3" />
+                <path d="M2 12h12" />
+              </svg>
+            </ImageActionButton>
+            <ImageActionButton
+              title="关闭预览"
+              onClick={(event) => {
+                event.stopPropagation();
+                setPreviewOpen(false);
+              }}
+            >
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </ImageActionButton>
+          </div>
+
+          <div
+            ref={previewViewportRef}
+            className={`flex max-h-full max-w-full items-center justify-center overflow-hidden select-none ${previewScale > 1 ? (previewDragging ? "cursor-grabbing" : "cursor-grab") : "cursor-default"}`}
+            onClick={(event) => event.stopPropagation()}
+            onMouseDown={handlePreviewMouseDown}
+          >
+            <div style={{ transform: `translate3d(${previewOffset.x}px, ${previewOffset.y}px, 0)` }}>
+              <img
+                ref={previewImageRef}
+                src={src}
+                alt={alt || "image"}
+                draggable={false}
+                className="max-h-[88vh] max-w-[88vw] rounded-2xl border border-white/10 shadow-2xl transition-transform duration-100 ease-out"
+                style={{ transform: `scale(${previewScale})`, transformOrigin: "center center" }}
+              />
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
-export const StreamingText = memo(function StreamingText({ text }: { text: string }) {
-  return (
-    <div className="mt-2 text-sm leading-relaxed text-ink-700 whitespace-pre-wrap break-words">
-      {String(text ?? "")}
-    </div>
-  );
-});
-
-export default memo(function MDContent({ text }: { text: string }) {
+const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
+  const normalizedText = normalizeMarkdownText(String(text ?? ""));
   return (
     <>
       <ReactMarkdown
@@ -304,9 +570,24 @@ export default memo(function MDContent({ text }: { text: string }) {
           return <InlineImage src={safeSrc} alt={alt} className={imgClassName} />;
         },
       }}
-    >
-      {String(text ?? "")}
-    </ReactMarkdown>
+      >
+        {normalizedText}
+      </ReactMarkdown>
     </>
   );
 });
+
+export const StreamingText = memo(function StreamingText({ text }: { text: string }) {
+  const rawText = String(text ?? "");
+  const normalizedText = normalizeMarkdownText(rawText);
+  if (hasRenderableImageMarkdown(normalizedText)) {
+    return <MarkdownContent text={normalizedText} />;
+  }
+  return (
+    <div className="mt-2 text-sm leading-relaxed text-ink-700 whitespace-pre-wrap break-words">
+      {rawText}
+    </div>
+  );
+});
+
+export default MarkdownContent;

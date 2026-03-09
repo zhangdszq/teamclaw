@@ -265,14 +265,21 @@ export function AssistantManagerModal({
     const allSessions = Object.values(sessions);
     return assistants.map((assistant) => {
       const own = allSessions.filter((s) => s.assistantId === assistant.id);
+      const heartbeatSessions = own
+        .filter((s) => s.title?.startsWith("[心跳]"))
+        .sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0));
+      const latestHeartbeat = heartbeatSessions[0];
       const running = own.filter((s) => s.status === "running" && !s.title?.startsWith("[心跳]")).length;
       const failed = own.filter((s) => s.status === "error").length;
       const completed = own.filter((s) => s.status === "completed").length;
-      const heartbeatError = own.some(
-        (s) => s.status === "error" && s.title?.startsWith("[心跳]")
-      );
-      const status: "running" | "error" | "idle" =
-        running > 0 ? "running" : heartbeatError ? "error" : "idle";
+      const status: "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown" =
+        !latestHeartbeat
+          ? "heartbeat_unknown"
+          : latestHeartbeat.status === "error"
+          ? "heartbeat_failed"
+          : latestHeartbeat.status === "running"
+          ? "heartbeat_running"
+          : "healthy";
       return {
         assistant,
         running,
@@ -815,10 +822,33 @@ export function AssistantManagerModal({
                             )}
                             <span className="text-sm font-semibold text-ink-800">{row.assistant.name}</span>
                           </div>
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                            row.status === "running" ? "bg-info/10 text-info" : row.status === "error" ? "bg-error/10 text-error" : "bg-ink-900/8 text-muted"
-                          }`}>
-                            {row.status === "running" ? "执行中" : row.status === "error" ? "异常" : "空闲"}
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                              row.status === "healthy"
+                                ? "bg-emerald-50 text-emerald-600"
+                                : row.status === "heartbeat_running"
+                                ? "bg-info/10 text-info"
+                                : row.status === "heartbeat_failed"
+                                ? "bg-error/10 text-error"
+                                : "bg-ink-900/8 text-muted"
+                            }`}
+                            title={
+                              row.status === "heartbeat_failed"
+                                ? "最近一次心跳巡检失败"
+                                : row.status === "heartbeat_running"
+                                ? "最近一次心跳仍在执行中"
+                                : row.status === "healthy"
+                                ? "最近一次心跳巡检成功"
+                                : "暂无可用的心跳巡检记录"
+                            }
+                          >
+                            {row.status === "healthy"
+                              ? "正常"
+                              : row.status === "heartbeat_running"
+                              ? "心跳中"
+                              : row.status === "heartbeat_failed"
+                              ? "心跳失败"
+                              : "未巡检"}
                           </span>
                         </div>
                         <div className="mt-3 grid grid-cols-3 gap-2 text-center">

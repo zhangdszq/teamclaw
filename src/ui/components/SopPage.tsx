@@ -18,7 +18,7 @@ import { emitToast } from "../render/markdown";
 
 interface SopPageProps {
   onClose: () => void;
-  onOpenPlanTable?: (sopName?: string) => void;
+  onOpenPlanTable?: (target?: { sopName?: string; sopId?: string; historyRunId?: string }) => void;
   onNavigateToSession?: (sessionId: string) => void;
   titleBarHeight?: number;
 }
@@ -37,6 +37,21 @@ interface SopItem {
   createdAt?: string;
 }
 
+type WorkflowHistoryModalState = {
+  sopId: string;
+  sopName: string;
+  runs: WorkflowRun[];
+};
+
+type SopDisplayStatus = "running" | "normal" | "failed" | "overdue" | "pending" | "draft" | "paused";
+
+type SopPlanSummary = {
+  total: number;
+  failed: number;
+  inProgress: number;
+  overdue: number;
+};
+
 const CATEGORY_ORDER: WorkCategory[] = ["客户服务", "情报监控", "内部运营", "增长销售", ""];
 
 const CATEGORY_STYLE: Record<string, { label: string; color: string; bg: string }> = {
@@ -46,6 +61,86 @@ const CATEGORY_STYLE: Record<string, { label: string; color: string; bg: string 
   "增长销售": { label: "增长销售", color: "#D97706", bg: "#FFFBEB" },
   "":         { label: "其他",     color: "#6B7280", bg: "#F3F4F6" },
 };
+
+function formatWorkflowHistoryTimestamp(iso?: string): string {
+  if (!iso) return "未知时间";
+  try {
+    return new Date(iso).toLocaleString("zh-CN", {
+      hour12: false,
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function getWorkflowRunDurationMs(run: WorkflowRun): number | null {
+  if (!run.startedAt || !run.completedAt) return null;
+  const duration = new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime();
+  return Number.isFinite(duration) && duration > 0 ? duration : null;
+}
+
+function formatWorkflowRunDuration(run: WorkflowRun): string {
+  const durationMs = getWorkflowRunDurationMs(run);
+  if (!durationMs) return "";
+  const totalSeconds = Math.round(durationMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds} 秒`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+}
+
+function getWorkflowRunStatusMeta(status: WorkflowStatus): { label: string; className: string; dotClassName: string } {
+  if (status === "completed") {
+    return {
+      label: "已完成",
+      className: "bg-emerald-50 text-emerald-700 border border-emerald-200/70",
+      dotClassName: "bg-emerald-500",
+    };
+  }
+  if (status === "failed") {
+    return {
+      label: "失败",
+      className: "bg-red-50 text-red-600 border border-red-200/70",
+      dotClassName: "bg-red-500",
+    };
+  }
+  if (status === "running") {
+    return {
+      label: "进行中",
+      className: "bg-blue-50 text-blue-600 border border-blue-200/70",
+      dotClassName: "bg-blue-500",
+    };
+  }
+  return {
+    label: "未开始",
+    className: "bg-ink-900/5 text-muted border border-ink-900/8",
+    dotClassName: "bg-ink-300",
+  };
+}
+
+function getWorkflowRunPreview(run: WorkflowRun): string {
+  const failedStage = [...run.stages].reverse().find((stage) => stage.error?.trim());
+  if (failedStage?.error) return failedStage.error.trim();
+  const abstractStage = [...run.stages].reverse().find((stage) => stage.abstract?.trim());
+  if (abstractStage?.abstract) return abstractStage.abstract.trim();
+  if (run.status === "completed") return "本次执行已完成，可查看阶段快照。";
+  if (run.status === "failed") return "本次执行失败，可查看失败阶段与上下文。";
+  if (run.status === "running") return "本次执行仍在进行中。";
+  return "暂无阶段摘要。";
+}
+
+function isPlanItemOverdue(item: PlanItem): boolean {
+  if (item.status !== "pending") return false;
+  return new Date(item.scheduledTime).getTime() < Date.now();
+}
+
+function normalizeSopSyncKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+hand$/, "");
+}
 
 // Fallback list shown before HAND.toml files are loaded
 const FALLBACK_SOP_LIST: SopItem[] = [
@@ -488,8 +583,12 @@ function buildMonthlySettlementData(): { nodes: Node[]; edges: Edge[] } {
 }
 
 
-const STATUS_CONFIG = {
-  active: { label: "运行中", color: "text-success", bg: "bg-success/10", dot: "bg-success" },
+const STATUS_CONFIG: Record<SopDisplayStatus, { label: string; color: string; bg: string; dot: string }> = {
+  running: { label: "执行中", color: "text-info", bg: "bg-info/10", dot: "bg-info" },
+  normal: { label: "正常", color: "text-success", bg: "bg-success/10", dot: "bg-success" },
+  failed: { label: "失败", color: "text-error", bg: "bg-error/10", dot: "bg-error" },
+  overdue: { label: "逾期", color: "text-amber-600", bg: "bg-amber-50", dot: "bg-amber-400" },
+  pending: { label: "待执行", color: "text-muted", bg: "bg-ink-900/5", dot: "bg-ink-400" },
   draft: { label: "草稿", color: "text-muted", bg: "bg-ink-900/5", dot: "bg-ink-400" },
   paused: { label: "已暂停", color: "text-amber-600", bg: "bg-amber-50", dot: "bg-amber-400" },
 };
@@ -681,15 +780,19 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
   const [activeWorkflowTab] = useState<WorkflowTab>("lesson_cycle");
   const [selectedSopId, setSelectedSopId] = useState<string>("");
   const [sopList, setSopList] = useState<SopItem[]>(FALLBACK_SOP_LIST);
+  const [planItems, setPlanItems] = useState<PlanItem[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [nodeOverrides, setNodeOverrides] = useState<Record<string, { tools: string[]; mcp: string[] }>>({});
   const [installedSkillOptions, setInstalledSkillOptions] = useState<ToolOption[]>([]);
   const [installedMcpOptions, setInstalledMcpOptions] = useState<ToolOption[]>([]);
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
+  const [workflowRunMap, setWorkflowRunMap] = useState<Record<string, WorkflowRun | null>>({});
   const [showCheckPanel, setShowCheckPanel] = useState(false);
   const [showStore, setShowStore] = useState(false);
   const [creatingId, setCreatingId] = useState<string | null>(null);
+  const [planTableOpeningSopId, setPlanTableOpeningSopId] = useState<string | null>(null);
+  const [workflowHistoryModal, setWorkflowHistoryModal] = useState<WorkflowHistoryModalState | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -710,6 +813,21 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
   }, [selectedSopId]);
 
   useEffect(() => { loadSopSchedules(); }, [loadSopSchedules]);
+
+  const loadPlanItems = useCallback(async () => {
+    try {
+      const items = await window.electron.getPlanItems();
+      setPlanItems(items);
+    } catch {
+      setPlanItems([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPlanItems();
+    const unsub = window.electron.onPlanItemsChanged(() => { void loadPlanItems(); });
+    return unsub;
+  }, [loadPlanItems]);
 
   // Load SOP list from HAND.toml files
   useEffect(() => {
@@ -734,6 +852,28 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
       setSelectedSopId(FALLBACK_SOP_LIST[0].id);
     });
   }, []);
+
+  const refreshWorkflowRunMap = useCallback(async (sops: Pick<SopItem, "id">[]) => {
+    if (sops.length === 0) {
+      setWorkflowRunMap({});
+      return;
+    }
+    const entries = await Promise.all(
+      sops.map(async (sop) => {
+        try {
+          const run = await window.electron.workflowGetRun(sop.id);
+          return [sop.id, run] as const;
+        } catch {
+          return [sop.id, null] as const;
+        }
+      }),
+    );
+    setWorkflowRunMap(Object.fromEntries(entries));
+  }, []);
+
+  useEffect(() => {
+    void refreshWorkflowRunMap(sopList);
+  }, [refreshWorkflowRunMap, sopList]);
 
   // Load installed Skills and MCPs once on mount
   useEffect(() => {
@@ -798,6 +938,11 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
       if (sopId === selectedSopId) {
         window.electron.workflowGetRun(sopId).then(setWorkflowRun).catch(() => {});
       }
+      window.electron.workflowGetRun(sopId).then((run) => {
+        setWorkflowRunMap((prev) => ({ ...prev, [sopId]: run }));
+      }).catch(() => {
+        setWorkflowRunMap((prev) => ({ ...prev, [sopId]: null }));
+      });
     });
     return unsub;
   }, [selectedSopId]);
@@ -872,6 +1017,81 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
   const workflowStatus = workflowRun?.status ?? "idle";
 
   const selectedSop = sopList.find((s) => s.id === selectedSopId) ?? sopList[0];
+
+  const planSummaryBySopKey = useMemo(() => {
+    const map = new Map<string, SopPlanSummary>();
+    for (const item of planItems) {
+      const key = normalizeSopSyncKey(item.sopName);
+      const current = map.get(key) ?? { total: 0, failed: 0, inProgress: 0, overdue: 0 };
+      current.total += 1;
+      if (item.status === "failed") current.failed += 1;
+      if (item.status === "in_progress" || item.status === "human_review") current.inProgress += 1;
+      if (isPlanItemOverdue(item)) current.overdue += 1;
+      map.set(key, current);
+    }
+    return map;
+  }, [planItems]);
+
+  const getPlanSummaryForSop = useCallback((sop: SopItem) => {
+    const normalized = normalizeSopSyncKey(sop.name);
+    return planSummaryBySopKey.get(normalized) ?? null;
+  }, [planSummaryBySopKey]);
+
+  const getSopDisplayStatus = useCallback((sop: SopItem): SopDisplayStatus => {
+    if (sop.status === "draft" || sop.status === "paused") return sop.status;
+
+    const planSummary = getPlanSummaryForSop(sop);
+    if (planSummary) {
+      if (planSummary.failed > 0) return "failed";
+      if (planSummary.overdue > 0) return "overdue";
+      if (planSummary.inProgress > 0) return "running";
+      return "normal";
+    }
+
+    const run = workflowRunMap[sop.id];
+    if (run?.status === "failed") return "failed";
+    if (run?.status === "running") return "running";
+    if (run?.status === "completed") return "normal";
+    return "pending";
+  }, [getPlanSummaryForSop, workflowRunMap]);
+
+  const handleOpenPlanTableClick = useCallback(async () => {
+    if (!selectedSop) return;
+    setPlanTableOpeningSopId(selectedSop.id);
+    try {
+      const history = await window.electron.workflowGetHistory(selectedSop.id);
+      const sortedRuns = [...history].sort((a, b) => {
+        const aTime = new Date(a.startedAt ?? a.completedAt ?? 0).getTime();
+        const bTime = new Date(b.startedAt ?? b.completedAt ?? 0).getTime();
+        return bTime - aTime;
+      });
+      if (sortedRuns.length < 2) {
+        onOpenPlanTable?.({ sopName: selectedSop.name, sopId: selectedSop.id });
+        return;
+      }
+      setWorkflowHistoryModal({
+        sopId: selectedSop.id,
+        sopName: selectedSop.name,
+        runs: sortedRuns,
+      });
+    } catch (err) {
+      console.error("[sop] Failed to load workflow history:", err);
+      emitToast("加载执行历史失败，已直接进入看板", "err");
+      onOpenPlanTable?.({ sopName: selectedSop.name, sopId: selectedSop.id });
+    } finally {
+      setPlanTableOpeningSopId((current) => (current === selectedSop.id ? null : current));
+    }
+  }, [onOpenPlanTable, selectedSop]);
+
+  const handleOpenWorkflowHistoryRun = useCallback((runId: string) => {
+    if (!workflowHistoryModal) return;
+    onOpenPlanTable?.({
+      sopName: workflowHistoryModal.sopName,
+      sopId: workflowHistoryModal.sopId,
+      historyRunId: runId,
+    });
+    setWorkflowHistoryModal(null);
+  }, [onOpenPlanTable, workflowHistoryModal]);
 
   const [selectedCategory, setSelectedCategory] = useState<WorkCategory | "all">("all");
 
@@ -1069,7 +1289,8 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
               )}
               {filteredSops.map((sop) => {
                 const isSelected = sop.id === selectedSopId;
-                const statusCfg = STATUS_CONFIG[sop.status];
+                const planSummary = getPlanSummaryForSop(sop);
+                const statusCfg = STATUS_CONFIG[getSopDisplayStatus(sop)];
                 const isRenaming = renamingId === sop.id;
                 const menuOpen = menuOpenId === sop.id;
                 const isPlaceholder = sop.id.startsWith("_creating_");
@@ -1126,7 +1347,9 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
                             {statusCfg.label}
                           </span>
                           <span className="text-[9px] text-muted/40">·</span>
-                          <span className="text-[9px] text-muted/60">{sop.workflowCount} 阶段</span>
+                          <span className="text-[9px] text-muted/60">
+                            {planSummary?.total ? `${planSummary.total} 项` : `${sop.workflowCount} 阶段`}
+                          </span>
                           {createdStr && (
                             <>
                               <span className="text-[9px] text-muted/40">·</span>
@@ -1255,16 +1478,24 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
                 );
               })()}
               <button
-                onClick={() => onOpenPlanTable?.(selectedSop?.name)}
-                className="flex items-center justify-center h-8 w-8 rounded-xl border border-ink-900/8 bg-surface text-ink-500 shadow-soft hover:bg-surface-secondary hover:text-ink-700 transition-colors"
+                onClick={() => void handleOpenPlanTableClick()}
+                disabled={!selectedSop || planTableOpeningSopId === selectedSop.id}
+                className="flex items-center justify-center h-8 w-8 rounded-xl border border-ink-900/8 bg-surface text-ink-500 shadow-soft hover:bg-surface-secondary hover:text-ink-700 transition-colors disabled:opacity-60 disabled:cursor-wait"
                 title="计划表"
               >
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                  <line x1="16" y1="2" x2="16" y2="6" />
-                  <line x1="8" y1="2" x2="8" y2="6" />
-                  <line x1="3" y1="10" x2="21" y2="10" />
-                </svg>
+                {planTableOpeningSopId === selectedSop?.id ? (
+                  <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-20" cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
+                    <path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                    <line x1="16" y1="2" x2="16" y2="6" />
+                    <line x1="8" y1="2" x2="8" y2="6" />
+                    <line x1="3" y1="10" x2="21" y2="10" />
+                  </svg>
+                )}
               </button>
             </div>
           </div>
@@ -1375,6 +1606,15 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
           existingTask={schedulePopover.task}
           onClose={() => setSchedulePopover(null)}
           onChanged={() => { setSchedulePopover(null); loadSopSchedules(); }}
+        />
+      )}
+
+      {workflowHistoryModal && (
+        <WorkflowHistoryPickerModal
+          sopName={workflowHistoryModal.sopName}
+          runs={workflowHistoryModal.runs}
+          onClose={() => setWorkflowHistoryModal(null)}
+          onSelectRun={handleOpenWorkflowHistoryRun}
         />
       )}
 
@@ -1932,6 +2172,97 @@ function TagEditor({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function WorkflowHistoryPickerModal({
+  sopName,
+  runs,
+  onClose,
+  onSelectRun,
+}: {
+  sopName: string;
+  runs: WorkflowRun[];
+  onClose: () => void;
+  onSelectRun: (runId: string) => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center"
+      style={{ backgroundColor: "rgba(15, 23, 42, 0.32)" }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-[640px] max-w-[calc(100vw-32px)] max-h-[80vh] flex flex-col rounded-3xl border border-ink-900/8 bg-surface shadow-xl overflow-hidden">
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-ink-900/6 shrink-0">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-ink-800">选择执行历史</h2>
+            <p className="mt-1 text-[12px] text-muted leading-relaxed">
+              {sopName} 已有多次执行记录，先选择一条历史，再进入对应的 Kanban 快照。
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1 text-muted hover:text-ink-700 hover:bg-ink-900/5 transition-colors shrink-0"
+            aria-label="关闭执行历史"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div
+          className="flex-1 overflow-y-auto px-5 py-4"
+          style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.12) transparent" }}
+        >
+          <div className="flex flex-col gap-3">
+            {runs.map((run) => {
+              const statusMeta = getWorkflowRunStatusMeta(run.status);
+              const durationLabel = formatWorkflowRunDuration(run);
+              const preview = getWorkflowRunPreview(run);
+              const finishedAt = run.completedAt ? formatWorkflowHistoryTimestamp(run.completedAt) : null;
+              return (
+                <button
+                  key={run.id}
+                  onClick={() => onSelectRun(run.id)}
+                  className="group w-full rounded-2xl border border-ink-900/8 bg-surface-secondary/35 px-4 py-3 text-left hover:border-accent/30 hover:bg-accent/5 transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium ${statusMeta.className}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${statusMeta.dotClassName}`} />
+                          {statusMeta.label}
+                        </span>
+                        <span className="text-[12px] font-medium text-ink-700 tabular-nums">
+                          开始于 {formatWorkflowHistoryTimestamp(run.startedAt)}
+                        </span>
+                        {durationLabel && (
+                          <span className="text-[11px] text-muted">{durationLabel}</span>
+                        )}
+                        {finishedAt && (
+                          <span className="text-[11px] text-muted">结束于 {finishedAt}</span>
+                        )}
+                      </div>
+                      <p className="mt-2 text-[12px] text-ink-700 leading-relaxed line-clamp-2">
+                        {preview}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-ink-900/5 p-2 text-muted group-hover:bg-accent/10 group-hover:text-accent transition-colors">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M5 12h14M13 5l7 7-7 7" />
+                      </svg>
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

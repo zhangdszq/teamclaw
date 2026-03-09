@@ -722,6 +722,7 @@ type EventPayloadMapping = {
     "save-pasted-image": string | null;
     "select-file": { path: string; isDir: boolean }[] | null;
     "get-image-thumbnail": string | null;
+    "copy-image-to-clipboard": { ok: boolean; reason?: string };
     "save-image": { ok: boolean; savedTo?: string; reason?: string };
     "install-nodejs": InstallResult;
     "install-sdk": InstallResult;
@@ -799,8 +800,10 @@ type EventPayloadMapping = {
     "sop.removeSopSchedule": boolean;
     // Workflow runs
     "workflow.get-run": WorkflowRun | null;
+    "workflow.get-history": WorkflowRun[];
     "workflow.execute": WorkflowRun;
     "workflow.execute-stage": WorkflowRun;
+    "workflow.link-stage-session": WorkflowRun | null;
     "workflow.retry-stage": WorkflowRun | null;
 }
 
@@ -833,6 +836,7 @@ interface WorkflowStageRun {
     stageId: string;
     label: string;
     status: WorkflowStageStatus;
+    assistantId?: string;
     inputPrompt?: string;
     output?: string;
     abstract?: string;
@@ -850,6 +854,9 @@ interface WorkflowRun {
     startedAt?: string;
     completedAt?: string;
     stages: WorkflowStageRun[];
+    triggerType?: "manual" | "scheduled";
+    scheduledTaskId?: string;
+    planItemId?: string;
 }
 
 interface Window {
@@ -894,6 +901,7 @@ interface Window {
         getPathForFile: (file: File) => string;
         // Generate a thumbnail data URL for a local image
         getImageThumbnail: (filePath: string) => Promise<string | null>;
+        copyImageToClipboard: (sourcePath: string) => Promise<{ ok: boolean; reason?: string }>;
         saveImage: (sourcePath: string) => Promise<{ ok: boolean; savedTo?: string; reason?: string }>;
         // Install tools
         installNodeJs: () => Promise<InstallResult>;
@@ -1011,10 +1019,12 @@ interface Window {
         sopRename: (sopId: string, newName: string) => Promise<HandSopResult>;
         // Workflow runs
         workflowGetRun: (sopId: string) => Promise<WorkflowRun | null>;
+        workflowGetHistory: (sopId: string) => Promise<WorkflowRun[]>;
         workflowExecute: (sopId: string) => Promise<WorkflowRun>;
         workflowExecuteStage: (sopId: string, stageId: string) => Promise<WorkflowRun>;
+        workflowLinkStageSession: (sopId: string, stageId: string, sessionId: string, assistantId?: string) => Promise<WorkflowRun | null>;
         workflowRetryStage: (sopId: string, stageId: string) => Promise<WorkflowRun | null>;
-        workflowStageComplete: (payload: { sopId: string; stageId: string; output: string; abstract: string; sessionId?: string; error?: string }) => void;
+        workflowStageComplete: (payload: { sopId: string; stageId: string; output: string; abstract: string; sessionId?: string; assistantId?: string; error?: string }) => void;
         onWorkflowRunChanged: (callback: (sopId: string) => void) => UnsubscribeFunction;
     }
 }

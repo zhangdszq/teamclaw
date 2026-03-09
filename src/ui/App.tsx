@@ -150,12 +150,22 @@ const SIDEBAR_WIDTH_KEY = "vk-cowork-sidebar-width";
 const MIN_SIDEBAR_WIDTH = 300;
 const MAX_SIDEBAR_WIDTH = 520;
 const DEFAULT_SIDEBAR_WIDTH = 340;
+const CHAT_CONTENT_WIDTH_KEY = "vk-cowork-chat-content-width";
+const MIN_CHAT_CONTENT_WIDTH = 520;
+const MAX_CHAT_CONTENT_WIDTH = 1200;
+const DEFAULT_CHAT_CONTENT_WIDTH = 768;
 const WORKSPACE_PANEL_WIDTH = 320;
 
 // 按 session 存储的 partialMessage 状态
 type SessionPartialState = {
   content: string;
   isVisible: boolean;
+};
+
+type PlanTableNavigationTarget = {
+  sopName?: string;
+  sopId?: string;
+  historyRunId?: string;
 };
 
 // ─── 消息分组：把连续的工具调用/结果归入"过程组" ──────────────────────────────
@@ -395,6 +405,13 @@ function App() {
     if (!Number.isFinite(raw)) return DEFAULT_SIDEBAR_WIDTH;
     return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, raw));
   });
+  const chatContentWidth = (() => {
+    const rawValue = localStorage.getItem(CHAT_CONTENT_WIDTH_KEY);
+    if (rawValue == null) return DEFAULT_CHAT_CONTENT_WIDTH;
+    const raw = Number(rawValue);
+    if (!Number.isFinite(raw)) return DEFAULT_CHAT_CONTENT_WIDTH;
+    return Math.min(MAX_CHAT_CONTENT_WIDTH, Math.max(MIN_CHAT_CONTENT_WIDTH, raw));
+  })();
   const [inputAreaHeight, setInputAreaHeight] = useState(160);
   const [taskPanelVisible, setTaskPanelVisible] = useState(() => {
     return localStorage.getItem("vk-cowork-task-panel-visible") === "true";
@@ -663,7 +680,7 @@ function App() {
 
   // Track which plan item triggered the current scheduler run, for session linkback
   const pendingPlanItemIdRef = useRef<string | null>(null);
-  const pendingWorkflowRef = useRef<{ sopId: string; stageId: string } | null>(null);
+  const pendingWorkflowRef = useRef<{ sopId: string; stageId: string; assistantId?: string } | null>(null);
   const workflowSessionMapRef = useRef<Record<string, { sopId: string; stageId: string }>>({});
   const prevActiveSessionIdRef = useRef<string | null>(activeSessionId);
 
@@ -675,7 +692,11 @@ function App() {
         pendingPlanItemIdRef.current = task.planItemId;
       }
       if (task.workflowSopId && task.workflowStageId) {
-        pendingWorkflowRef.current = { sopId: task.workflowSopId, stageId: task.workflowStageId };
+        pendingWorkflowRef.current = {
+          sopId: task.workflowSopId,
+          stageId: task.workflowStageId,
+          assistantId: task.assistantId,
+        };
       }
       const effectiveCwd = task.cwd || cwd || "/Users";
       const sessionTitle = task.workflowSopId
@@ -709,7 +730,16 @@ function App() {
         });
       }
       if (pendingWorkflowRef.current) {
-        workflowSessionMapRef.current[activeSessionId] = pendingWorkflowRef.current;
+        const workflow = pendingWorkflowRef.current;
+        workflowSessionMapRef.current[activeSessionId] = workflow;
+        window.electron.workflowLinkStageSession(
+          workflow.sopId,
+          workflow.stageId,
+          activeSessionId,
+          workflow.assistantId ?? sessions[activeSessionId]?.assistantId,
+        ).catch((err: unknown) => {
+          console.error("[workflow] Failed to link stage session:", err);
+        });
         pendingWorkflowRef.current = null;
       }
     }
@@ -776,7 +806,7 @@ function App() {
             ?.trim() || "";
 
         const isError = curStatus === "error";
-        // Extract structured summary — capture only the summary heading + bullet lines + step checklist.
+        // Extract structured summary — capture the summary heading plus allowed subsections.
         // Stop at unrelated headings, horizontal rules, or non-list content to avoid noise.
         let abstract = "";
         const summaryStart = output.match(/##\s*阶段结果摘要/);
@@ -791,16 +821,16 @@ function App() {
               continue;
             }
             const trimmed = line.trim();
-            // Stop at unrelated headings (## but not ### 步骤完成情况)
-            if (/^##\s/.test(trimmed) && !/^###\s*步骤完成情况/.test(trimmed)) break;
+            // Stop at unrelated headings (## but allow known ### subsections)
+            if (/^##\s/.test(trimmed) && !/^##\s*阶段结果摘要/.test(trimmed)) break;
             // Stop at horizontal rules
             if (/^---+\s*$/.test(trimmed)) break;
-            // Allow: bullet points, checkboxes, sub-headings for steps, blank lines between items
+            // Allow: bullet points, known subsection headings, blank lines between items
             if (
               trimmed === "" ||
               trimmed.startsWith("- ") ||
               trimmed.startsWith("* ") ||
-              /^###\s*步骤完成情况/.test(trimmed) ||
+              /^###\s*(阶段结论|关键数据|异常\/降级|步骤完成情况)\s*$/.test(trimmed) ||
               /^\(.+\)$/.test(trimmed)
             ) {
               contentLines.push(line);
@@ -824,6 +854,7 @@ function App() {
           output,
           abstract,
           sessionId,
+          assistantId: session.assistantId,
           error: isError ? (output || "Agent 执行出错") : undefined,
         });
 
@@ -1093,7 +1124,7 @@ function App() {
   // SOP page state
   const [showSopPage, setShowSopPage] = useState(false);
   const [showPlanTable, setShowPlanTable] = useState(false);
-  const [planTableSopName, setPlanTableSopName] = useState<string | undefined>();
+  const [planTableTarget, setPlanTableTarget] = useState<PlanTableNavigationTarget | null>(null);
   const [showKnowledgePage, setShowKnowledgePage] = useState(false);
 
   // Header compact mode: hide button labels when header is narrow
@@ -1204,7 +1235,7 @@ function App() {
         onShowSplash={() => setShowSplash(true)}
         onOpenSop={() => setShowSopPage(true)}
         onOpenPlanTable={() => {
-          setPlanTableSopName(undefined);
+          setPlanTableTarget(null);
           setShowPlanTable(true);
         }}
         onOpenKnowledge={() => setShowKnowledgePage(true)}
@@ -1334,7 +1365,10 @@ function App() {
         ) : null}
 
         <div ref={scrollContainerRef} className={`select-text flex-1 px-8 pt-6 ${(messages.length > 0 || isLoadingHistory) ? "overflow-y-auto" : "overflow-hidden"} ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`} style={{ paddingBottom: (messages.length > 0 || isLoadingHistory) ? `${inputAreaHeight + 16}px` : 0 }}>
-          <div className="mx-auto max-w-3xl">
+          <div
+            className="mx-auto max-w-full"
+            style={{ width: `min(100%, ${chatContentWidth}px)` }}
+          >
             {isLoadingHistory ? (
               // 骨架屏 - 加载历史消息时显示
               <MessageSkeleton />
@@ -1474,8 +1508,8 @@ function App() {
       {showSopPage && (
         <SopPage
           onClose={() => setShowSopPage(false)}
-          onOpenPlanTable={(sopName) => {
-            setPlanTableSopName(sopName);
+          onOpenPlanTable={(target) => {
+            setPlanTableTarget(target ?? null);
             setShowSopPage(false);
             setShowPlanTable(true);
           }}
@@ -1489,15 +1523,22 @@ function App() {
 
       {showPlanTable && (
         <PlanTablePage
-          onClose={() => setShowPlanTable(false)}
-          onBack={planTableSopName ? () => {
+          onClose={() => {
+            setShowPlanTable(false);
+            setPlanTableTarget(null);
+          }}
+          onBack={planTableTarget ? () => {
             setShowPlanTable(false);
             setShowSopPage(true);
+            setPlanTableTarget(null);
           } : undefined}
           titleBarHeight={titleBarH}
-          initialSopName={planTableSopName}
+          initialSopName={planTableTarget?.sopName}
+          initialSopId={planTableTarget?.sopId}
+          initialHistoryRunId={planTableTarget?.historyRunId}
           onNavigateToSession={(sessionId, assistantId) => {
             setShowPlanTable(false);
+            setPlanTableTarget(null);
             window.electron.getAssistantsConfig().then((config) => {
               const assistant = config.assistants?.find((a) => a.id === assistantId);
               if (assistant) {

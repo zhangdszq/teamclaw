@@ -91,6 +91,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
     // Generate a thumbnail data URL for a local image (128px max dim, returns data:image/png;base64,...)
     getImageThumbnail: (filePath: string) =>
         ipcInvoke("get-image-thumbnail", filePath),
+    copyImageToClipboard: (sourcePath: string) =>
+        ipcInvoke("copy-image-to-clipboard", sourcePath),
     // Open Save dialog and copy the source image to the chosen path
     saveImage: (sourcePath: string) =>
         ipcInvoke("save-image", sourcePath),
@@ -328,13 +330,17 @@ electron.contextBridge.exposeInMainWorld("electron", {
     // Workflow runs
     workflowGetRun: (sopId: string) =>
         ipcInvoke("workflow.get-run", sopId),
+    workflowGetHistory: (sopId: string) =>
+        ipcInvoke("workflow.get-history", sopId),
     workflowExecute: (sopId: string) =>
         ipcInvoke("workflow.execute", sopId),
     workflowExecuteStage: (sopId: string, stageId: string) =>
         ipcInvoke("workflow.execute-stage", sopId, stageId),
+    workflowLinkStageSession: (sopId: string, stageId: string, sessionId: string, assistantId?: string) =>
+        ipcInvoke("workflow.link-stage-session", sopId, stageId, sessionId, assistantId),
     workflowRetryStage: (sopId: string, stageId: string) =>
         ipcInvoke("workflow.retry-stage", sopId, stageId),
-    workflowStageComplete: (payload: { sopId: string; stageId: string; output: string; abstract: string; sessionId?: string; error?: string }) =>
+    workflowStageComplete: (payload: { sopId: string; stageId: string; output: string; abstract: string; sessionId?: string; assistantId?: string; error?: string }) =>
         electron.ipcRenderer.send("workflow-stage-complete", payload),
     onWorkflowRunChanged: (callback: (sopId: string) => void) => {
         const cb = (_: Electron.IpcRendererEvent, sopId: string) => callback(sopId);

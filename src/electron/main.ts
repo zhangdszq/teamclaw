@@ -1547,6 +1547,19 @@ app.on("ready", async () => {
     });
 
     // Save an image to a user-chosen path via Save dialog
+    ipcMainHandle("copy-image-to-clipboard", async (_: any, sourcePath: string) => {
+        try {
+            const { nativeImage, clipboard } = await import("electron");
+            const image = nativeImage.createFromPath(sourcePath);
+            if (image.isEmpty()) return { ok: false, reason: "invalid_image" };
+            clipboard.writeImage(image);
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, reason: String(err) };
+        }
+    });
+
+    // Save an image to a user-chosen path via Save dialog
     ipcMainHandle("save-image", async (_: any, sourcePath: string) => {
         const path = await import("path");
         const fs = await import("fs");
@@ -2997,18 +3010,85 @@ ${brokenToml}
         return loadWorkflowRun(sopId);
     });
 
+    ipcMainHandle("workflow.get-history", (_: any, sopId: string) => {
+        return loadWorkflowHistory(sopId);
+    });
+
+    const CODEPILOT_SOP_ID = "codepilot-issue-monitor";
+    const CODEPILOT_FACT_SOURCE_STAGE_ID = "stage_2";
+    const CODEPILOT_WEEKLY_STAGE_ID = "stage_6";
+
+    function isCodePilotWorkflow(sop: ParsedHandData): boolean {
+        return sop.id === CODEPILOT_SOP_ID;
+    }
+
+    function getWeekdayLabel(date = new Date()): string {
+        return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()] ?? "未知";
+    }
+
+    function summarizeInlineText(text: string, maxLength = 240): string {
+        const compact = text.replace(/\s+/g, " ").trim();
+        return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+    }
+
+    function extractSummaryBullets(text?: string, maxItems = 4): string[] {
+        if (!text) return [];
+        const lines = text.split("\n");
+        const hasSummaryHeading = lines.some((line) => /^##\s*阶段结果摘要/.test(line.trim()));
+        let inSummary = !hasSummaryHeading;
+        const bullets: string[] = [];
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!inSummary) {
+                if (/^##\s*阶段结果摘要/.test(line)) inSummary = true;
+                continue;
+            }
+            if (!line) continue;
+            if (/^###\s*步骤完成情况/.test(line)) break;
+            if (/^##\s/.test(line) && !/^##\s*阶段结果摘要/.test(line)) break;
+            if (/^###\s/.test(line)) continue;
+            if (line.startsWith("- ") || line.startsWith("* ")) {
+                bullets.push(line.replace(/^\*\s/, "- "));
+            } else if (bullets.length === 0 && !/^（.+）$/.test(line)) {
+                bullets.push(`- ${summarizeInlineText(line, 120)}`);
+            }
+            if (bullets.length >= maxItems) break;
+        }
+
+        return bullets;
+    }
+
+    function buildCompactReferenceSection(title: string, text?: string, maxItems = 4): string[] {
+        if (!text) return [];
+        const bullets = extractSummaryBullets(text, maxItems);
+        const lines: string[] = [title];
+        if (bullets.length > 0) {
+            lines.push(...bullets);
+        } else {
+            lines.push(`- ${summarizeInlineText(text)}`);
+        }
+        lines.push("");
+        return lines;
+    }
+
     /**
      * Build a stage-specific prompt with full context:
      * settings + stage instructions + prev output + abstracts + tool hints + experience + constraints.
      */
     function buildStagePrompt(
         sop: ParsedHandData,
+        run: NonNullable<ReturnType<typeof loadWorkflowRun>>,
         stage: { stageId: string; label: string },
         prevOutput?: string,
         allAbstracts?: Array<{ label: string; abstract: string }>,
     ): string {
         const stageInfo = sop.stages.find((s) => s.id === stage.stageId);
         const lines: string[] = [];
+        const isCodePilot = isCodePilotWorkflow(sop);
+        const now = new Date();
+        const weekday = getWeekdayLabel(now);
+        const isWeeklyWindow = now.getDay() === 5;
 
         lines.push(`你正在执行 SOP「${sop.name}」的工作流阶段：${stage.label}\n`);
 
@@ -3059,6 +3139,20 @@ ${brokenToml}
             }
         }
 
+        if (isCodePilot) {
+            lines.push("【本次执行上下文】");
+            lines.push(`- 触发方式（triggerType）= ${run.triggerType ?? "manual"}`);
+            lines.push(`- 当前日期 = ${now.toLocaleDateString("zh-CN")}`);
+            lines.push(`- 当前星期 = ${weekday}`);
+            if (run.scheduledTaskId) {
+                lines.push(`- 调度任务 ID（scheduledTaskId）= ${run.scheduledTaskId}`);
+            }
+            if (stage.stageId === CODEPILOT_WEEKLY_STAGE_ID) {
+                lines.push(`- 周报窗口 = ${isWeeklyWindow ? "是" : "否"}`);
+            }
+            lines.push("");
+        }
+
         // Inject last successful run's stage abstract for dedup reference
         const history = loadWorkflowHistory(sop.id);
         const lastCompleted = [...history].reverse().find(
@@ -3067,11 +3161,19 @@ ${brokenToml}
         if (lastCompleted) {
             const lastStage = lastCompleted.stages.find((s) => s.stageId === stage.stageId);
             if (lastStage?.abstract) {
-                lines.push("---");
-                lines.push("【上次执行摘要（用于增量去重，非本次数据源）】");
-                lines.push(`上次执行时间：${lastStage.completedAt ?? lastCompleted.startedAt ?? "未知"}`);
-                lines.push(`上次该阶段结果：${lastStage.abstract}`);
-                lines.push("");
+                if (isCodePilot) {
+                    lines.push("---");
+                    lines.push("【上次执行摘要（仅供增量判断，不能替代本次数据源）】");
+                    lines.push(`- 上次执行时间：${lastStage.completedAt ?? lastCompleted.startedAt ?? "未知"}`);
+                    lines.push(...extractSummaryBullets(lastStage.abstract, 3));
+                    lines.push("");
+                } else {
+                    lines.push("---");
+                    lines.push("【上次执行摘要（用于增量去重，非本次数据源）】");
+                    lines.push(`上次执行时间：${lastStage.completedAt ?? lastCompleted.startedAt ?? "未知"}`);
+                    lines.push(`上次该阶段结果：${lastStage.abstract}`);
+                    lines.push("");
+                }
             }
         }
 
@@ -3088,14 +3190,28 @@ ${brokenToml}
             lines.push("");
         }
 
-        if (prevOutput) {
-            lines.push("---");
-            lines.push("【上一阶段的输出结果】");
-            lines.push(prevOutput);
-            lines.push("");
+        if (prevOutput && (!isCodePilot || stage.stageId !== "stage_3")) {
+            if (isCodePilot) {
+                lines.push("---");
+                lines.push(...buildCompactReferenceSection("【上一阶段关键结果（只保留必要信息）】", prevOutput, 4));
+            } else {
+                lines.push("---");
+                lines.push("【上一阶段的输出结果】");
+                lines.push(prevOutput);
+                lines.push("");
+            }
         }
 
-        if (allAbstracts && allAbstracts.length > 0) {
+        if (isCodePilot && stage.stageId !== CODEPILOT_FACT_SOURCE_STAGE_ID) {
+            const factSourceStage = run.stages.find((s) => s.stageId === CODEPILOT_FACT_SOURCE_STAGE_ID);
+            const factSource = factSourceStage?.abstract || factSourceStage?.output;
+            if (factSource) {
+                lines.push("---");
+                lines.push(...buildCompactReferenceSection("【本次巡检事实源（唯一口径，后续阶段只引用，不重算）】", factSource, 5));
+            }
+        }
+
+        if (!isCodePilot && allAbstracts && allAbstracts.length > 0) {
             lines.push("---");
             lines.push("【工作流历史摘要索引（可按需参考）】");
             allAbstracts.forEach((a) => {
@@ -3106,26 +3222,60 @@ ${brokenToml}
 
         lines.push("---");
         lines.push("【执行规范】");
-        lines.push("1. 必须从数据源重新获取数据（如调用 API、访问网页），不要用 memory_recall 的旧数据代替实际执行。" +
-            (prevOutput ? "但若【上一阶段的输出结果】中已包含本阶段所需的原始数据（如 Issue 列表、API 响应等），可直接复用，无需重复抓取。" : ""));
-        lines.push("2. 可以参考【上次执行摘要】进行增量处理和去重，只处理新增/变更的内容。");
-        lines.push("3. 你在自动化工作流中执行，没有人类在线互动，必须自主决策并完成任务，不要提问或等待确认。");
-        lines.push("4. 完成后**必须**输出以下格式的结构化摘要（摘要之后不要再输出任何内容）：");
-        lines.push("");
-        lines.push("## 阶段结果摘要");
-        lines.push("- 要点1");
-        lines.push("- 要点2");
-        lines.push("");
-        lines.push("### 步骤完成情况");
-        if (stageInfo && stageInfo.items.length > 0) {
-            stageInfo.items.forEach((item, i) => {
-                lines.push(`- [ ] ${i + 1}. ${item}`);
-            });
+        if (isCodePilot) {
+            lines.push("1. 第二阶段是本次巡检的唯一事实源。若【本次巡检事实源】已提供，后续阶段必须直接引用，不要再次抓取或重算 open issues、新增 issue、高优 issue、分类统计。");
+            lines.push("2. 第一阶段只做前置校验，不重复注册 SOP 定时任务，也不输出正式监控结论。");
+            lines.push("3. 第四、第五阶段是分发阶段，只消费上游结果，不得改写业务事实。");
+            if (stage.stageId === CODEPILOT_WEEKLY_STAGE_ID) {
+                lines.push(`4. 当前星期为${weekday}。若当前不是周五且本次并非明确的周报场景，请直接输出“本阶段已跳过”的结构化摘要，不要汇总周报，也不要发送周报通知。`);
+            } else {
+                lines.push("4. 可以参考【上次执行摘要】进行增量判断，但它不能替代本次数据源。");
+            }
+            lines.push("5. 输出必须从 `## 阶段结果摘要` 开始，摘要前不要再写任何说明性文字。");
+            lines.push("6. 完成后**必须**使用以下结构输出：");
             lines.push("");
-            lines.push("（将 [ ] 改为 [x] 表示已完成，未完成的步骤请说明原因）");
+            lines.push("## 阶段结果摘要");
+            lines.push("### 阶段结论");
+            lines.push("- 要点1");
+            lines.push("");
+            lines.push("### 关键数据");
+            lines.push("- key: value");
+            lines.push("");
+            lines.push("### 异常/降级");
+            lines.push("- 无");
+            lines.push("");
+            lines.push("### 步骤完成情况");
+            if (stageInfo && stageInfo.items.length > 0) {
+                stageInfo.items.forEach((item, i) => {
+                    lines.push(`- [ ] ${i + 1}. ${item}`);
+                });
+                lines.push("");
+                lines.push("（将 [ ] 改为 [x] 表示已完成；若本阶段跳过，请在“阶段结论”和“异常/降级”中明确写出跳过原因，并在步骤后标注“跳过执行”。）");
+            }
+            lines.push("");
+            lines.push("7. 如果遇到错误或推荐工具不可用，请在“异常/降级”中明确说明。");
+        } else {
+            lines.push("1. 必须从数据源重新获取数据（如调用 API、访问网页），不要用 memory_recall 的旧数据代替实际执行。" +
+                (prevOutput ? "但若【上一阶段的输出结果】中已包含本阶段所需的原始数据（如 Issue 列表、API 响应等），可直接复用，无需重复抓取。" : ""));
+            lines.push("2. 可以参考【上次执行摘要】进行增量处理和去重，只处理新增/变更的内容。");
+            lines.push("3. 你在自动化工作流中执行，没有人类在线互动，必须自主决策并完成任务，不要提问或等待确认。");
+            lines.push("4. 完成后**必须**输出以下格式的结构化摘要（摘要之后不要再输出任何内容）：");
+            lines.push("");
+            lines.push("## 阶段结果摘要");
+            lines.push("- 要点1");
+            lines.push("- 要点2");
+            lines.push("");
+            lines.push("### 步骤完成情况");
+            if (stageInfo && stageInfo.items.length > 0) {
+                stageInfo.items.forEach((item, i) => {
+                    lines.push(`- [ ] ${i + 1}. ${item}`);
+                });
+                lines.push("");
+                lines.push("（将 [ ] 改为 [x] 表示已完成，未完成的步骤请说明原因）");
+            }
+            lines.push("");
+            lines.push("5. 如果遇到错误或推荐工具不可用，请在摘要中明确说明。");
         }
-        lines.push("");
-        lines.push("5. 如果遇到错误或推荐工具不可用，请在摘要中明确说明。");
 
         return lines.join("\n");
     }
@@ -3169,7 +3319,7 @@ ${brokenToml}
             .map((s) => ({ label: s.label, abstract: s.abstract! }));
 
         const prevOutput = prevStage?.abstract || prevStage?.output;
-        const prompt = buildStagePrompt(sop, stage, prevOutput, abstracts);
+        const prompt = buildStagePrompt(sop, run, stage, prevOutput, abstracts);
 
         updateWorkflowStage(run.sopId, stageId, {
             status: "in_progress",
@@ -3308,6 +3458,13 @@ ${brokenToml}
         return loadWorkflowRun(sopId)!;
     });
 
+    ipcMainHandle("workflow.link-stage-session", (_: any, sopId: string, stageId: string, sessionId: string, assistantId?: string) => {
+        return updateWorkflowStage(sopId, stageId, {
+            sessionId,
+            assistantId,
+        });
+    });
+
     ipcMainHandle("workflow.retry-stage", (_: any, sopId: string, stageId: string) => {
         const allSops = loadHandsFromDir(HANDS_DIR);
         const sop = allSops.find((s) => s.id === sopId);
@@ -3356,9 +3513,10 @@ ${brokenToml}
         output: string;
         abstract: string;
         sessionId?: string;
+        assistantId?: string;
         error?: string;
     }) => {
-        const { sopId, stageId, output, abstract: stageAbstract, sessionId, error } = payload;
+        const { sopId, stageId, output, abstract: stageAbstract, sessionId, assistantId, error } = payload;
 
         // Idempotency guard: ignore duplicate completion events
         const currentRun = loadWorkflowRun(sopId);
@@ -3391,6 +3549,7 @@ ${brokenToml}
             output,
             abstract: stageAbstract,
             sessionId,
+            assistantId,
             error,
         });
 

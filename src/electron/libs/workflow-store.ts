@@ -12,6 +12,7 @@ export interface WorkflowStageRun {
   stageId: string;
   label: string;
   status: StageStatus;
+  assistantId?: string;
   inputPrompt?: string;
   output?: string;
   abstract?: string;

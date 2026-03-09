@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { app } from 'electron';
+import { isUnpackagedRuntime } from '../util.js';
 
 let sidecarProcess: ChildProcess | null = null;
 let apiPort = 2620;
@@ -22,11 +23,6 @@ function getTargetTriple(): string {
     return 'x86_64-pc-windows-msvc';
   }
   return 'unknown';
-}
-
-// Development mode detection
-function isDev(): boolean {
-  return process.env.NODE_ENV === 'development' || !app.isPackaged;
 }
 
 // Get the path to the API sidecar binary
@@ -47,7 +43,7 @@ function getSidecarPath(): string {
 
 // Check if we should run sidecar from source in dev mode
 function shouldRunFromSource(): boolean {
-  if (!isDev()) return false;
+  if (!isUnpackagedRuntime()) return false;
   
   // Check if bundle.cjs exists
   const bundlePath = join(app.getAppPath(), 'src-api', 'dist', 'bundle.cjs');

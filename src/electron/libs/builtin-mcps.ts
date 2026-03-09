@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { app } from "electron";
+import { resolveAppAsset } from "../pathResolver.js";
 
 interface BuiltinMcpConfig {
   token: string;
@@ -21,11 +21,7 @@ interface BuiltinMcpConfig {
 }
 
 function getBuiltinConfigPath(): string {
-  if (app.isPackaged) {
-    return join(process.resourcesPath, "config", "builtin-mcp-servers.json");
-  }
-  // Dev: relative to project root
-  return join(app.getAppPath(), "config", "builtin-mcp-servers.json");
+  return resolveAppAsset("config", "builtin-mcp-servers.json");
 }
 
 function expandHome(p: string): string {

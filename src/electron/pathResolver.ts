@@ -1,31 +1,30 @@
-import { isDev } from "./util.js"
 import path from "path"
 import { app } from "electron"
+import { existsSync } from "fs"
+
+export function resolveAppAsset(...segments: string[]): string {
+    const relativePath = path.join(...segments)
+    const candidates = [
+        path.join(app.getAppPath(), relativePath),
+        path.join(process.resourcesPath, relativePath),
+        path.join(app.getAppPath(), "..", relativePath),
+    ]
+
+    return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
+}
 
 export function getPreloadPath() {
-    return path.join(
-        app.getAppPath(),
-        isDev() ? './' : '../',
-        '/dist-electron/preload.cjs'
-    )
+    return resolveAppAsset("dist-electron", "preload.cjs")
 }
 
 export function getUIPath() {
-    return path.join(app.getAppPath(), '/dist-react/index.html');
+    return resolveAppAsset("dist-react", "index.html");
 }
 
 export function getIconPath() {
-    return path.join(
-        app.getAppPath(),
-        isDev() ? './' : '../',
-        '/app-icon.png'
-    )
+    return resolveAppAsset("app-icon.png")
 }
 
 export function getTrayIconPath() {
-    return path.join(
-        app.getAppPath(),
-        isDev() ? './' : '../',
-        '/trayIconTemplate.png'
-    )
+    return resolveAppAsset("trayIconTemplate.png")
 }

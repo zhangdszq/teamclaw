@@ -1,4 +1,4 @@
-import { ipcMain, WebContents, WebFrameMain } from "electron";
+import { app, ipcMain, WebContents, WebFrameMain } from "electron";
 import { getUIPath } from "./pathResolver.js";
 import { pathToFileURL } from "url";
 import path from "path";
@@ -6,7 +6,20 @@ export const DEV_PORT = 5173;
 
 // Checks if you are in development mode
 export function isDev(): boolean {
-    return process.env.NODE_ENV == "development";
+    return process.env.NODE_ENV === "development"
+        || !!process.env.VITE_DEV_SERVER_URL
+        || !!process.env.ELECTRON_RENDERER_URL;
+}
+
+export function isUnpackagedRuntime(): boolean {
+    return !app.isPackaged;
+}
+
+export function getRendererDevUrl(): string | null {
+    const configuredUrl = process.env.ELECTRON_RENDERER_URL || process.env.VITE_DEV_SERVER_URL;
+    if (configuredUrl?.trim()) return configuredUrl.trim();
+    if (process.env.NODE_ENV === "development") return `http://localhost:${DEV_PORT}`;
+    return null;
 }
 
 // Making IPC Typesafe
@@ -23,7 +36,15 @@ export function ipcWebContentsSend<Key extends keyof EventPayloadMapping>(key: K
 }
 
 export function validateEventFrame(frame: WebFrameMain) {
-    if (isDev() && new URL(frame.url).host === `localhost:${DEV_PORT}`) return;
+    const devServerUrl = getRendererDevUrl();
+    if (devServerUrl) {
+        try {
+            const expectedDevHost = new URL(devServerUrl).host;
+            if (new URL(frame.url).host === expectedDevHost) return;
+        } catch {
+            // Ignore malformed dev server URL and fall back to file validation.
+        }
+    }
 
     // Production renderer must come from local dist-react/index.html.
     // Allow query/hash differences (e.g. ?mode=quick) and tolerate trailing slash variance.

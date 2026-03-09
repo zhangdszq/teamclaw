@@ -1,8 +1,8 @@
 import { sendTestDingtalkAlert } from "./libs/app-logger.js";
 import { app, BrowserWindow, ipcMain, dialog, shell, protocol, globalShortcut, screen, Tray, Menu, nativeImage } from "electron"
 import fs from "fs"
-import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
-import { getPreloadPath, getUIPath, getIconPath, getTrayIconPath } from "./pathResolver.js";
+import { ipcMainHandle, isDev, DEV_PORT, getRendererDevUrl } from "./util.js";
+import { getPreloadPath, getUIPath, getIconPath, getTrayIconPath, resolveAppAsset } from "./pathResolver.js";
 import { getStaticData, pollResources } from "./test.js";
 import { handleClientEvent, sessions } from "./ipc-handlers.js";
 import { buildConversationDigest, extractExperienceViaAI } from "./libs/experience-extractor.js";
@@ -106,6 +106,7 @@ import {
     loadWorkflowExperiences,
     loadWorkflowHistory,
     saveStageExperience,
+    listAllWorkflowSopIds,
     type StageExperience,
 } from "./libs/workflow-store.js";
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
@@ -127,7 +128,7 @@ import {
     deleteKnowledgeDoc,
     getKnowledgeBasePath,
 } from "./libs/knowledge-store.js";
-import { SHARED_TOOL_CATALOG, type ToolCatalogEntry } from "./libs/shared-mcp.js";
+import { SHARED_TOOL_CATALOG, type ToolCatalogEntry, registerSopEngineCallbacks } from "./libs/shared-mcp.js";
 import { initUsageTracker, getUsageLogs, getUsageSummary, getProviderStats, clearUsageLogs } from "./libs/usage-tracker.js";
 
 // ─── Memory janitor: run on startup + every 24 h ─────────────
@@ -392,8 +393,9 @@ app.on("ready", async () => {
             backgroundColor: "#FAF9F6",
         });
 
-        if (isDev()) {
-            win.loadURL(`http://localhost:${DEV_PORT}`);
+        const devServerUrl = getRendererDevUrl();
+        if (devServerUrl) {
+            win.loadURL(devServerUrl);
         } else {
             win.loadFile(getUIPath());
         }
@@ -498,14 +500,13 @@ app.on("ready", async () => {
             },
         });
 
-        const quickUrl = isDev()
-            ? `http://localhost:${DEV_PORT}?mode=quick`
-            : getUIPath();
-
-        if (isDev()) {
-            quickWindow.loadURL(quickUrl);
+        const devServerUrl = getRendererDevUrl();
+        if (devServerUrl) {
+            const quickUrl = new URL(devServerUrl);
+            quickUrl.searchParams.set("mode", "quick");
+            quickWindow.loadURL(quickUrl.toString());
         } else {
-            quickWindow.loadFile(quickUrl, { query: { mode: "quick" } });
+            quickWindow.loadFile(getUIPath(), { query: { mode: "quick" } });
         }
         quickWindow.on("blur", () => {
             setTimeout(() => {
@@ -680,7 +681,10 @@ app.on("ready", async () => {
             sop.stages.map((s) => ({ id: s.id, label: s.label })),
             { triggerType: "scheduled", scheduledTaskId },
         );
-        dispatchWorkflowStage(sop, run, run.stages[0].stageId, scheduledTaskId);
+        const dispatched = dispatchWorkflowStage(sop, run, run.stages[0].stageId, scheduledTaskId);
+        if (!dispatched) {
+            markWorkflowDispatchFailed(run, run.stages[0].stageId, `SOP「${sop.name}」调度启动失败：当前没有可用窗口接收阶段任务`);
+        }
     });
 
     setSopStageRunner((sopId, stageId, scheduledTaskId) => {
@@ -714,7 +718,10 @@ app.on("ready", async () => {
             duration: undefined,
         });
         const freshRun = loadWorkflowRun(sopId)!;
-        dispatchWorkflowStage(sop, freshRun, stageId, scheduledTaskId);
+        const dispatched = dispatchWorkflowStage(sop, freshRun, stageId, scheduledTaskId);
+        if (!dispatched) {
+            markWorkflowDispatchFailed(freshRun, stageId, `SOP「${sop.name}」阶段「${stageId}」调度失败：当前没有可用窗口接收阶段任务`);
+        }
     });
 
     // Run startup hooks after window settles (5 s delay)
@@ -1620,9 +1627,7 @@ app.on("ready", async () => {
 
     // Return skills-catalog.json for SOP panel categorisation
     ipcMainHandle("skill-catalog", () => {
-        const catalogPath = app.isPackaged
-            ? join(process.resourcesPath, "skills-catalog.json")
-            : join(app.getAppPath(), "skills-catalog.json");
+        const catalogPath = resolveAppAsset("skills-catalog.json");
         try {
             if (!existsSync(catalogPath)) return { skills: [], categories: [] };
             return JSON.parse(readFileSync(catalogPath, "utf8"));
@@ -1725,9 +1730,7 @@ app.on("ready", async () => {
 
         // Enrich skills with catalog metadata (label, description, category)
         try {
-            const catalogPath = app.isPackaged
-                ? join(process.resourcesPath, "skills-catalog.json")
-                : join(app.getAppPath(), "skills-catalog.json");
+            const catalogPath = resolveAppAsset("skills-catalog.json");
             if (existsSync(catalogPath)) {
                 const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
                 const catalogSkills: { name: string; label?: string; description?: string; category?: string; installPath?: string }[] = catalog.skills ?? [];
@@ -2081,8 +2084,12 @@ app.on("ready", async () => {
         "delete_scheduled_task", "schedule_delete",
         // Plan table — synced automatically by the workflow framework
         "upsert_plan_item", "complete_plan_item", "fail_plan_item", "list_plan_items",
-        // SOP meta-ops — must not appear in business stage steps
-        "save_sop", "list_sops", "read_sop", "search_sops",
+        // Experience / knowledge meta-ops
+        "save_experience",
+        // Workflow SOP tools — must not appear in SOP stage steps
+        "list_sops", "generate_sop", "execute_sop",
+        "query_sop_run_status", "query_sop_generate_status",
+        "register_sop_schedule",
         // Memory tools redundant in SOP context (framework injects prevOutput)
         "read_working_memory", "memory_recall",
         "query_team_memory",
@@ -2109,7 +2116,17 @@ app.on("ready", async () => {
                 if (!entry.startsWith("sop-")) continue;
                 const dirPath = join(HANDS_DIR, entry);
                 const tomlPath = join(dirPath, "HAND.toml");
+                const statusPath = join(dirPath, "_generate-status.json");
+                const hasStatusFile = existsSync(statusPath);
+                let status: { status?: string } | null = null;
+                if (hasStatusFile) {
+                    try {
+                        status = JSON.parse(readFileSync(statusPath, "utf8"));
+                    } catch { /* ignore */ }
+                }
+                if (status?.status === "generating") continue;
                 if (!existsSync(tomlPath)) {
+                    if (hasStatusFile) continue;
                     try {
                         rmSync(dirPath, { recursive: true });
                         console.log(`[hands] Cleaned up orphan empty temp dir: ${entry}`);
@@ -2136,7 +2153,66 @@ app.on("ready", async () => {
             }
         } catch { /* ignore */ }
     }
+
+    function recoverStalledSopGenerations() {
+        try {
+            if (!existsSync(HANDS_DIR)) return;
+            for (const entry of readdirSync(HANDS_DIR)) {
+                const statusPath = join(HANDS_DIR, entry, "_generate-status.json");
+                if (!existsSync(statusPath)) continue;
+                try {
+                    const status = JSON.parse(readFileSync(statusPath, "utf8"));
+                    if (status?.status !== "generating") continue;
+                    writeFileSync(statusPath, JSON.stringify({
+                        ...status,
+                        status: "failed",
+                        error: "应用重启，SOP 生成已中断",
+                        completedAt: new Date().toISOString(),
+                    }, null, 2), "utf8");
+                    console.log(`[sop.generate] Recovered stalled generation: ${status.taskId ?? entry}`);
+                } catch { /* ignore */ }
+            }
+        } catch (err) {
+            console.warn("[sop.generate] Error during stalled generation recovery:", err);
+        }
+    }
+
+    recoverStalledSopGenerations();
     cleanupOrphanSopDirs();
+
+    // Recover workflows stuck in "running" state due to app crash
+    function recoverStalledWorkflows() {
+        try {
+            for (const sopId of listAllWorkflowSopIds()) {
+                const run = loadWorkflowRun(sopId);
+                if (!run || run.status !== "running") continue;
+                let recovered = false;
+                for (const stage of run.stages) {
+                    if (stage.status === "in_progress") {
+                        updateWorkflowStage(sopId, stage.stageId, {
+                            status: "failed",
+                            error: "应用重启，执行中断",
+                            completedAt: new Date().toISOString(),
+                        });
+                        recovered = true;
+                    }
+                }
+                if (recovered) {
+                    console.log(`[workflow] Recovered stalled workflow: ${sopId}`);
+                    if (run.planItemId) {
+                        updatePlanItem(run.planItemId, {
+                            status: "failed",
+                            result: "应用重启，执行中断",
+                            completedAt: new Date().toISOString(),
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn("[workflow] Error during stalled workflow recovery:", err);
+        }
+    }
+    recoverStalledWorkflows();
 
     // Track all in-flight sop.generate abort controllers keyed by tmpId.
     // Using a Map ensures concurrent calls don't clobber each other's abort handle.
@@ -2339,6 +2415,23 @@ app.on("ready", async () => {
         dailyDays?: number[];
         existingTaskId?: string;  // if provided, updates the existing task
     }) => {
+        // Parameter validation
+        if (params.scheduleType === "daily" && params.dailyTime) {
+            const parts = params.dailyTime.split(":");
+            const [h, m] = parts.map(Number);
+            if (parts.length !== 2 || isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+                throw new Error("dailyTime 格式错误，应为 HH:MM（00:00-23:59）");
+            }
+        }
+        if (params.scheduleType === "interval") {
+            if (!params.intervalValue || params.intervalValue < 1) {
+                throw new Error("intervalValue 必须 >= 1");
+            }
+        }
+        if (params.dailyDays?.some((d: number) => d < 0 || d > 6)) {
+            throw new Error("dailyDays 值必须在 0-6 范围内");
+        }
+
         if (params.existingTaskId) {
             const updated = await updateScheduledTask(params.existingTaskId, {
                 name: params.name,
@@ -2480,9 +2573,11 @@ app.on("ready", async () => {
         return { tools, mcpServers, skills };
     }
 
-    ipcMainHandle("sop.generate", async (_: any, description: string) => {
-        // Prepare a temporary output dir so the agent has a concrete write target
-        const tmpId = `sop-${Date.now()}`;
+    async function _runSopGenerationCore(
+        description: string,
+        opts?: { abortController?: AbortController; tmpId?: string },
+    ): Promise<ParsedHandData> {
+        const tmpId = opts?.tmpId ?? `sop-${Date.now()}`;
         const tmpDir = join(HANDS_DIR, tmpId);
         mkdirSync(tmpDir, { recursive: true });
         const targetPath = join(tmpDir, "HAND.toml");
@@ -2636,17 +2731,15 @@ SOP 的定时调度（如"每日 09:00 执行"）由框架统一在 SOP 配置�
 ## 用户描述
 ${description}`;
 
-        const abortController = new AbortController();
-        sopGenerateAborts.set(tmpId, abortController);
+        const ac = opts?.abortController ?? new AbortController();
+        sopGenerateAborts.set(tmpId, ac);
 
-        // 3-minute hard timeout — abort the agent if it takes too long
         const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
         const timeoutHandle = setTimeout(() => {
             console.warn("[sop.generate] Timeout reached, aborting agent");
-            abortController.abort();
+            ac.abort();
         }, GENERATE_TIMEOUT_MS);
 
-        // App-configured key takes precedence over ~/.claude/settings.json
         const settings = loadUserSettings();
         const envOverride: Record<string, string> = {};
         if (settings.anthropicAuthToken) envOverride.ANTHROPIC_API_KEY = settings.anthropicAuthToken;
@@ -2655,13 +2748,12 @@ ${description}`;
         try {
             const q = await runAgent(prompt, {
                 cwd: HANDS_DIR,
-                abortController,
+                abortController: ac,
                 maxTurns: 15,
                 includePartialMessages: false,
                 env: { ...process.env, ...envOverride },
             });
 
-            // Drain the agent stream
             for await (const msg of q) {
                 if (msg.type === "result") {
                     console.log("[sop.generate] Agent finished, result type:", msg.subtype);
@@ -2672,20 +2764,16 @@ ${description}`;
             sopGenerateAborts.delete(tmpId);
         }
 
-        // Check if aborted by user/timeout before checking file
-        if (abortController.signal.aborted) {
+        if (ac.signal.aborted) {
             try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
             throw new Error("生成已取消");
         }
 
-        // Verify file was written
         if (!existsSync(targetPath)) {
-            // Clean up empty temp dir
             try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
             throw new Error("Agent 未生成 HAND.toml，请检查 Claude 配置后重试");
         }
 
-        // Layer 2: deterministic regex fixes
         const rawContent = readFileSync(targetPath, "utf8");
         const fixedContent = fixTomlArrayTables(rawContent);
         if (fixedContent !== rawContent) {
@@ -2693,22 +2781,18 @@ ${description}`;
             console.log("[sop.generate] Applied TOML auto-fix (regex)");
         }
 
-        // Parse attempt 1
         let parsed = parseHandTomlFile(targetPath);
 
-        // Layer 3: Agent SDK fallback — ask LLM to fix the broken TOML
         if (!parsed) {
             console.log("[sop.generate] Regex-fixed TOML still invalid, invoking Agent fix…");
             const brokenToml = readFileSync(targetPath, "utf8");
             let parseError = "";
             try { parseToml(brokenToml); } catch (e: any) { parseError = e.message ?? String(e); }
 
-            // Reuse the same abort controller so user-cancel also stops the fix phase.
-            // Add a 90-second hard timeout specifically for this shorter sub-task.
             const FIX_TIMEOUT_MS = 90 * 1000;
             const fixTimeoutHandle = setTimeout(() => {
                 console.warn("[sop.generate] TOML fix timeout, aborting");
-                abortController.abort();
+                ac.abort();
             }, FIX_TIMEOUT_MS);
             try {
                 const fixQ = await runAgent(`以下 TOML 文件有格式错误，请修复后用 Write 工具写回同一路径。
@@ -2725,7 +2809,7 @@ ${brokenToml}
 
 请将修复后的完整 TOML 写入：${targetPath}`, {
                     cwd: HANDS_DIR,
-                    abortController,
+                    abortController: ac,
                     maxTurns: 3,
                     includePartialMessages: false,
                     env: { ...process.env, ...envOverride },
@@ -2739,7 +2823,6 @@ ${brokenToml}
                 clearTimeout(fixTimeoutHandle);
             }
 
-            // Re-apply regex fix on the agent output, then parse again
             if (existsSync(targetPath)) {
                 const reFixed = fixTomlArrayTables(readFileSync(targetPath, "utf8"));
                 writeFileSync(targetPath, reFixed, "utf8");
@@ -2752,7 +2835,6 @@ ${brokenToml}
             throw new Error("生成的 HAND.toml 格式解析失败，请重试");
         }
 
-        // Rename temp dir to actual id if different
         const actualId = parsed.id;
         if (actualId !== tmpId) {
             const actualDir = join(HANDS_DIR, actualId);
@@ -2765,7 +2847,148 @@ ${brokenToml}
         }
 
         console.log(`[sop.generate] Created SOP: ${parsed.id} (${parsed.stages.length} stages)`);
-        return parsed satisfies HandSopResult;
+        return parsed;
+    }
+
+    interface GenerateStatus {
+        taskId: string;
+        status: "generating" | "completed" | "failed";
+        sopId?: string;
+        sopName?: string;
+        error?: string;
+        startedAt: string;
+        completedAt?: string;
+    }
+
+    function startSopGeneration(description: string): string {
+        const taskId = `gen-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const tmpId = `sop-${Date.now()}`;
+        const tmpDir = join(HANDS_DIR, tmpId);
+        mkdirSync(tmpDir, { recursive: true });
+
+        const statusFile = join(tmpDir, "_generate-status.json");
+        const status: GenerateStatus = {
+            taskId,
+            status: "generating",
+            startedAt: new Date().toISOString(),
+        };
+        writeFileSync(statusFile, JSON.stringify(status, null, 2), "utf8");
+
+        _runSopGenerationCore(description, { tmpId }).then((parsed) => {
+            const finalDir = join(HANDS_DIR, parsed.id);
+            const finalStatusFile = join(finalDir, "_generate-status.json");
+            const done: GenerateStatus = {
+                ...status,
+                status: "completed",
+                sopId: parsed.id,
+                sopName: parsed.name,
+                completedAt: new Date().toISOString(),
+            };
+            writeFileSync(finalStatusFile, JSON.stringify(done, null, 2), "utf8");
+            // Clean stale status from tmp dir if it was renamed
+            if (tmpDir !== finalDir && existsSync(statusFile)) {
+                try { rmSync(statusFile); } catch { /* ignore */ }
+            }
+            // Notify UI
+            for (const win of BrowserWindow.getAllWindows()) {
+                if (!win.isDestroyed()) win.webContents.send("sop-list-changed");
+            }
+            console.log(`[sop.generate] Async generation completed: ${parsed.id}`);
+        }).catch((err) => {
+            const failed: GenerateStatus = {
+                ...status,
+                status: "failed",
+                error: err instanceof Error ? err.message : String(err),
+                completedAt: new Date().toISOString(),
+            };
+            writeFileSync(statusFile, JSON.stringify(failed, null, 2), "utf8");
+            console.error(`[sop.generate] Async generation failed:`, err);
+        });
+
+        return taskId;
+    }
+
+    function queryGenerateStatus(taskId: string): GenerateStatus | null {
+        if (!existsSync(HANDS_DIR)) return null;
+        for (const entry of readdirSync(HANDS_DIR)) {
+            const statusFile = join(HANDS_DIR, entry, "_generate-status.json");
+            if (!existsSync(statusFile)) continue;
+            try {
+                const st: GenerateStatus = JSON.parse(readFileSync(statusFile, "utf8"));
+                if (st.taskId === taskId) return st;
+            } catch { /* ignore */ }
+        }
+        return null;
+    }
+
+    function queryRunStatus(nameOrId: string) {
+        const sop = resolveSop(nameOrId);
+        const run = loadWorkflowRun(sop.id);
+        if (!run) return null;
+        return {
+            sopId: sop.id,
+            sopName: sop.name,
+            status: run.status,
+            stages: run.stages.map((s) => ({
+                name: s.label,
+                status: s.status,
+                abstract: s.abstract,
+            })),
+        };
+    }
+
+    function markWorkflowDispatchFailed(
+        run: ReturnType<typeof loadWorkflowRun>,
+        stageId: string,
+        reason: string,
+    ): ReturnType<typeof loadWorkflowRun> {
+        if (!run) return null;
+        const now = new Date().toISOString();
+        updateWorkflowStage(run.sopId, stageId, {
+            status: "failed",
+            error: reason,
+            completedAt: now,
+        });
+        const failedRun = loadWorkflowRun(run.sopId);
+        if (failedRun?.planItemId) {
+            updatePlanItem(failedRun.planItemId, {
+                status: "failed",
+                result: reason,
+                completedAt: now,
+            });
+        }
+        console.warn(`[workflow] ${reason}`);
+        return failedRun;
+    }
+
+    // Inject callbacks so the 5 MCP workflow tools can call main.ts functions
+    registerSopEngineCallbacks({
+        listSops() {
+            return loadHandsFromDir(HANDS_DIR).map((s) => ({
+                id: s.id,
+                name: s.name,
+                description: s.description,
+                category: s.category || "",
+            }));
+        },
+        generateSop(description: string) {
+            return startSopGeneration(description);
+        },
+        executeSop(nameOrId: string) {
+            const run = runSopExecution(nameOrId);
+            const sop = resolveSop(nameOrId);
+            return { runId: run.id, sopId: run.sopId, sopName: sop.name };
+        },
+        queryRunStatus(nameOrId: string) {
+            return queryRunStatus(nameOrId);
+        },
+        queryGenerateStatus(taskId: string) {
+            return queryGenerateStatus(taskId);
+        },
+    });
+
+    ipcMainHandle("sop.generate", async (_: any, description: string) => {
+        return await _runSopGenerationCore(description);
     });
 
     // ═══ Workflow Run handlers ═══════════════════════════════════════════════
@@ -2932,10 +3155,12 @@ ${brokenToml}
         run: ReturnType<typeof loadWorkflowRun>,
         stageId: string,
         scheduledTaskId?: string,
-    ) {
-        if (!run) return;
+    ): boolean {
+        if (!run) return false;
         const stage = run.stages.find((s) => s.stageId === stageId);
-        if (!stage) return;
+        if (!stage) return false;
+        const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+        if (!win) return false;
 
         const stageIdx = run.stages.findIndex((s) => s.stageId === stageId);
         const prevStage = stageIdx > 0 ? run.stages[stageIdx - 1] : null;
@@ -2943,7 +3168,6 @@ ${brokenToml}
             .filter((s) => s.abstract && s.stageId !== stageId)
             .map((s) => ({ label: s.label, abstract: s.abstract! }));
 
-        // Pass prev stage abstract instead of full output to reduce prompt bloat
         const prevOutput = prevStage?.abstract || prevStage?.output;
         const prompt = buildStagePrompt(sop, stage, prevOutput, abstracts);
 
@@ -2954,37 +3178,54 @@ ${brokenToml}
         });
 
         const assistantId = resolveAssistantIdForSop(sop);
-
-        const windows = BrowserWindow.getAllWindows();
-        for (const win of windows) {
-            if (!win.isDestroyed()) {
-                win.webContents.send("scheduler:run-task", {
-                    name: `${sop.name} · ${stage.label}`,
-                    sopName: sop.name,
-                    planTaskName: stage.label,
-                    prompt,
-                    assistantId,
-                    cwd: undefined,
-                    workflowSopId: run.sopId,
-                    workflowStageId: stageId,
-                    scheduledTaskId,
-                });
-            }
+        try {
+            win.webContents.send("scheduler:run-task", {
+                name: `${sop.name} · ${stage.label}`,
+                sopName: sop.name,
+                planTaskName: stage.label,
+                prompt,
+                assistantId,
+                cwd: undefined,
+                workflowSopId: run.sopId,
+                workflowStageId: stageId,
+                scheduledTaskId,
+            });
+            return true;
+        } catch (err) {
+            console.warn("[workflow] Failed to dispatch workflow stage:", err);
+            return false;
         }
     }
 
-    ipcMainHandle("workflow.execute", (_: any, sopId: string) => {
+    function resolveSop(nameOrId: string): ParsedHandData {
         const allSops = loadHandsFromDir(HANDS_DIR);
-        const sop = allSops.find((s) => s.id === sopId);
-        if (!sop) throw new Error(`SOP not found: ${sopId}`);
-        if (!sop.stages.length) throw new Error(`SOP has no stages: ${sopId}`);
+        // 1) exact id match
+        let sop = allSops.find((s) => s.id === nameOrId);
+        // 2) exact name match
+        if (!sop) sop = allSops.find((s) => s.name === nameOrId);
+        // 3) fuzzy name match (contains)
+        if (!sop) {
+            const lower = nameOrId.toLowerCase();
+            sop = allSops.find((s) => s.name.toLowerCase().includes(lower) || s.id.toLowerCase().includes(lower));
+        }
+        if (!sop) throw new Error(`未找到 SOP「${nameOrId}」`);
+        return sop;
+    }
+
+    function runSopExecution(nameOrId: string): NonNullable<ReturnType<typeof loadWorkflowRun>> {
+        const sop = resolveSop(nameOrId);
+        if (!sop.stages.length) throw new Error(`SOP「${sop.name}」没有阶段定义`);
+
+        const existing = loadWorkflowRun(sop.id);
+        if (existing?.status === "running") {
+            throw new Error(`SOP「${sop.name}」正在执行中，请等待完成后再触发`);
+        }
 
         const run = createWorkflowRun(
-            sopId,
+            sop.id,
             sop.stages.map((s) => ({ id: s.id, label: s.label })),
         );
 
-        // Auto-create a plan table entry to track this workflow run
         const assistantId = resolveAssistantIdForSop(sop);
         const planItem = upsertPlanItem({
             sopName: sop.name,
@@ -2997,9 +3238,17 @@ ${brokenToml}
         run.planItemId = planItem.id;
         saveWorkflowRun(run);
 
-        // Start the first stage
-        dispatchWorkflowStage(sop, run, run.stages[0].stageId);
-        return run;
+        const dispatched = dispatchWorkflowStage(sop, run, run.stages[0].stageId);
+        if (!dispatched) {
+            markWorkflowDispatchFailed(run, run.stages[0].stageId, `SOP「${sop.name}」启动失败：当前没有可用窗口接收阶段任务`);
+            throw new Error(`SOP「${sop.name}」启动失败：当前没有可用窗口接收阶段任务`);
+        }
+
+        return loadWorkflowRun(sop.id) ?? run;
+    }
+
+    ipcMainHandle("workflow.execute", (_: any, sopId: string) => {
+        return runSopExecution(sopId);
     });
 
     ipcMainHandle("workflow.execute-stage", (_: any, sopId: string, stageId: string) => {
@@ -3007,8 +3256,16 @@ ${brokenToml}
         const sop = allSops.find((s) => s.id === sopId);
         if (!sop) throw new Error(`SOP not found: ${sopId}`);
 
-        // Load or create a workflow run for single-stage execution
-        let run = loadWorkflowRun(sopId);
+        // Concurrency guard: check if the target stage is already in progress
+        const existingRun = loadWorkflowRun(sopId);
+        if (existingRun?.status === "running") {
+            const targetStage = existingRun.stages.find((s) => s.stageId === stageId);
+            if (targetStage?.status === "in_progress") {
+                throw new Error(`SOP「${sop.name}」的阶段「${targetStage.label}」正在执行中`);
+            }
+        }
+
+        let run = existingRun;
         if (!run || run.status === "completed") {
             run = createWorkflowRun(
                 sopId,
@@ -3043,8 +3300,12 @@ ${brokenToml}
         });
 
         run = loadWorkflowRun(sopId)!;
-        dispatchWorkflowStage(sop, run, stageId);
-        return run;
+        const dispatched = dispatchWorkflowStage(sop, run, stageId);
+        if (!dispatched) {
+            markWorkflowDispatchFailed(run, stageId, `SOP「${sop.name}」阶段启动失败：当前没有可用窗口接收阶段任务`);
+            throw new Error(`SOP「${sop.name}」阶段启动失败：当前没有可用窗口接收阶段任务`);
+        }
+        return loadWorkflowRun(sopId)!;
     });
 
     ipcMainHandle("workflow.retry-stage", (_: any, sopId: string, stageId: string) => {
@@ -3054,6 +3315,11 @@ ${brokenToml}
 
         const run = loadWorkflowRun(sopId);
         if (!run) return null;
+
+        const targetStage = run.stages.find((s) => s.stageId === stageId);
+        if (targetStage?.status === "in_progress") {
+            throw new Error(`SOP「${sop.name}」的阶段「${targetStage.label}」正在执行中，无法重试`);
+        }
 
         // Restore plan item to in_progress when retrying a failed workflow
         if (run.planItemId && (run.status === "failed" || run.status === "completed")) {
@@ -3075,8 +3341,12 @@ ${brokenToml}
         });
 
         const updatedRun = loadWorkflowRun(sopId)!;
-        dispatchWorkflowStage(sop, updatedRun, stageId);
-        return updatedRun;
+        const dispatched = dispatchWorkflowStage(sop, updatedRun, stageId);
+        if (!dispatched) {
+            markWorkflowDispatchFailed(updatedRun, stageId, `SOP「${sop.name}」阶段重试失败：当前没有可用窗口接收阶段任务`);
+            throw new Error(`SOP「${sop.name}」阶段重试失败：当前没有可用窗口接收阶段任务`);
+        }
+        return loadWorkflowRun(sopId)!;
     });
 
     // Listen for workflow stage completion from renderer
@@ -3089,6 +3359,14 @@ ${brokenToml}
         error?: string;
     }) => {
         const { sopId, stageId, output, abstract: stageAbstract, sessionId, error } = payload;
+
+        // Idempotency guard: ignore duplicate completion events
+        const currentRun = loadWorkflowRun(sopId);
+        const currentStage = currentRun?.stages.find((s) => s.stageId === stageId);
+        if (currentStage?.status === "completed" || currentStage?.status === "failed") {
+            console.warn(`[workflow] Stage ${stageId} already ${currentStage.status}, ignoring duplicate completion`);
+            return;
+        }
 
         // Validate step completion against stage definition
         const allSopsForValidation = loadHandsFromDir(HANDS_DIR);
@@ -3143,7 +3421,10 @@ ${brokenToml}
                     const allSops = loadHandsFromDir(HANDS_DIR);
                     const sop = allSops.find((s) => s.id === sopId);
                     if (sop) {
-                        dispatchWorkflowStage(sop, run, next.stageId);
+                        const dispatched = dispatchWorkflowStage(sop, run, next.stageId);
+                        if (!dispatched) {
+                            markWorkflowDispatchFailed(run, next.stageId, `SOP「${sop.name}」自动推进失败：当前没有可用窗口接收阶段任务`);
+                        }
                     }
                 }
             }

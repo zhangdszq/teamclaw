@@ -80,11 +80,13 @@ const TOOL_OPTIONS: ToolOption[] = [
   { value: "read_working_memory",    group: "记忆",  desc: "读取最近保存的工作记忆检查点" },
   { value: "query_team_memory",      group: "记忆",  desc: "跨助理只读搜索记忆，获取其他助理的历史上下文" },
   { value: "distill_memory",         group: "记忆",  desc: "任务完成后触发结构化记忆蒸馏，提取值得长期保留的信息" },
+  { value: "save_experience",        group: "记忆",  desc: "沉淀操作经验到知识库候选，便于后续审核和复用" },
   // SOP
-  { value: "save_sop",               group: "SOP",   desc: "保存或更新一个标准操作流程（SOP）" },
-  { value: "list_sops",              group: "SOP",   desc: "列出所有已保存的 SOP" },
-  { value: "read_sop",               group: "SOP",   desc: "读取指定名称的 SOP 完整内容" },
-  { value: "search_sops",            group: "SOP",   desc: "按关键词搜索相关 SOP" },
+  { value: "list_sops",              group: "SOP",   desc: "列出当前所有工作流 SOP" },
+  { value: "generate_sop",           group: "SOP",   desc: "根据自然语言描述异步生成一个新的工作流 SOP" },
+  { value: "execute_sop",            group: "SOP",   desc: "执行指定的工作流 SOP" },
+  { value: "query_sop_run_status",   group: "SOP",   desc: "查询指定工作流 SOP 最近一次运行状态" },
+  { value: "query_sop_generate_status", group: "SOP", desc: "查询异步生成 SOP 任务的当前进度" },
   // 脚本
   { value: "run_script",             group: "脚本",  desc: "执行 Python / PowerShell / Node.js 脚本，支持超时控制" },
   // 桌面

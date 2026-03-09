@@ -8,13 +8,10 @@
 import { existsSync, mkdirSync, readdirSync, statSync, cpSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { app } from "electron";
+import { resolveAppAsset } from "../pathResolver.js";
 
 function getBuiltinSkillsDir(): string {
-    if (app.isPackaged) {
-        return join(process.resourcesPath, "builtin-skills");
-    }
-    return join(app.getAppPath(), "builtin-skills");
+    return resolveAppAsset("builtin-skills");
 }
 
 export function seedBuiltinSkills(): void {

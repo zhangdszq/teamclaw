@@ -12,7 +12,7 @@
  * ├── daily/                 L2 shared daily logs (one file per day)
  * ├── insights/              L1 monthly distillation (shared, legacy)
  * ├── lessons/               L1 structured lessons
- * ├── sops/                  self-growing SOPs (shared across all assistants)
+ * ├── sops/                  legacy experience docs (read-only, no longer written)
  * ├── archive/               expired P1/P2 items
  * └── assistants/{id}/
  *     ├── MEMORY.md           per-assistant private long-term memory
@@ -380,7 +380,7 @@ export function refreshRootAbstract(assistantId?: string): void {
   // Shared SOPs
   const sops = listSops();
   if (sops.length) {
-    lines.push("### SOPs (可复用操作流程) — 路径: sops/{名称}.md");
+    lines.push("### SOPs (存量经验文档) — 路径: sops/{名称}.md（已停止写入，新经验请用 save_experience）");
     sops.forEach(s => lines.push(`- ${s.name}: ${s.description || "(no description)"}  [${s.updatedAt}]`));
     lines.push("");
   }
@@ -916,7 +916,6 @@ const MEMORY_PROTOCOL = `
 
 1. 团队共享层（所有助理可见）：
    - ~/.vk-cowork/memory/MEMORY.md         团队级信息（用户身份、全员决策）
-   - ~/.vk-cowork/memory/sops/*.md          可复用操作流程
    - ~/.vk-cowork/memory/daily/*.md         共享大事件摘要
 
 2. 你的专属层（只有你能看到）：
@@ -940,20 +939,16 @@ const MEMORY_PROTOCOL = `
 
 ━━ 按需加载规则 ━━
 <memory> 中只包含索引和核心记忆。如需更多信息，根据索引摘要判断相关性，主动加载：
-- SOP → ~/.vk-cowork/memory/sops/{名称}.md
 - 共享日志 → ~/.vk-cowork/memory/daily/{日期}.md
 - 你的日志 → assistants/{ID}/daily/{日期}.md
 - 知识文档 → ~/.vk-cowork/knowledge/docs/{id}.md
-执行任务前先检查索引中的 SOP 和知识列表。不要猜测，先读取再行动。
+执行任务前先检查索引中的知识列表。不要猜测，先读取再行动。
 
-━━ 知识库 ━━
+━━ 知识库 & 经验沉淀 ━━
 <memory> 中的"相关知识（语义检索）"是系统自动检索到的经验文档。
-路径: ~/.vk-cowork/knowledge/（experience/ 候选，docs/ 文档）
-
-━━ SOP 规则 ━━
-SOP 是所有助理共享的知识库。完成复杂任务后用 save_sop 沉淀：
-- 记录：前置条件、关键步骤、踩坑点、验证方法
-- 只记录经过验证的流程。已有相关 SOP 则优先更新。
+路径: ~/.vk-cowork/knowledge/（experience/ 候选，docs/ 已验证文档）
+完成复杂任务后用 save_experience 沉淀操作经验（前置条件、关键步骤、踩坑点、验证方法）。
+写入后可在知识库页面查看和审核。只记录经过验证的流程。
 
 ━━ Working Memory 规则 ━━
 执行长任务时，用 save_working_memory 保存关键上下文到你的专属目录。
@@ -967,7 +962,7 @@ SOP 是所有助理共享的知识库。完成复杂任务后用 save_sop 沉淀
 完成最后一个任务后，调用 distill_memory 触发记忆蒸馏，或手动：
 1. 用 save_memory 写入新发现的偏好/决策（默认写专属，团队级写共享）
 2. 如有未完成任务，用 save_working_memory 更新工作记忆
-3. 如果解决了复杂任务，用 save_sop 沉淀为 SOP
+3. 如果解决了复杂任务，用 save_experience 沉淀操作经验
 `.trim();
 
 // ─── Pre-flight knowledge retrieval ──────────────────────────

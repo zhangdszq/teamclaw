@@ -148,7 +148,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
         ...(effectiveProvider !== "openai" && { env: enhancedEnv }),
         ...(effectiveProvider === "openai" && { openaiOverrides }),
         provider: effectiveProvider,
-        mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }) },
+        mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }) },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
           if (toolName === "AskUserQuestion") {
             const toolUseId = toolUseID;

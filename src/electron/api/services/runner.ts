@@ -235,7 +235,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
       ...(effectiveProvider === 'openai' && { openaiOverrides }),
       pathToClaudeCodeExecutable: claudeCodePath,
       provider: effectiveProvider,
-      mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
+      mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd }) },
       canUseTool: async (toolName, input, { signal, toolUseID }) => {
         if (toolName === 'AskUserQuestion') {
           const toolUseId = toolUseID;

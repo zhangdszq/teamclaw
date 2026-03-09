@@ -22,12 +22,9 @@ import {
   updateScheduledTask,
 } from "./scheduler/index.js";
 import {
-  readSop,
-  writeSop,
-  listSops,
-  searchSops,
   writeWorkingMemory,
   readWorkingMemory,
+  readSop,
   appendDailyMemory,
   writeLongTermMemory,
   readLongTermMemory,
@@ -45,8 +42,11 @@ import { sendProactiveTelegramMessage, getTelegramBotStatus, getAnyConnectedTele
 import { sendProactiveFeishuMessage, getFeishuBotStatus, getAnyConnectedFeishuAssistantId } from "./feishu-bot.js";
 import { sendProactiveQQMessage, getQQBotStatus, getAnyConnectedQQBotAssistantId } from "./qqbot-bot.js";
 import { appendNotified } from "./notification-log.js";
+import { createKnowledgeCandidate } from "./knowledge-store.js";
 import { loadAssistantsConfig } from "./assistants-config.js";
 import { loadUserSettings } from "./user-settings.js";
+import { resolveAppAsset } from "../pathResolver.js";
+import { ensurePyPackages, ensurePythonEnv, getManagedPythonInfo, getPythonEnvDir } from "./python-env.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -58,9 +58,7 @@ let _cached6551Token: string | null = null;
 function get6551Token(): string {
   if (_cached6551Token) return _cached6551Token;
   try {
-    const configPath = app.isPackaged
-      ? join(process.resourcesPath, "config", "builtin-mcp-servers.json")
-      : join(app.getAppPath(), "config", "builtin-mcp-servers.json");
+    const configPath = resolveAppAsset("config", "builtin-mcp-servers.json");
     if (existsSync(configPath)) {
       const cfg = JSON.parse(readFileSync(configPath, "utf8")) as { token?: string };
       if (cfg.token) {
@@ -106,7 +104,122 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+const WEB_FETCH_SCRIPT = String.raw`import json
+import sys
+
+import html2text
+from scrapling.fetchers import Fetcher
+
+
+def decode_body(page):
+    encoding = page.encoding or "utf-8"
+    try:
+        return page.body.decode(encoding, errors="replace")
+    except LookupError:
+        return page.body.decode("utf-8", errors="replace")
+
+
+def main():
+    payload = json.loads(sys.stdin.read() or "{}")
+    url = str(payload.get("url") or "").strip()
+    max_chars = int(payload.get("max_chars") or 8000)
+
+    if not url:
+        raise ValueError("url is required")
+
+    page = Fetcher.get(url, timeout=15)
+    content_type = str(page.headers.get("content-type") or "").lower()
+    text = decode_body(page)
+
+    if "text/html" in content_type:
+        converter = html2text.HTML2Text()
+        converter.ignore_images = True
+        converter.body_width = 0
+        text = converter.handle(text)
+
+    sys.stdout.write(text[:max_chars])
+
+
+if __name__ == "__main__":
+    main()
+`;
+
+async function ensureManagedToolScript(filename: string, source: string): Promise<string> {
+  const fs = await import("fs");
+  const path = await import("path");
+  const toolsDir = path.join(getPythonEnvDir(), "tool-scripts");
+  if (!fs.existsSync(toolsDir)) fs.mkdirSync(toolsDir, { recursive: true });
+  const scriptPath = path.join(toolsDir, filename);
+  const current = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, "utf8") : null;
+  if (current !== source) fs.writeFileSync(scriptPath, source, "utf8");
+  return scriptPath;
+}
+
+async function runManagedWebFetch(url: string, maxChars: number): Promise<string> {
+  const pythonPath = await ensurePythonEnv();
+  if (!pythonPath) throw new Error("托管 Python 环境初始化失败");
+
+  const packagesReady = await ensurePyPackages(["scrapling[fetchers]", "html2text"]);
+  if (!packagesReady) throw new Error("托管 Python 依赖安装失败");
+
+  const scriptPath = await ensureManagedToolScript("web_fetch.py", WEB_FETCH_SCRIPT);
+  const { spawn } = await import("child_process");
+
+  return await new Promise((resolve, reject) => {
+    const proc = spawn(pythonPath, [scriptPath], {
+      shell: false,
+      windowsHide: true,
+      env: process.env,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finish = (handler: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      handler();
+    };
+
+    const timer = setTimeout(() => {
+      proc.kill();
+      finish(() => reject(new Error("托管 Python 抓取超时")));
+    }, 30_000);
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    proc.on("error", (err) => {
+      finish(() => reject(err));
+    });
+
+    proc.on("close", (code) => {
+      finish(() => {
+        if ((code ?? -1) === 0) {
+          resolve(stdout);
+          return;
+        }
+        reject(new Error(stderr.trim() || `托管 Python 进程退出码: ${code ?? -1}`));
+      });
+    });
+
+    proc.stdin?.end(JSON.stringify({ url, max_chars: maxChars }));
+  });
+}
+
 async function webFetch(url: string, maxChars = 8_000): Promise<string> {
+  try {
+    return await runManagedWebFetch(url, maxChars);
+  } catch {
+    // Fall back to the built-in fetch implementation.
+  }
+
   const resp = await fetch(url, {
     headers: {
       "User-Agent":
@@ -792,98 +905,45 @@ const takeScreenshotTool = tool(
   },
 );
 
-// ── SOP Tools (Self-Evolution) ───────────────────────────────────────────────
+// ── Experience Tool (writes to knowledge/experience/) ─
 
-const saveSopTool = tool(
-  "save_sop",
-  "保存或更新一个标准操作流程（SOP）。当完成复杂任务后，将经过验证的操作步骤沉淀为可复用的 SOP。\n\n" +
-    "SOP 应包含：前置条件、关键步骤（按顺序）、踩坑点和注意事项、验证方法。\n" +
-    "命名规则：用简短的任务描述，如 '部署-nextjs-到-vercel'、'配置-eslint-prettier'。\n" +
-    "只记录经过实践验证成功的流程，不要记录未验证的猜测。",
-  {
-    name: z.string().describe("SOP 名称，简短描述任务（用中划线连接，如 '配置-docker-compose'）"),
-    content: z.string().describe("SOP 内容（Markdown 格式），包含前置条件、步骤、注意事项等"),
-  },
-  async (input) => {
-    try {
-      const name = String(input.name ?? "").trim();
-      if (!name) return ok("名称不能为空");
-      const content = String(input.content ?? "").trim();
-      if (!content) return ok("内容不能为空");
+function createSaveExperienceTool(sourceSessionId?: string, assistantId?: string) {
+  return tool(
+    "save_experience",
+    "将操作经验沉淀为可复用的经验文档。完成复杂任务后调用此工具，记录经过验证的操作步骤和踩坑点。\n\n" +
+      "写入知识库的「经验候选」（draft），用户可在知识库页面审核后升级为正式知识文档。\n" +
+      "只记录经过实践验证成功的流程，不要记录未验证的猜测。",
+    {
+      title: z.string().describe("经验标题，简要描述任务（如「配置 Docker Compose 多服务编排」）"),
+      scenario: z.string().describe("适用场景，说明什么情况下需要此经验"),
+      steps: z.string().describe("关键步骤（按顺序），包含踩坑点和注意事项"),
+      result: z.string().describe("最终结果/解决方案"),
+      risk: z.string().optional().describe("风险和注意事项（可选）"),
+    },
+    async (input) => {
+      try {
+        const title = String(input.title ?? "").trim();
+        if (!title) return ok("标题不能为空");
+        const steps = String(input.steps ?? "").trim();
+        if (!steps) return ok("步骤不能为空");
 
-      const existing = readSop(name);
-      writeSop(name, content);
+        const candidate = createKnowledgeCandidate({
+          title,
+          scenario: String(input.scenario ?? "").trim(),
+          steps,
+          result: String(input.result ?? "").trim(),
+          risk: String(input.risk ?? "").trim() || "待人工审核",
+          sourceSessionId: sourceSessionId ?? "",
+          assistantId,
+        });
 
-      const action = existing ? "更新" : "创建";
-      return ok(`SOP ${action}成功：${name}\n大小：${content.length} 字符\n路径：~/.vk-cowork/memory/sops/${name}.md`);
-    } catch (err) {
-      return ok(`保存 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
-
-const listSopsTool = tool(
-  "list_sops",
-  "列出所有已保存的 SOP（标准操作流程），返回名称、描述、更新时间。",
-  {},
-  async () => {
-    try {
-      const sops = listSops();
-      if (sops.length === 0) return ok("暂无保存的 SOP。完成复杂任务后可用 save_sop 沉淀操作流程。");
-
-      const lines = sops.map(s =>
-        `- **${s.name}**${s.description ? ` — ${s.description}` : ""}\n  更新：${s.updatedAt} | 大小：${(s.size / 1024).toFixed(1)}KB`
-      );
-      return ok(`**SOP 列表（共 ${sops.length} 个）**\n\n${lines.join("\n\n")}`);
-    } catch (err) {
-      return ok(`列出 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
-
-const readSopTool = tool(
-  "read_sop",
-  "读取指定名称的 SOP 完整内容。",
-  {
-    name: z.string().describe("SOP 名称"),
-  },
-  async (input) => {
-    try {
-      const name = String(input.name ?? "").trim();
-      if (!name) return ok("名称不能为空");
-
-      const content = readSop(name);
-      if (!content) return ok(`未找到名为 '${name}' 的 SOP。用 list_sops 查看可用列表。`);
-      return ok(`# SOP: ${name}\n\n${content}`);
-    } catch (err) {
-      return ok(`读取 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
-
-const searchSopsTool = tool(
-  "search_sops",
-  "按关键词搜索相关 SOP，返回匹配度最高的结果。在执行新任务前应先搜索是否已有可复用的 SOP。",
-  {
-    query: z.string().describe("搜索关键词或任务描述"),
-  },
-  async (input) => {
-    try {
-      const query = String(input.query ?? "").trim();
-      if (!query) return ok("搜索词不能为空");
-
-      const results = searchSops(query);
-      if (results.length === 0) return ok(`未找到与 '${query}' 相关的 SOP。`);
-
-      const lines = results.slice(0, 5).map(s =>
-        `- **${s.name}**${s.description ? ` — ${s.description}` : ""}`
-      );
-      return ok(`**搜索 '${query}' 的相关 SOP：**\n\n${lines.join("\n")}\n\n使用 read_sop 查看完整内容。`);
-    } catch (err) {
-      return ok(`搜索 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
+        return ok(`经验已保存为候选（draft）：${candidate.title}\nID：${candidate.id}\n可在知识库页面查看和审核。`);
+      } catch (err) {
+        return ok(`保存经验失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
 
 // ── Working Memory Tools (factory — uses assistantId via closure) ────────────
 
@@ -1086,7 +1146,7 @@ const distillMemoryTool = tool(
       `   （YYYY-MM-DD 填今日+90天的日期，如今天是 ${new Date().toLocaleDateString("zh-CN", {year:"numeric",month:"2-digit",day:"2-digit"}).replace(/\//g,"-")}，则填 ${new Date(Date.now()+90*864e5).toISOString().slice(0,10)}）\n` +
       `2. **用户在你领域的偏好/决策** → save_memory(scope:"private", content:"- [P0] 内容")\n` +
       `3. **用户身份变更/团队级决策** → save_memory(scope:"shared", content:"- [P0] 内容")\n` +
-      `4. **复杂任务流程**（多步骤、有踩坑点）→ 用 save_sop 保存\n` +
+      `4. **复杂任务流程**（多步骤、有踩坑点）→ 用 save_experience 沉淀为经验候选\n` +
       `5. **未完成任务/下次需继续的上下文** → 用 save_working_memory 保存\n` +
       `   （daily 日志由系统自动写入，无需手动处理）\n\n` +
       `━━ 分流判断 ━━\n` +
@@ -1109,7 +1169,7 @@ function createRunScriptTool(sessionCwd?: string) {
   "执行脚本代码（Python / PowerShell / Node.js），支持超时控制。\n\n" +
     "适合场景：安装依赖、数据处理、系统操作、调用 API、运行复杂脚本。\n" +
     "与 Bash 工具的区别：支持多行脚本、超时保护、丰富的输出格式化。\n\n" +
-    "注意：Python 脚本会保存为临时文件执行（文件模式），PowerShell/Node 直接执行。",
+    "注意：Python 脚本会优先使用应用托管的虚拟环境执行（自动初始化并复用已安装包），PowerShell/Node 直接执行。",
   {
     code: z.string().describe("要执行的代码"),
     language: z.enum(["python", "powershell", "node"]).describe("脚本语言"),
@@ -1136,7 +1196,15 @@ function createRunScriptTool(sessionCwd?: string) {
     if (language === "python") {
       tmpFile = path.join(os.tmpdir(), `vk-script-${Date.now()}.py`);
       fs.writeFileSync(tmpFile, code, "utf8");
-      const pythonCmd = process.platform === "win32" ? "python" : "python3";
+      const pythonCmd = await ensurePythonEnv();
+      if (!pythonCmd) {
+        const hint = process.platform === "darwin"
+          ? "macOS 请先安装 Homebrew，或手动安装 Python 3 后重试。"
+          : process.platform === "win32"
+            ? "Windows 请确认 winget 可用，或手动安装 Python 3 后重试。"
+            : "请手动安装 Python 3 后重试。";
+        return ok(`Python 未安装，且自动初始化托管环境失败。\n${hint}`);
+      }
       cmd = [pythonCmd, "-X", "utf8", "-u", tmpFile];
     } else if (language === "powershell") {
       if (process.platform === "win32") {
@@ -1670,8 +1738,6 @@ const systemInfoTool = tool(
         const checks = [
           { name: "Node.js", cmd: "node --version" },
           { name: "npm", cmd: "npm --version" },
-          { name: "Python", cmd: process.platform === "win32" ? "python --version" : "python3 --version" },
-          { name: "pip", cmd: process.platform === "win32" ? "pip --version" : "pip3 --version" },
           { name: "Git", cmd: "git --version" },
           { name: "Docker", cmd: "docker --version" },
         ];
@@ -1684,6 +1750,28 @@ const systemInfoTool = tool(
             results.push(`${check.name}: 未安装`);
           }
         }
+
+        const managedPython = await getManagedPythonInfo();
+        if (managedPython.version && managedPython.path) {
+          results.push(`Python (managed): ${managedPython.version}`);
+          results.push(`Python env: ${managedPython.path}`);
+        } else {
+          results.push("Python (managed): 未初始化");
+          results.push(`Python env: ${getPythonEnvDir()}`);
+        }
+        results.push(
+          `Python packages: ${managedPython.packages.length ? managedPython.packages.join(", ") : "(none)"}`,
+        );
+
+        try {
+          const systemPythonCmd = process.platform === "win32" ? "python --version" : "python3 --version";
+          const { stdout, stderr } = await execAsync(systemPythonCmd);
+          const version = `${stdout}\n${stderr}`.trim();
+          results.push(`Python (system): ${version || "已安装"}`);
+        } catch {
+          results.push("Python (system): 未安装");
+        }
+
         return ok(results.join("\n"));
       }
 
@@ -2038,11 +2126,8 @@ export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "query_team_memory",   category: "记忆", description: "跨助理只读搜索记忆，获取其他助理的历史上下文", sopExclude: true },
   // memory management ops, not business tools
   { name: "distill_memory",      category: "记忆", description: "任务完成后触发结构化记忆蒸馏，提取值得长期保留的信息", sopExclude: true },
-  // SOP meta-operations — must not appear in SOP business stage steps
-  { name: "save_sop",    category: "SOP", description: "保存或更新一个标准操作流程（SOP）", sopExclude: true },
-  { name: "list_sops",   category: "SOP", description: "列出所有已保存的 SOP", sopExclude: true },
-  { name: "read_sop",    category: "SOP", description: "读取指定名称的 SOP 完整内容", sopExclude: true },
-  { name: "search_sops", category: "SOP", description: "按关键词搜索相关 SOP", sopExclude: true },
+  // Experience documentation — writes to knowledge/experience/ as draft
+  { name: "save_experience", category: "记忆", description: "沉淀操作经验文档（步骤、踩坑点等），写入知识库候选", sopExclude: true },
   // Script & Automation
   { name: "run_script",      category: "脚本", description: "执行 Python / PowerShell / Node.js 脚本，支持超时控制" },
   { name: "desktop_control", category: "桌面", description: "发送键盘输入或控制鼠标，实现桌面自动化" },
@@ -2063,10 +2148,153 @@ export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "news_search",         category: "资讯", description: "按关键词搜索加密货币/财经资讯" },
   { name: "twitter_user_tweets", category: "社交", description: "获取指定 Twitter/X 用户的最近推文" },
   { name: "twitter_search",      category: "社交", description: "搜索 Twitter/X 推文（支持关键词/话题/用户过滤）" },
+  // Workflow SOP — conversational creation & execution; must not appear in SOP stage steps
+  { name: "list_sops",                 category: "SOP工作流", description: "列出所有工作流 SOP（HAND.toml）", sopExclude: true },
+  { name: "generate_sop",              category: "SOP工作流", description: "根据描述生成新的工作流 SOP（异步）", sopExclude: true },
+  { name: "execute_sop",               category: "SOP工作流", description: "启动一个工作流 SOP 执行（异步，新会话中运行）", sopExclude: true },
+  { name: "query_sop_run_status",      category: "SOP工作流", description: "查询工作流 SOP 的执行状态", sopExclude: true },
+  { name: "query_sop_generate_status", category: "SOP工作流", description: "查询异步 SOP 生成任务的状态", sopExclude: true },
 ];
 
-export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?: string; workflowSopId?: string; scheduledTaskId?: string }) {
+// ── SOP Workflow Engine Callbacks ──────────────────────────────────────────────
+
+export interface SopEngineCallbacks {
+  listSops(): Array<{ id: string; name: string; description: string; category: string }>;
+  generateSop(description: string): string; // returns taskId
+  executeSop(sopNameOrId: string): { runId: string; sopId: string; sopName: string };
+  queryRunStatus(sopNameOrId: string): {
+    sopId: string; sopName: string; status: string;
+    stages: Array<{ name: string; status: string; abstract?: string }>;
+  } | null;
+  queryGenerateStatus(taskId: string): {
+    taskId: string; status: string; sopId?: string; sopName?: string; error?: string;
+  } | null;
+}
+
+let _sopCallbacks: SopEngineCallbacks | null = null;
+
+export function registerSopEngineCallbacks(cb: SopEngineCallbacks) {
+  _sopCallbacks = cb;
+}
+
+const listSopWorkflowsTool = tool(
+  "list_sops",
+  "列出所有工作流 SOP（HAND.toml 定义的自动化流程），返回 ID、名称、描述和分类。",
+  {},
+  async () => {
+    if (!_sopCallbacks) return ok("SOP 引擎未就绪，请稍后重试");
+    try {
+      const sops = _sopCallbacks.listSops();
+      if (sops.length === 0) return ok("暂无工作流 SOP。可用 generate_sop 创建新的。");
+      const lines = sops.map(s =>
+        `- **${s.name}**（${s.category}）— ${s.description}\n  ID: ${s.id}`
+      );
+      return ok(`**工作流 SOP（共 ${sops.length} 个）**\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return ok(`列出 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const generateSopTool = tool(
+  "generate_sop",
+  "根据自然语言描述生成一个新的工作流 SOP（异步）。返回 taskId，用 query_sop_generate_status 查询进度。\n\n" +
+    "生成通常需要 1-2 分钟。生成完成后 SOP 会自动出现在列表中。",
+  {
+    description: z.string().describe("SOP 描述，说明要自动化什么任务、包含哪些步骤、使用什么工具"),
+  },
+  async (input) => {
+    if (!_sopCallbacks) return ok("SOP 引擎未就绪，请稍后重试");
+    try {
+      const desc = String(input.description ?? "").trim();
+      if (!desc) return ok("描述不能为空");
+      const taskId = _sopCallbacks.generateSop(desc);
+      return ok(`SOP 生成任务已启动\ntaskId: ${taskId}\n\n用 query_sop_generate_status 查询进度，通常需要 1-2 分钟。`);
+    } catch (err) {
+      return ok(`启动 SOP 生成失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const executeSopTool = tool(
+  "execute_sop",
+  "启动一个工作流 SOP 的执行。SOP 会在新的会话窗口中按阶段逐步运行。\n" +
+    "支持用 SOP 名称或 ID 指定。如果 SOP 正在执行中则会报错。",
+  {
+    sop_name_or_id: z.string().describe("SOP 名称或 ID"),
+  },
+  async (input) => {
+    if (!_sopCallbacks) return ok("SOP 引擎未就绪，请稍后重试");
+    try {
+      const nameOrId = String(input.sop_name_or_id ?? "").trim();
+      if (!nameOrId) return ok("请提供 SOP 名称或 ID");
+      const result = _sopCallbacks.executeSop(nameOrId);
+      return ok(`SOP「${result.sopName}」已启动执行\nrunId: ${result.runId}\nsopId: ${result.sopId}\n\n用 query_sop_run_status 查询执行进度。`);
+    } catch (err) {
+      return ok(`启动 SOP 执行失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const querySopRunStatusTool = tool(
+  "query_sop_run_status",
+  "查询指定工作流 SOP 的最近一次执行状态，包含每个阶段的进度和摘要。",
+  {
+    sop_name_or_id: z.string().describe("SOP 名称或 ID"),
+  },
+  async (input) => {
+    if (!_sopCallbacks) return ok("SOP 引擎未就绪，请稍后重试");
+    try {
+      const nameOrId = String(input.sop_name_or_id ?? "").trim();
+      if (!nameOrId) return ok("请提供 SOP 名称或 ID");
+      const result = _sopCallbacks.queryRunStatus(nameOrId);
+      if (!result) return ok(`未找到 SOP「${nameOrId}」的执行记录。`);
+
+      const stageLines = result.stages.map((s, i) => {
+        let line = `${i + 1}. **${s.name}** — ${s.status}`;
+        if (s.abstract) line += `\n   摘要: ${s.abstract}`;
+        return line;
+      });
+      return ok(
+        `**SOP「${result.sopName}」执行状态: ${result.status}**\n\n` +
+        stageLines.join("\n")
+      );
+    } catch (err) {
+      return ok(`查询执行状态失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const querySopGenerateStatusTool = tool(
+  "query_sop_generate_status",
+  "查询异步 SOP 生成任务的状态。传入 generate_sop 返回的 taskId。",
+  {
+    task_id: z.string().describe("生成任务 ID（generate_sop 返回的 taskId）"),
+  },
+  async (input) => {
+    if (!_sopCallbacks) return ok("SOP 引擎未就绪，请稍后重试");
+    try {
+      const taskId = String(input.task_id ?? "").trim();
+      if (!taskId) return ok("请提供任务 ID");
+      const result = _sopCallbacks.queryGenerateStatus(taskId);
+      if (!result) return ok(`未找到生成任务「${taskId}」。`);
+
+      if (result.status === "completed") {
+        return ok(`SOP 生成完成!\n名称: ${result.sopName}\nID: ${result.sopId}\n\n可用 execute_sop 启动执行，或用 list_sops 查看列表。`);
+      } else if (result.status === "failed") {
+        return ok(`SOP 生成失败: ${result.error || "未知错误"}`);
+      } else {
+        return ok(`SOP 正在生成中...请稍后再查询。`);
+      }
+    } catch (err) {
+      return ok(`查询生成状态失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+export function createSharedMcpServer(opts?: { assistantId?: string; sessionId?: string; sessionCwd?: string; workflowSopId?: string; scheduledTaskId?: string }) {
   const assistantId = opts?.assistantId;
+  const sessionId = opts?.sessionId;
   const sessionCwd = opts?.sessionCwd;
   const workflowSopId = opts?.workflowSopId;
   const scheduledTaskId = opts?.scheduledTaskId;
@@ -2094,11 +2322,8 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       takeScreenshotTool,
       screenAnalyzeTool,
       desktopControlTool,
-      // SOP (self-evolution — shared across all assistants)
-      saveSopTool,
-      listSopsTool,
-      readSopTool,
-      searchSopsTool,
+      // Experience documentation (shared across all assistants)
+      createSaveExperienceTool(sessionId, assistantId),
       // Working Memory (scoped to assistant if ID provided)
       createSaveWorkingMemoryTool(assistantId),
       createReadWorkingMemoryTool(assistantId),
@@ -2126,6 +2351,12 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       createListPlanItemsTool(assistantId),
       // Proactive notification (Telegram > Feishu > DingTalk priority)
       createSendNotificationTool(assistantId),
+      // Workflow SOP (conversational creation & execution)
+      listSopWorkflowsTool,
+      generateSopTool,
+      executeSopTool,
+      querySopRunStatusTool,
+      querySopGenerateStatusTool,
     ],
   });
 }

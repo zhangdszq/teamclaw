@@ -92,6 +92,7 @@ export function AssistantManagerModal({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [assistantDefaults, setAssistantDefaults] = useState<AssistantDefaults | undefined>(undefined);
   const [managerTab, setManagerTab] = useState<TeamManagerTab>("dashboard");
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const [globalUserContext, setGlobalUserContext] = useState<string | undefined>(undefined);
   const sessions = useAppStore((s) => s.sessions);
@@ -898,17 +899,34 @@ export function AssistantManagerModal({
                                   <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
                                 </svg>
                               </button>
-                              <button
-                                onClick={() => handleDelete(assistant.id)}
-                                className="rounded-lg p-1.5 text-muted hover:bg-error/10 hover:text-error transition-colors"
-                                title="删除"
-                              >
-                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                  <path d="M4 7h16" />
-                                  <path d="M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2" />
-                                  <path d="M7 7l1 12a1 1 0 001 .9h6a1 1 0 001-.9l1-12" />
-                                </svg>
-                              </button>
+                              {deleteConfirmId === assistant.id ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => { handleDelete(assistant.id); setDeleteConfirmId(null); }}
+                                    className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-error text-white hover:bg-error/90 transition-colors"
+                                  >
+                                    确认删除
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteConfirmId(null)}
+                                    className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-ink-900/8 text-ink-600 hover:bg-ink-900/15 transition-colors"
+                                  >
+                                    取消
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setDeleteConfirmId(assistant.id)}
+                                  className="rounded-lg p-1.5 text-muted hover:bg-error/10 hover:text-error transition-colors"
+                                  title="删除"
+                                >
+                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                    <path d="M4 7h16" />
+                                    <path d="M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2" />
+                                    <path d="M7 7l1 12a1 1 0 001 .9h6a1 1 0 001-.9l1-12" />
+                                  </svg>
+                                </button>
+                              )}
                             </div>
                           </div>
 

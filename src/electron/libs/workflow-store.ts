@@ -247,6 +247,14 @@ export function saveStageExperience(sopId: string, exp: StageExperience): void {
   writeFileSync(fp, JSON.stringify(all, null, 2), "utf8");
 }
 
+export function listAllWorkflowSopIds(): string[] {
+  if (!existsSync(WORKFLOWS_DIR)) return [];
+  return readdirSync(WORKFLOWS_DIR).filter((entry) => {
+    const fp = join(WORKFLOWS_DIR, entry, "latest.json");
+    return existsSync(fp);
+  });
+}
+
 // Delete all workflow data (runs, history, experiences) for a SOP
 export function deleteWorkflowData(sopId: string): void {
   const dir = join(WORKFLOWS_DIR, sopId);

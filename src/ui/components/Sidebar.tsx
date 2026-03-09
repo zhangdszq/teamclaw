@@ -90,6 +90,7 @@ interface SidebarProps {
   onShowSplash?: () => void;
   onOpenSop?: () => void;
   onOpenPlanTable?: () => void;
+  onOpenKnowledge?: () => void;
   titleBarHeight?: number;
   darkMode?: boolean;
   onDarkModeChange?: (enabled: boolean) => void;
@@ -107,6 +108,7 @@ export function Sidebar({
   onShowSplash,
   onOpenSop,
   onOpenPlanTable,
+  onOpenKnowledge,
   titleBarHeight = 0,
   darkMode,
   onDarkModeChange,
@@ -299,6 +301,16 @@ export function Sidebar({
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
               <span className="text-[11px] font-medium">团队管理</span>
+            </button>
+            <button
+              onClick={() => onOpenKnowledge?.()}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+              </svg>
+              <span className="text-[11px] font-medium">经验/知识库</span>
             </button>
             <button
               onClick={() => onOpenSop?.()}

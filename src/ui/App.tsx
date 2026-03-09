@@ -1207,6 +1207,7 @@ function App() {
           setPlanTableSopName(undefined);
           setShowPlanTable(true);
         }}
+        onOpenKnowledge={() => setShowKnowledgePage(true)}
         titleBarHeight={titleBarH}
         darkMode={darkMode}
         onDarkModeChange={setDarkMode}

@@ -14,6 +14,10 @@ export function resolveAppAsset(...segments: string[]): string {
 }
 
 export function getPreloadPath() {
+    const nextPath = resolveAppAsset("dist-electron", "electron", "preload.cjs")
+    if (existsSync(nextPath)) return nextPath
+
+    // Backward compatibility for stale local builds produced before the clean-output fix.
     return resolveAppAsset("dist-electron", "preload.cjs")
 }
 

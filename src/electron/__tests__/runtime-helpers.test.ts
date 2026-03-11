@@ -133,12 +133,12 @@ afterEach(() => {
 
 describe("pathResolver", () => {
   it("prefers the app directory before resources and parent fallback", async () => {
-    mockState.existingPaths.add(join("/mock/app", "dist-electron", "preload.cjs"));
-    mockState.existingPaths.add(join("/mock/resources", "dist-electron", "preload.cjs"));
+    mockState.existingPaths.add(join("/mock/app", "dist-electron", "electron", "preload.cjs"));
+    mockState.existingPaths.add(join("/mock/resources", "dist-electron", "electron", "preload.cjs"));
 
     const pathResolver = await importFresh<typeof import("../pathResolver.js")>("../pathResolver.js");
 
-    expect(pathResolver.getPreloadPath()).toBe(join("/mock/app", "dist-electron", "preload.cjs"));
+    expect(pathResolver.getPreloadPath()).toBe(join("/mock/app", "dist-electron", "electron", "preload.cjs"));
   });
 
   it("falls back to resources and then parent directory", async () => {
@@ -149,6 +149,14 @@ describe("pathResolver", () => {
 
     mockState.existingPaths = new Set<string>([join("/mock", "skills-catalog.json")]);
     expect(pathResolver.resolveAppAsset("skills-catalog.json")).toBe(join("/mock", "skills-catalog.json"));
+  });
+
+  it("keeps supporting the legacy flat preload path", async () => {
+    mockState.existingPaths.add(join("/mock/resources", "dist-electron", "preload.cjs"));
+
+    const pathResolver = await importFresh<typeof import("../pathResolver.js")>("../pathResolver.js");
+
+    expect(pathResolver.getPreloadPath()).toBe(join("/mock/resources", "dist-electron", "preload.cjs"));
   });
 });
 

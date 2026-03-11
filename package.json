@@ -5,7 +5,7 @@
   "license": "UNLICENSED",
   "version": "0.0.75",
   "type": "module",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "pkill -f vite 2>/dev/null; pkill -f electron 2>/dev/null; sleep 1; bun run dev:react & bun run dev:electron",
     "dev:react": "vite",
@@ -27,7 +27,7 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint .",
     "preview": "vite preview",
-    "transpile:electron": "tsc --project src/electron/tsconfig.json",
+    "transpile:electron": "node -e \"require('fs').rmSync('dist-electron', { recursive: true, force: true })\" && tsc --project src/electron/tsconfig.json",
     "dist:mac": "bun run build:api:mac-arm && bun run build:cli:mac-arm && bun run transpile:electron && bun run build && electron-builder --mac --arm64",
     "dist:mac:quick": "bun run transpile:electron && bun run build && electron-builder --mac --arm64",
     "dist:win": "bun run build:api:windows && bun run build:cli:windows && bun run transpile:electron && bun run build && electron-builder --win --x64",

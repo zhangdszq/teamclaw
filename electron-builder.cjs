@@ -9,9 +9,13 @@ const macSidecar =
 module.exports = {
   appId: 'com.aiteam.app',
   productName: 'AI Team',
-  files: ['dist-electron', 'dist-react'],
+  files: [
+    'package.json',
+    { from: 'dist-electron', to: 'dist-electron', filter: ['**/*'] },
+    { from: 'dist-react', to: 'dist-react', filter: ['**/*'] },
+  ],
   extraResources: [
-    'dist-electron/preload.cjs',
+    'dist-electron/electron/preload.cjs',
     'app-icon.png',
     'trayIconTemplate.png',
     { from: 'config', to: 'config' },

@@ -151,7 +151,9 @@ function mapRowToUsageRecord(row: Record<string, unknown>): UsageRecord {
   return {
     id: String(row.id),
     timestamp: new Date(ts).toISOString(),
-    provider: (row.provider === "openai" ? "openai" : "anthropic"),
+    provider: row.provider === "openai"
+      ? row.provider
+      : "anthropic",
     model: String(row.model ?? ""),
     inputTokens: coerceNonNegativeInt(row.input_tokens),
     outputTokens: coerceNonNegativeInt(row.output_tokens),
@@ -268,7 +270,9 @@ export function getProviderStats(filter: UsageFilter = {}): ProviderStat[] {
     const inputTokens = coerceNonNegativeInt(row.input_tokens);
     const outputTokens = coerceNonNegativeInt(row.output_tokens);
     return {
-      provider: row.provider === "openai" ? "openai" : "anthropic",
+      provider: row.provider === "openai"
+        ? row.provider
+        : "anthropic",
       requests: coerceNonNegativeInt(row.requests),
       inputTokens,
       outputTokens,

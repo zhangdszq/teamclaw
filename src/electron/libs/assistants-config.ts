@@ -152,7 +152,7 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
       id: String(item.id),
       name: String(item.name),
       avatar: optStr(item.avatar),
-      provider: item.provider === "openai" ? "openai" : "claude",
+      provider: item.provider === "openai" ? item.provider : "claude",
       model: optStr(item.model),
       apiAuthToken: optStr(item.apiAuthToken),
       apiBaseUrl: optStr(item.apiBaseUrl),

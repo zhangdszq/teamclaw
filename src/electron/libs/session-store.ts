@@ -12,6 +12,7 @@ export type Session = {
   id: string;
   title: string;
   claudeSessionId?: string;
+  resumeReady?: boolean;
   status: SessionStatus;
   cwd?: string;
   allowedTools?: string;
@@ -36,6 +37,7 @@ export type StoredSession = {
   allowedTools?: string;
   lastPrompt?: string;
   claudeSessionId?: string;
+  resumeReady?: boolean;
   provider?: AgentProvider;
   model?: string;
   assistantId?: string;
@@ -101,6 +103,7 @@ export class SessionStore {
       id,
       title: options.title,
       status: "idle",
+      resumeReady: false,
       cwd: options.cwd,
       allowedTools: options.allowedTools,
       lastPrompt: options.prompt,
@@ -117,13 +120,14 @@ export class SessionStore {
     this.db
       .prepare(
         `insert into sessions
-          (id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (id, title, claude_session_id, resume_ready, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
         session.title,
         session.claudeSessionId ?? null,
+        session.resumeReady ? 1 : 0,
         session.status,
         session.cwd ?? null,
         session.allowedTools ?? null,
@@ -147,6 +151,7 @@ export class SessionStore {
     const rows = this.db
       .prepare(
         `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, hidden, created_at, updated_at
+         , resume_ready
          from sessions
          where hidden is null or hidden = 0
          order by updated_at desc`
@@ -160,6 +165,7 @@ export class SessionStore {
       allowedTools: row.allowed_tools ? String(row.allowed_tools) : undefined,
       lastPrompt: row.last_prompt ? String(row.last_prompt) : undefined,
       claudeSessionId: row.claude_session_id ? String(row.claude_session_id) : undefined,
+      resumeReady: Boolean(row.resume_ready),
       provider: (row.provider as AgentProvider) ?? "claude",
       model: row.model ? String(row.model) : undefined,
       assistantId: row.assistant_id ? String(row.assistant_id) : undefined,
@@ -189,6 +195,7 @@ export class SessionStore {
     const sessionRow = this.db
       .prepare(
         `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, created_at, updated_at
+         , resume_ready
          from sessions
          where id = ?`
       )
@@ -211,6 +218,7 @@ export class SessionStore {
         allowedTools: sessionRow.allowed_tools ? String(sessionRow.allowed_tools) : undefined,
         lastPrompt: sessionRow.last_prompt ? String(sessionRow.last_prompt) : undefined,
         claudeSessionId: sessionRow.claude_session_id ? String(sessionRow.claude_session_id) : undefined,
+        resumeReady: Boolean(sessionRow.resume_ready),
         provider: (sessionRow.provider as AgentProvider) ?? "claude",
         model: sessionRow.model ? String(sessionRow.model) : undefined,
         assistantId: sessionRow.assistant_id ? String(sessionRow.assistant_id) : undefined,
@@ -310,6 +318,7 @@ export class SessionStore {
     const values: Array<string | number | null> = [];
     const updatable = {
       claudeSessionId: "claude_session_id",
+      resumeReady: "resume_ready",
       status: "status",
       cwd: "cwd",
       allowedTools: "allowed_tools",
@@ -329,7 +338,7 @@ export class SessionStore {
       const value = updates[key];
       if (key === "assistantSkillNames") {
         values.push(value === undefined ? null : JSON.stringify(value));
-      } else if (key === "hidden" || key === "background") {
+      } else if (key === "hidden" || key === "background" || key === "resumeReady") {
         values.push(value === undefined ? null : (value ? 1 : 0));
       } else {
         values.push(value === undefined ? null : (value as string));
@@ -352,6 +361,7 @@ export class SessionStore {
         id text primary key,
         title text,
         claude_session_id text,
+        resume_ready integer default 0,
         status text not null,
         cwd text,
         allowed_tools text,
@@ -371,6 +381,7 @@ export class SessionStore {
     try { this.db.exec(`alter table sessions add column assistant_skill_names text`); } catch { /* already exists */ }
     try { this.db.exec(`alter table sessions add column background integer default 0`); } catch { /* already exists */ }
     try { this.db.exec(`alter table sessions add column hidden integer default 0`); } catch { /* already exists */ }
+    try { this.db.exec(`alter table sessions add column resume_ready integer default 0`); } catch { /* already exists */ }
     this.db.exec(
       `create table if not exists messages (
         id text primary key,
@@ -386,7 +397,7 @@ export class SessionStore {
   private loadSessions(): void {
     const rows = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, hidden
+        `select id, title, claude_session_id, resume_ready, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, hidden
          from sessions`
       )
       .all();
@@ -395,6 +406,7 @@ export class SessionStore {
         id: String(row.id),
         title: String(row.title),
         claudeSessionId: row.claude_session_id ? String(row.claude_session_id) : undefined,
+        resumeReady: Boolean(row.resume_ready),
         status: row.status as SessionStatus,
         cwd: row.cwd ? String(row.cwd) : undefined,
         allowedTools: row.allowed_tools ? String(row.allowed_tools) : undefined,

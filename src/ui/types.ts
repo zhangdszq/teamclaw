@@ -21,6 +21,7 @@ export type SessionInfo = {
   title: string;
   status: SessionStatus;
   claudeSessionId?: string;
+  resumeReady?: boolean;
   cwd?: string;
   provider?: AgentProvider;
   assistantId?: string;

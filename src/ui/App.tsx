@@ -8,7 +8,6 @@ import { PromptInput, usePromptActions } from "./components/PromptInput";
 import { MessageCard, ProcessGroup } from "./components/EventCard";
 import { MessageSkeleton } from "./components/MessageSkeleton";
 import { McpSkillModal } from "./components/McpSkillModal";
-import { OnboardingWizard } from "./components/OnboardingWizard";
 import { SplashScreen } from "./components/SplashScreen";
 import { DecisionPanel } from "./components/DecisionPanel";
 import { ChapterSelector, parseChapters, isChapterSelectionText } from "./components/ChapterSelector";
@@ -24,7 +23,6 @@ import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import appIconUrl from "./assets/app-icon.png";
 import splash1 from "../../assets/splash-1.jpg";
 
-const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
 const LIKED_MESSAGE_KEYS = "vk-cowork-liked-message-keys";
 const DARK_MODE_KEY = "vk-cowork-dark-mode";
@@ -341,34 +339,6 @@ function App() {
   // Persisted in user-settings.json so it only shows on the very first install
   const [showSplash, setShowSplash] = useState<boolean | null>(null);
 
-  // Onboarding state
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    return !localStorage.getItem(ONBOARDING_COMPLETE_KEY);
-  });
-  const [onboardingInitialStep, setOnboardingInitialStep] = useState<"welcome" | "codex">("welcome");
-
-  // 启动时检查已有配置，决定是否跳过或从哪一步开始引导
-  useEffect(() => {
-    if (!showOnboarding) return;
-    window.electron.getUserSettings().then((settings) => {
-      const hasAnthropic = !!settings.anthropicAuthToken;
-      const hasCodex = !!settings.openaiTokens?.accessToken;
-      if (hasAnthropic && hasCodex) {
-        // 两个都配置了，完全跳过
-        localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");
-        setShowOnboarding(false);
-      } else if (hasAnthropic) {
-        // 已有 Anthropic Token，直接从 Codex 步骤开始
-        setOnboardingInitialStep("codex");
-      }
-    }).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleOnboardingComplete = useCallback(() => {
-    localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");
-    setShowOnboarding(false);
-  }, []);
-
   const handleSplashComplete = useCallback(() => {
     setShowSplash(false);
     window.electron.saveUserSettings({ splashSeen: true }).catch(console.error);
@@ -428,6 +398,7 @@ function App() {
 
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const selectedAssistantId = useAppStore((s) => s.selectedAssistantId);
   const showStartModal = useAppStore((s) => s.showStartModal);
   const setShowStartModal = useAppStore((s) => s.setShowStartModal);
   const globalError = useAppStore((s) => s.globalError);
@@ -1026,6 +997,29 @@ function App() {
     return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
   }, []);
 
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (behavior === "auto") {
+      container.scrollTop = container.scrollHeight;
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  }, []);
+
+  const pendingAssistantJumpToBottomRef = useRef(false);
+  const prevSelectedAssistantIdRef = useRef<string | null>(null);
+
+  // When switching assistants, jump straight to the latest message instead of animating.
+  useEffect(() => {
+    const prevAssistantId = prevSelectedAssistantIdRef.current;
+    if (prevAssistantId && selectedAssistantId && prevAssistantId !== selectedAssistantId) {
+      pendingAssistantJumpToBottomRef.current = true;
+      isUserScrolledUpRef.current = false;
+    }
+    prevSelectedAssistantIdRef.current = selectedAssistantId;
+  }, [selectedAssistantId]);
+
   // 监听滚动事件，检测用户是否手动滚动离开底部
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -1039,18 +1033,26 @@ function App() {
     return () => container.removeEventListener("scroll", handleScroll);
   }, [isNearBottom]);
 
+  useEffect(() => {
+    if (!pendingAssistantJumpToBottomRef.current || isLoadingHistory) return;
+    if (messages.length > 0) {
+      scrollToBottom("auto");
+    }
+    pendingAssistantJumpToBottomRef.current = false;
+  }, [messages.length, isLoadingHistory, scrollToBottom]);
+
   // 节流滚动，避免流式输出时频繁触发
   // 只有在用户没有手动滚动离开底部时才自动滚动
   const scrollTimeoutRef = useRef<number | null>(null);
   useEffect(() => {
     // 如果用户手动滚动到上方，不要自动滚动
-    if (isUserScrolledUpRef.current) return;
+    if (isUserScrolledUpRef.current || pendingAssistantJumpToBottomRef.current) return;
 
     if (scrollTimeoutRef.current) {
       window.clearTimeout(scrollTimeoutRef.current);
     }
     scrollTimeoutRef.current = window.setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      scrollToBottom("smooth");
     }, 50); // 50ms 节流
     
     return () => {
@@ -1058,14 +1060,14 @@ function App() {
         window.clearTimeout(scrollTimeoutRef.current);
       }
     };
-  }, [messages, partialMessage]);
+  }, [messages, partialMessage, scrollToBottom]);
 
   // When input area grows, scroll to keep last message above it
   useEffect(() => {
     if (!isUserScrolledUpRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      scrollToBottom("smooth");
     }
-  }, [inputAreaHeight]);
+  }, [inputAreaHeight, scrollToBottom]);
 
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
   const [showChangeWorkspacePicker, setShowChangeWorkspacePicker] = useState(false);
@@ -1183,11 +1185,6 @@ function App() {
   // Must be called before any conditional return to satisfy React hooks rules
   const platform = usePlatform();
   const titleBarH = platform !== "darwin" ? 32 : 0;
-
-  // Show onboarding wizard for new users
-  if (showOnboarding) {
-    return <OnboardingWizard onComplete={handleOnboardingComplete} initialStep={onboardingInitialStep} />;
-  }
 
   // Still loading splash state from user-settings.json
   if (showSplash === null) {
@@ -1485,7 +1482,15 @@ function App() {
           </div>
         </div>
 
-        {!showWorkspacePicker && !showChangeWorkspacePicker && <PromptInput sendEvent={sendEvent} sidebarWidth={effectiveSidebarWidth} rightPanelWidth={showWorkspacePanel ? WORKSPACE_PANEL_WIDTH : 0} onHeightChange={setInputAreaHeight} />}
+        {!showWorkspacePicker && !showChangeWorkspacePicker && (
+          <PromptInput
+            sendEvent={sendEvent}
+            sidebarWidth={effectiveSidebarWidth}
+            rightPanelWidth={showWorkspacePanel ? WORKSPACE_PANEL_WIDTH : 0}
+            contentWidth={chatContentWidth}
+            onHeightChange={setInputAreaHeight}
+          />
+        )}
       </main>
 
       {globalError && (

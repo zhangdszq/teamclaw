@@ -116,7 +116,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
 
   const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === session.assistantId);
   const enhancedEnv = buildEnhancedEnv(assistantConfig);
-  const openaiOverrides = buildOpenAIOverrides(assistantConfig, session.model);
+  const providerOverrides = buildOpenAIOverrides(assistantConfig, session.model);
 
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
@@ -145,8 +145,8 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
         cwd: session.cwd ?? DEFAULT_CWD,
         resume: resumeSessionId,
         abortController,
-        ...(effectiveProvider !== "openai" && { env: enhancedEnv }),
-        ...(effectiveProvider === "openai" && { openaiOverrides }),
+        ...(effectiveProvider === "claude" && { env: enhancedEnv }),
+        ...(effectiveProvider === "openai" && { openaiOverrides: providerOverrides }),
         provider: effectiveProvider,
         mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }) },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {

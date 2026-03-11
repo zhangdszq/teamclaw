@@ -1991,7 +1991,7 @@ class DingtalkConnection {
       mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
-      ...(provider !== "openai" && { env: buildQueryEnv(assistantConfig) }),
+      ...(provider === "claude" && { env: buildQueryEnv(assistantConfig) }),
       ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
     });
 
@@ -2070,7 +2070,7 @@ class DingtalkConnection {
       mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
-      ...(provider !== "openai" && { env: buildQueryEnv(assistantConfig) }),
+      ...(provider === "claude" && { env: buildQueryEnv(assistantConfig) }),
       ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
     });
 

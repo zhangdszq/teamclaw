@@ -18,6 +18,7 @@ export type Session = {
   externalId?: string;
   title: string;
   claudeSessionId?: string;
+  resumeReady?: boolean;
   status: SessionStatus;
   cwd?: string;
   allowedTools?: string;
@@ -41,6 +42,7 @@ export type StoredSession = {
   allowedTools?: string;
   lastPrompt?: string;
   claudeSessionId?: string;
+  resumeReady?: boolean;
   assistantId?: string;
   assistantSkillNames?: string[];
   background?: boolean;

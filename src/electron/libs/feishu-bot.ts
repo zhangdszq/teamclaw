@@ -913,7 +913,7 @@ class FeishuConnection {
       },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
-      ...(provider !== "openai" && {
+      ...(provider === "claude" && {
         env: buildQueryEnv(assistantConfig),
       }),
       ...(provider === "openai" && {

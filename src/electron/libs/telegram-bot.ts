@@ -46,6 +46,8 @@ import {
   markProcessed as markProcessedMsg,
   parseReplySegments,
   extractPartialText,
+  MediaGroupBuffer,
+  type FlushedMediaGroup,
 } from "./bot-base.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -90,6 +92,7 @@ const DRAFT_SUFFIX = "\n\n⏳ ...";
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
+const MEDIA_GROUP_WAIT_MS = 1_500;
 
 // ─── Skill info loader ───────────────────────────────────────────────────────
 
@@ -593,9 +596,17 @@ class TelegramConnection {
   private reconnectAttempts = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private effectiveProxyUrl: string | undefined = undefined;
+  private mediaGroupBuffer: MediaGroupBuffer;
+  private mediaGroupCtxMap = new Map<string, Context>();
 
   constructor(opts: TelegramBotOptions) {
     this.opts = opts;
+    this.mediaGroupBuffer = new MediaGroupBuffer(
+      (groupKey, result) => this.onMediaGroupFlushed(groupKey, result).catch(
+        (err) => console.error("[Telegram] Media group flush error:", err),
+      ),
+      MEDIA_GROUP_WAIT_MS,
+    );
   }
 
   async start(): Promise<void> {
@@ -738,6 +749,8 @@ class TelegramConnection {
   private clearTimers(): void {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+    this.mediaGroupBuffer.clear();
+    this.mediaGroupCtxMap.clear();
   }
 
   private startHeartbeat(): void {
@@ -912,132 +925,228 @@ class TelegramConnection {
       return;
     }
     markProcessed(dedupKey);
+
+    // Access control
+    if (!isAllowed(ctx, this.opts)) return;
+
+    // Auto-populate ownerUserIds on first private message
+    if (!isGroup && !(this.opts.ownerUserIds?.length)) {
+      const senderId = String(msg.from?.id ?? "");
+      if (senderId) {
+        const updated = patchAssistantBotOwnerIds(this.opts.assistantId, "telegram", senderId);
+        if (updated) {
+          this.opts.ownerUserIds = [senderId];
+        }
+      }
+    }
+
+    // Mention gating for groups
+    if (isGroup && this.opts.requireMention !== false) {
+      if (!isMentioned(ctx, this.botUsername)) {
+        const replyToBot = msg.reply_to_message?.from?.username?.toLowerCase() === this.botUsername.toLowerCase();
+        if (!replyToBot) return;
+      }
+    }
+
+    // ── Media group aggregation ──────────────────────────────────────────────
+    const mediaGroupId = (msg as any).media_group_id as string | undefined;
+    if (mediaGroupId && (msg.photo || msg.video || msg.document)) {
+      await this.bufferMediaGroupMessage(ctx, chatId, mediaGroupId);
+      return;
+    }
+
+    // ── Single message processing ────────────────────────────────────────────
     this.inflight.add(dedupKey);
-
     try {
-      // Access control
-      if (!isAllowed(ctx, this.opts)) return;
+      await this.processSingleMessage(ctx, chatId);
+    } finally {
+      this.inflight.delete(dedupKey);
+    }
+  }
 
-      // Auto-populate ownerUserIds on first private message
-      if (!isGroup && !(this.opts.ownerUserIds?.length)) {
-        const senderId = String(msg.from?.id ?? "");
-        if (senderId) {
-          const updated = patchAssistantBotOwnerIds(this.opts.assistantId, "telegram", senderId);
-          if (updated) {
-            this.opts.ownerUserIds = [senderId];
-          }
-        }
-      }
+  // ── Media group buffering ──────────────────────────────────────────────────
 
-      // Mention gating for groups
-      if (isGroup && this.opts.requireMention !== false) {
-        if (!isMentioned(ctx, this.botUsername)) {
-          // Check if it's a reply to the bot
-          const replyToBot = msg.reply_to_message?.from?.username?.toLowerCase() === this.botUsername.toLowerCase();
-          if (!replyToBot) return;
-        }
-      }
+  private async bufferMediaGroupMessage(ctx: Context, chatId: string, mediaGroupId: string): Promise<void> {
+    const msg = ctx.message!;
+    const groupKey = `${this.opts.assistantId}:${chatId}:${mediaGroupId}`;
 
-      // Extract content
-      const extracted = await this.extractContent(ctx);
-      if (!extracted.text) return;
+    const filePath = await this.downloadMediaFromMessage(msg);
 
-      // Built-in commands
-      const cmdText = extracted.text.trim();
-      if (cmdText === "/start") {
-        const userId = msg.from?.id ?? "未知";
-        const username = msg.from?.username ? `@${msg.from.username}` : "无";
-        const skillNames = this.opts.skillNames ?? [];
-        let skillLines = "";
-        if (skillNames.length > 0) {
-          const installed = loadInstalledSkills();
-          const lines = skillNames.map((name) => {
-            const info = installed.get(name);
-            const cmd = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-            return `/${cmd} — ${info?.label ?? name}`;
-          });
-          skillLines = `\n\n<b>可用技能：</b>\n${lines.join("\n")}`;
-        }
-        await ctx.reply(
-          `你好！我是 <b>${escapeHtml(this.opts.assistantName)}</b>，你的 AI 助手。\n\n` +
-          `你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n\n` +
-          `直接发消息给我开始聊天吧！\n\n` +
-          `<b>可用命令：</b>\n` +
-          `/new — 重置对话\n` +
-          `/myid — 查看你的 ID\n` +
-          `/skills — 查看可用技能` +
-          skillLines,
-          { parse_mode: "HTML" },
-        );
-        return;
+    await this.setReaction(chatId, msg.message_id, "👀");
+
+    // Store the first ctx for replying later
+    if (!this.mediaGroupCtxMap.has(groupKey)) {
+      this.mediaGroupCtxMap.set(groupKey, ctx);
+    }
+
+    const count = this.mediaGroupBuffer.add(groupKey, chatId, {
+      filePath,
+      messageId: msg.message_id,
+      caption: msg.caption ?? undefined,
+    });
+
+    console.log(`[Telegram] Media group ${mediaGroupId}: buffered ${count} file(s)`);
+  }
+
+  private async downloadMediaFromMessage(msg: NonNullable<Context["message"]>): Promise<string | null> {
+    if (!this.bot) return null;
+    if (msg.photo && msg.photo.length > 0) {
+      const photo = msg.photo[msg.photo.length - 1];
+      return downloadTelegramFile(this.bot, photo.file_id, this.effectiveProxyUrl);
+    }
+    if (msg.video) {
+      return downloadTelegramFile(this.bot, msg.video.file_id, this.effectiveProxyUrl);
+    }
+    if (msg.document) {
+      return downloadTelegramFile(this.bot, msg.document.file_id, this.effectiveProxyUrl, msg.document.file_name ?? undefined);
+    }
+    return null;
+  }
+
+  private async onMediaGroupFlushed(groupKey: string, result: FlushedMediaGroup): Promise<void> {
+    const firstCtx = this.mediaGroupCtxMap.get(groupKey);
+    this.mediaGroupCtxMap.delete(groupKey);
+    if (!firstCtx) return;
+
+    const { chatId, caption, filePaths, messageIds } = result;
+    const validPaths = filePaths.filter(Boolean);
+    const count = validPaths.length;
+
+    const defaultText = count > 1 ? `用户发来了 ${count} 张图片` : "用户发来了一张图片";
+    let fullText = caption || defaultText;
+
+    if (validPaths.length > 0) {
+      const pathsNote = validPaths.map((p: string) => `文件路径: ${p}`).join("\n");
+      fullText = `${fullText}\n\n${pathsNote}\n⚠️ 这是${count > 1 ? `一组 ${count} 个` : "一个新"}文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`;
+    }
+
+    console.log(`[Telegram] Media group flushed: ${count} file(s), caption="${caption.slice(0, 60)}"`);
+
+    const inflightKey = `tg-group:${groupKey}`;
+    this.inflight.add(inflightKey);
+
+    await firstCtx.replyWithChatAction("typing").catch((e) => console.warn("[Telegram] Failed to send typing action:", e));
+
+    let ok = false;
+    try {
+      const skillContext = caption ? this.resolveSkillCommand(caption.trim()) : null;
+      const finalText = skillContext?.userText
+        ? `${skillContext.userText}\n\n${validPaths.map((p: string) => `文件路径: ${p}`).join("\n")}\n⚠️ 这是${count > 1 ? `一组 ${count} 个` : "一个新"}文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`
+        : fullText;
+
+      await this.generateAndDeliver(firstCtx, finalText, chatId, skillContext?.skillContent, validPaths.length > 0);
+      ok = true;
+    } finally {
+      for (const msgId of messageIds) {
+        await this.setReaction(chatId, msgId, ok ? "👍" : "😢");
       }
-      if (cmdText === "/myid") {
-        const userId = msg.from?.id ?? "未知";
-        const username = msg.from?.username ? `@${msg.from.username}` : "无";
-        await ctx.reply(
-          `你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n群组 ID: <code>${chatId}</code>`,
-          { parse_mode: "HTML" },
-        );
-        return;
-      }
-      if (cmdText === "/new" || cmdText === "/reset") {
-        const historyKey = `${this.opts.assistantId}:${chatId}`;
-        histories.delete(historyKey);
-        botClaudeSessionIds.delete(historyKey);
-        botSessionIds.delete(historyKey);
-        await ctx.reply("对话已重置，开始新的对话吧！");
-        return;
-      }
-      if (cmdText === "/skills") {
-        const skillNames = this.opts.skillNames ?? [];
-        if (skillNames.length === 0) {
-          await ctx.reply("当前助手未配置任何技能。\n可在「助手管理」中添加技能。");
-          return;
-        }
+      this.inflight.delete(inflightKey);
+    }
+  }
+
+  // ── Single (non-album) message processing ──────────────────────────────────
+
+  private async processSingleMessage(ctx: Context, chatId: string): Promise<void> {
+    // Extract content
+    const extracted = await this.extractContent(ctx);
+    if (!extracted.text) return;
+
+    // Built-in commands
+    const cmdText = extracted.text.trim();
+    if (cmdText === "/start") {
+      const msg = ctx.message!;
+      const userId = msg.from?.id ?? "未知";
+      const username = msg.from?.username ? `@${msg.from.username}` : "无";
+      const skillNames = this.opts.skillNames ?? [];
+      let skillLines = "";
+      if (skillNames.length > 0) {
         const installed = loadInstalledSkills();
         const lines = skillNames.map((name) => {
           const info = installed.get(name);
           const cmd = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-          const desc = info?.description ? ` — ${info.description.slice(0, 80)}` : "";
-          return `/${cmd}  <b>${info?.label ?? name}</b>${desc}`;
+          return `/${cmd} — ${info?.label ?? name}`;
         });
-        await ctx.reply(
-          `<b>可用技能（${skillNames.length}）：</b>\n\n${lines.join("\n\n")}\n\n` +
-          `💡 直接发送 <code>/技能名 你的需求</code> 即可调用`,
-          { parse_mode: "HTML" },
-        );
+        skillLines = `\n\n<b>可用技能：</b>\n${lines.join("\n")}`;
+      }
+      await ctx.reply(
+        `你好！我是 <b>${escapeHtml(this.opts.assistantName)}</b>，你的 AI 助手。\n\n` +
+        `你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n\n` +
+        `直接发消息给我开始聊天吧！\n\n` +
+        `<b>可用命令：</b>\n` +
+        `/new — 重置对话\n` +
+        `/myid — 查看你的 ID\n` +
+        `/skills — 查看可用技能` +
+        skillLines,
+        { parse_mode: "HTML" },
+      );
+      return;
+    }
+    if (cmdText === "/myid") {
+      const msg = ctx.message!;
+      const userId = msg.from?.id ?? "未知";
+      const username = msg.from?.username ? `@${msg.from.username}` : "无";
+      await ctx.reply(
+        `你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n群组 ID: <code>${chatId}</code>`,
+        { parse_mode: "HTML" },
+      );
+      return;
+    }
+    if (cmdText === "/new" || cmdText === "/reset") {
+      const historyKey = `${this.opts.assistantId}:${chatId}`;
+      histories.delete(historyKey);
+      botClaudeSessionIds.delete(historyKey);
+      botSessionIds.delete(historyKey);
+      await ctx.reply("对话已重置，开始新的对话吧！");
+      return;
+    }
+    if (cmdText === "/skills") {
+      const skillNames = this.opts.skillNames ?? [];
+      if (skillNames.length === 0) {
+        await ctx.reply("当前助手未配置任何技能。\n可在「助手管理」中添加技能。");
         return;
       }
+      const installed = loadInstalledSkills();
+      const lines = skillNames.map((name) => {
+        const info = installed.get(name);
+        const cmd = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+        const desc = info?.description ? ` — ${info.description.slice(0, 80)}` : "";
+        return `/${cmd}  <b>${info?.label ?? name}</b>${desc}`;
+      });
+      await ctx.reply(
+        `<b>可用技能（${skillNames.length}）：</b>\n\n${lines.join("\n\n")}\n\n` +
+        `💡 直接发送 <code>/技能名 你的需求</code> 即可调用`,
+        { parse_mode: "HTML" },
+      );
+      return;
+    }
 
-      // Skill command detection: /skillname [args]
-      const skillContext = this.resolveSkillCommand(cmdText);
+    // Skill command detection: /skillname [args]
+    const skillContext = this.resolveSkillCommand(cmdText);
 
-      // Append file paths with explicit read instruction
-      let fullText = skillContext?.userText ?? extracted.text;
-      if (extracted.filePaths?.length) {
-        const pathsNote = extracted.filePaths.map((p: string) => `文件路径: ${p}`).join("\n");
-        fullText = `${fullText}\n\n${pathsNote}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`;
-      }
+    // Append file paths with explicit read instruction
+    let fullText = skillContext?.userText ?? extracted.text;
+    if (extracted.filePaths?.length) {
+      const pathsNote = extracted.filePaths.map((p: string) => `文件路径: ${p}`).join("\n");
+      fullText = `${fullText}\n\n${pathsNote}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`;
+    }
 
-      console.log(`[Telegram] Message from ${msg.from?.username ?? msg.from?.id}: ${fullText.slice(0, 100)}`);
+    const msg = ctx.message!;
+    console.log(`[Telegram] Message from ${msg.from?.username ?? msg.from?.id}: ${fullText.slice(0, 100)}`);
 
-      const userMsgId = msg.message_id;
+    const userMsgId = msg.message_id;
 
-      // Ack reaction + typing indicator
-      await this.setReaction(chatId, userMsgId, "👀");
-      await ctx.replyWithChatAction("typing").catch((e) => console.warn("[Telegram] Failed to send typing action:", e));
+    // Ack reaction + typing indicator
+    await this.setReaction(chatId, userMsgId, "👀");
+    await ctx.replyWithChatAction("typing").catch((e) => console.warn("[Telegram] Failed to send typing action:", e));
 
-      // Generate and deliver reply
-      const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
-      let ok = false;
-      try {
-        await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent, hasFiles);
-        ok = true;
-      } finally {
-        await this.setReaction(chatId, userMsgId, ok ? "👍" : "😢");
-      }
+    // Generate and deliver reply
+    const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
+    let ok = false;
+    try {
+      await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent, hasFiles);
+      ok = true;
     } finally {
-      this.inflight.delete(dedupKey);
+      await this.setReaction(chatId, userMsgId, ok ? "👍" : "😢");
     }
   }
 
@@ -1397,7 +1506,7 @@ class TelegramConnection {
         mcpServers: { "vk-shared": sharedMcp, "tg-session": sessionMcp },
         pathToClaudeCodeExecutable: claudeCodePath,
         provider,
-        ...(provider !== "openai" && { env: buildQueryEnv(assistantConfig) }),
+        ...(provider === "claude" && { env: buildQueryEnv(assistantConfig) }),
         ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
       });
 

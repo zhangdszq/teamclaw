@@ -4,7 +4,7 @@
  */
 import { BrowserWindow } from 'electron';
 import type { ClientEvent, ServerEvent } from './types.js';
-import { SessionStore } from './libs/session-store.js';
+import { SessionStore, type Session } from './libs/session-store.js';
 import { runClaude, type RunnerHandle } from './libs/runner.js';
 import { isEmbeddedApiRunning } from './api/server.js';
 import {
@@ -28,6 +28,11 @@ import {
 import { IMAGE_INLINE_RULE } from './libs/bot-base.js';
 import { buildConversationDigest, extractExperienceViaAI } from './libs/experience-extractor.js';
 import { appendDailyMemory, ScopedMemory } from './libs/memory-store.js';
+import {
+  buildResumeFallbackPrompt,
+  isResumeReadyMessage,
+  shouldFallbackFromContinueError,
+} from './libs/session-resume.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -281,11 +286,7 @@ function emit(event: ServerEvent) {
   if (event.type === 'stream.message' && 'payload' in event) {
     const { sessionId, message } = event.payload as { sessionId: string; message: any };
     sessions.queueMessage(sessionId, message);
-
-    if (message?.type === 'system' && message?.subtype === 'init' && message?.session_id) {
-      console.log('[IPC] Captured claudeSessionId:', message.session_id);
-      sessions.updateSession(sessionId, { claudeSessionId: message.session_id });
-    }
+    syncResumeStateFromMessage(sessionId, message);
   }
   if (event.type === 'stream.user_prompt' && 'payload' in event) {
     const { sessionId, prompt } = event.payload as { sessionId: string; prompt: string };
@@ -323,6 +324,117 @@ function applyAssistantContext(prompt: string, skillNames?: string[], persona?: 
 
   if (sections.length === 0) return prompt;
   return `${sections.join("\n\n")}\n\n${prompt}`;
+}
+
+function syncResumeStateFromMessage(sessionId: string, message: unknown): void {
+  const session = sessions.getSession(sessionId);
+  if (!session || !message || typeof message !== 'object') return;
+
+  const payload = message as Record<string, unknown>;
+  if (payload.type === 'system' && payload.subtype === 'init' && typeof payload.session_id === 'string') {
+    console.log('[IPC] Captured claudeSessionId:', payload.session_id);
+    sessions.updateSession(sessionId, { claudeSessionId: payload.session_id, resumeReady: false });
+    return;
+  }
+
+  if (session.claudeSessionId && !session.resumeReady && isResumeReadyMessage(message)) {
+    console.log('[IPC] Session resumeReady:', sessionId);
+    sessions.updateSession(sessionId, { resumeReady: true });
+  }
+}
+
+function toRunnerProvider(provider?: Session['provider']): 'claude' | 'openai' {
+  if (provider === 'openai') return provider;
+  return 'claude';
+}
+
+async function continueWithLocalHistoryFallback(session: Session, prompt: string): Promise<void> {
+  const history = sessions.getSessionHistory(session.id);
+  const fallbackPrompt = buildResumeFallbackPrompt(history?.messages ?? [], prompt);
+  const sessionProvider = session.provider ?? 'claude';
+
+  console.log('[IPC] Falling back to local-history continue:', session.id);
+  sessions.updateSession(session.id, {
+    claudeSessionId: undefined,
+    resumeReady: false,
+    lastPrompt: prompt,
+  });
+
+  if (useEmbeddedApi()) {
+    activeSessions.add(session.id);
+    try {
+      await apiStartSession(
+        {
+          cwd: session.cwd,
+          title: session.title,
+          allowedTools: session.allowedTools,
+          prompt: fallbackPrompt,
+          externalSessionId: session.id,
+          provider: sessionProvider,
+          model: session.model,
+          assistantId: session.assistantId,
+          assistantSkillNames: session.assistantSkillNames,
+        },
+        (apiEvent) => {
+          if ('payload' in apiEvent && 'sessionId' in (apiEvent.payload as any)) {
+            (apiEvent.payload as any).sessionId = session.id;
+          }
+          if (apiEvent.type === 'stream.user_prompt') return;
+          emit(apiEvent);
+        }
+      );
+    } catch (error) {
+      sessions.updateSession(session.id, { status: 'error' });
+      emit({
+        type: 'session.status',
+        payload: {
+          sessionId: session.id,
+          status: 'error',
+          title: session.title,
+          cwd: session.cwd,
+          error: String(error),
+          assistantId: session.assistantId,
+        },
+      });
+    } finally {
+      activeSessions.delete(session.id);
+      const finalStatus = sessions.getSession(session.id)?.status;
+      if (finalStatus === 'running') {
+        sessions.updateSession(session.id, { status: 'idle' });
+        emit({
+          type: 'session.status',
+          payload: { sessionId: session.id, status: 'idle', title: session.title, cwd: session.cwd, assistantId: session.assistantId },
+        });
+      }
+    }
+    return;
+  }
+
+  const effectivePrompt = applyAssistantContext(
+    fallbackPrompt,
+    session.assistantSkillNames,
+    undefined,
+    session.assistantId
+  );
+  runClaude({
+      prompt: effectivePrompt,
+      session,
+      provider: toRunnerProvider(sessionProvider),
+      onEvent: emit,
+      onSessionUpdate: (updates) => {
+        sessions.updateSession(session.id, updates);
+      },
+    })
+      .then((handle) => {
+        runnerHandles.set(session.id, handle);
+      })
+      .catch((error) => {
+        sessions.updateSession(session.id, { status: 'error' });
+        emit({
+          type: 'session.status',
+          payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
+        });
+      });
 }
 
 export async function handleClientEvent(event: ClientEvent) {
@@ -435,15 +547,6 @@ export async function handleClientEvent(event: ClientEvent) {
             if ('payload' in apiEvent && 'sessionId' in (apiEvent.payload as any)) {
               (apiEvent.payload as any).sessionId = session.id;
             }
-            
-            // Capture claudeSessionId/threadId from init message
-            if (apiEvent.type === 'stream.message') {
-              const msg = (apiEvent.payload as any).message;
-              if (msg?.type === 'system' && msg?.subtype === 'init' && msg?.session_id) {
-                sessions.updateSession(session.id, { claudeSessionId: msg.session_id });
-              }
-            }
-            
             emit(apiEvent);
           }
         );
@@ -483,7 +586,7 @@ export async function handleClientEvent(event: ClientEvent) {
           prompt: effectivePrompt,
           session,
           resumeSessionId: session.claudeSessionId,
-          provider: provider === 'openai' ? 'openai' : 'claude',
+          provider: toRunnerProvider(provider),
           onEvent: emit,
           onSessionUpdate: (updates) => {
             sessions.updateSession(session.id, updates);
@@ -515,14 +618,6 @@ export async function handleClientEvent(event: ClientEvent) {
       return;
     }
 
-    if (!session.claudeSessionId) {
-      emit({
-        type: 'runner.error',
-        payload: { sessionId: session.id, message: 'Session has no resume id yet.' },
-      });
-      return;
-    }
-
     sessions.updateSession(session.id, {
       lastPrompt: event.payload.prompt,
     });
@@ -538,11 +633,24 @@ export async function handleClientEvent(event: ClientEvent) {
       },
     });
 
+    emit({
+      type: 'stream.user_prompt',
+      payload: { sessionId: session.id, prompt: event.payload.prompt },
+    });
+
     const sessionProvider = session.provider ?? 'claude';
+    const canResumeRemotely = Boolean(session.claudeSessionId && session.resumeReady);
+
+    if (!canResumeRemotely) {
+      await continueWithLocalHistoryFallback(session, event.payload.prompt);
+      return;
+    }
 
     if (useEmbeddedApi()) {
       // Use sidecar API for both Claude and Codex — supports multi-instance
       activeSessions.add(session.id);
+      let shouldFallback = false;
+      let usedFallback = false;
       try {
         await apiContinueSession(
           session.claudeSessionId!,
@@ -550,6 +658,17 @@ export async function handleClientEvent(event: ClientEvent) {
           (apiEvent) => {
             if ('payload' in apiEvent && 'sessionId' in (apiEvent.payload as any)) {
               (apiEvent.payload as any).sessionId = session.id;
+            }
+            if (apiEvent.type === 'stream.user_prompt') return;
+            if (apiEvent.type === 'stream.message') {
+              const msg = (apiEvent.payload as any).message;
+              if (shouldFallbackFromContinueError(msg)) {
+                shouldFallback = true;
+                return;
+              }
+            }
+            if (shouldFallback && apiEvent.type === 'session.status' && (apiEvent.payload as any).status === 'error') {
+              return;
             }
             emit(apiEvent);
           },
@@ -561,7 +680,16 @@ export async function handleClientEvent(event: ClientEvent) {
             model: session.model,
           }
         );
+        if (shouldFallback) {
+          usedFallback = true;
+          await continueWithLocalHistoryFallback(session, event.payload.prompt);
+        }
       } catch (error) {
+        if (shouldFallbackFromContinueError(error)) {
+          usedFallback = true;
+          await continueWithLocalHistoryFallback(session, event.payload.prompt);
+          return;
+        }
         sessions.updateSession(session.id, { status: 'error' });
         emit({
           type: 'session.status',
@@ -575,29 +703,27 @@ export async function handleClientEvent(event: ClientEvent) {
           },
         });
       } finally {
-        activeSessions.delete(session.id);
-        // Ensure session is never left stuck in "running" state if the SSE stream
-        // ended without the runner emitting a terminal status event.
-        const continueStatus = sessions.getSession(session.id)?.status;
-        if (continueStatus === 'running') {
-          sessions.updateSession(session.id, { status: 'idle' });
-          emit({
-            type: 'session.status',
-            payload: { sessionId: session.id, status: 'idle', title: session.title, cwd: session.cwd, assistantId: session.assistantId },
-          });
+        if (!usedFallback) {
+          activeSessions.delete(session.id);
+          // Ensure session is never left stuck in "running" state if the SSE stream
+          // ended without the runner emitting a terminal status event.
+          const continueStatus = sessions.getSession(session.id)?.status;
+          if (continueStatus === 'running') {
+            sessions.updateSession(session.id, { status: 'idle' });
+            emit({
+              type: 'session.status',
+              payload: { sessionId: session.id, status: 'idle', title: session.title, cwd: session.cwd, assistantId: session.assistantId },
+            });
+          }
         }
       }
     } else {
       // Fallback: direct SDK when sidecar is unavailable
-      emit({
-        type: 'stream.user_prompt',
-        payload: { sessionId: session.id, prompt: event.payload.prompt },
-      });
       runClaude({
           prompt: event.payload.prompt,
           session,
           resumeSessionId: session.claudeSessionId,
-          provider: sessionProvider === 'openai' ? 'openai' : 'claude',
+          provider: toRunnerProvider(sessionProvider),
           onEvent: emit,
           onSessionUpdate: (updates) => {
             sessions.updateSession(session.id, updates);

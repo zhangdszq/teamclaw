@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import {
+  defaultAssistantUsesProvider,
+  maybeSwitchDefaultAssistantToOpenAI,
+} from "../lib/openai-default-assistant";
 
 interface SettingsModalProps {
   open: boolean;
@@ -175,6 +179,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
   const [openaiModel, setOpenaiModel] = useState("");
   const [showOpenaiApiKey, setShowOpenaiApiKey] = useState(false);
+  const [openaiDefaultAssistantReady, setOpenaiDefaultAssistantReady] = useState(false);
 
   // Google auth state
   const [googleLoggedIn, setGoogleLoggedIn] = useState(false);
@@ -214,6 +219,15 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
       setOpenaiExpiresAt(status.expiresAt);
     } catch {
       // Ignore
+    }
+  };
+
+  const loadOpenAIRoutingStatus = async () => {
+    try {
+      const config = await window.electron.getAssistantsConfig();
+      setOpenaiDefaultAssistantReady(defaultAssistantUsesProvider(config, "openai"));
+    } catch {
+      setOpenaiDefaultAssistantReady(false);
     }
   };
 
@@ -297,6 +311,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
         setUserContext(config.userContext ?? "");
       });
       loadOpenAIStatus();
+      loadOpenAIRoutingStatus();
       loadGoogleStatus();
       loadMemoryDir();
       window.electron.getKnowledgeBasePath().then(setKbPath).catch(() => {});
@@ -414,6 +429,10 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
   const showSaveButton = activeSection === "personalize" || activeSection === "models" || activeSection === "proxy" || activeSection === "shortcut" || activeSection === "alert";
 
   const currentNavItem = NAV_ITEMS.find((item) => item.id === activeSection);
+  const providerLabel = (provider: "anthropic" | "openai") => {
+    if (provider === "openai") return "OpenAI";
+    return "Anthropic";
+  };
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -747,19 +766,29 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                               </button>
 
                               <div className="rounded-xl border border-ink-900/8 bg-surface/60 p-4 grid gap-3">
-                                <p className="text-[13px] font-semibold text-ink-800">如何让 Claude Agent 使用 OpenAI API</p>
-                                <ol className="grid gap-2 list-none">
-                                  {[
-                                    { n: "1", text: "前往「助手管理」，新建或编辑一个助手" },
-                                    { n: "2", text: "将 Provider 下拉改为「OpenAI」" },
-                                    { n: "3", text: "保存后，该助手的所有对话将通过本地代理转发至 OpenAI API，使用当前登录的 ChatGPT 令牌" },
-                                  ].map((step) => (
-                                    <li key={step.n} className="flex items-start gap-2.5">
-                                      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-bold text-accent mt-0.5">{step.n}</span>
-                                      <span className="text-[13px] text-ink-500 leading-relaxed">{step.text}</span>
-                                    </li>
-                                  ))}
-                                </ol>
+                                <p className="text-[13px] font-semibold text-ink-800">
+                                  {openaiDefaultAssistantReady ? "当前已可直接开始 Codex 对话" : "如何让 Claude Agent 使用 OpenAI API"}
+                                </p>
+                                {openaiDefaultAssistantReady ? (
+                                  <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3">
+                                    <p className="text-[13px] text-success leading-relaxed">
+                                      当前默认助手已经使用 OpenAI。直接开始一个新对话，请求就会通过本地代理转发到 OpenAI，并使用当前登录的 ChatGPT 令牌。
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <ol className="grid gap-2 list-none">
+                                    {[
+                                      { n: "1", text: "前往「助手管理」，新建或编辑一个助手" },
+                                      { n: "2", text: "将 Provider 下拉改为「OpenAI」" },
+                                      { n: "3", text: "保存后，该助手的所有对话将通过本地代理转发至 OpenAI API，使用当前登录的 ChatGPT 令牌" },
+                                    ].map((step) => (
+                                      <li key={step.n} className="flex items-start gap-2.5">
+                                        <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-bold text-accent mt-0.5">{step.n}</span>
+                                        <span className="text-[13px] text-ink-500 leading-relaxed">{step.text}</span>
+                                      </li>
+                                    ))}
+                                  </ol>
+                                )}
                                 <p className="text-[12px] text-ink-400 pt-2 border-t border-ink-900/5">
                                   无需额外 API Key，请求由本地 HTTP 代理（Anthropic → OpenAI 格式翻译）自动处理。
                                 </p>
@@ -780,7 +809,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                                   </div>
                                 </div>
                                 <p className="text-[13px] text-ink-500 leading-relaxed">
-                                  通过 ChatGPT 账号 OAuth 授权，使用与 OpenAI CLI 相同的认证流程。需要有效的 ChatGPT Plus 或 Pro 订阅。
+                                  通过 ChatGPT 账号 OAuth 授权，使用与 OpenAI CLI 相同的认证流程。需要有效的 ChatGPT Plus 或 Pro 订阅。若当前仍是唯一的内置默认助手且未配置 Claude，登录后会自动切换到 OpenAI。
                                 </p>
                               </div>
 
@@ -794,7 +823,18 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                                     if (result.success) {
                                       setOpenaiLoggedIn(true);
                                       setOpenaiEmail(result.email);
+                                      const [settings, assistantsConfig] = await Promise.all([
+                                        window.electron.getUserSettings(),
+                                        window.electron.getAssistantsConfig(),
+                                      ]);
+                                      const migration = maybeSwitchDefaultAssistantToOpenAI(assistantsConfig, {
+                                        hasClaudeAuth: !!settings.anthropicAuthToken?.trim(),
+                                      });
+                                      if (migration.changed) {
+                                        await window.electron.saveAssistantsConfig(migration.config);
+                                      }
                                       await loadOpenAIStatus();
+                                      setOpenaiDefaultAssistantReady(defaultAssistantUsesProvider(migration.config, "openai"));
                                     } else {
                                       setOpenaiError(result.error || "登录失败");
                                     }
@@ -939,6 +979,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                       )}
                     </div>
                   )}
+
                 </div>
               )}
 
@@ -1082,7 +1123,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                                 usageLogs.map((log) => (
                                   <tr key={log.id} className="border-t border-ink-900/5 hover:bg-ink-900/[0.02] transition-colors">
                                     <td className="px-4 py-2.5 text-ink-500 tabular-nums">{new Date(log.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
-                                    <td className="px-4 py-2.5 text-ink-700">{log.provider === "openai" ? "OpenAI" : "Anthropic"}</td>
+                                    <td className="px-4 py-2.5 text-ink-700">{providerLabel(log.provider)}</td>
                                     <td className="px-4 py-2.5 text-ink-700 font-mono text-[12px] truncate max-w-[180px]">{log.model}</td>
                                     <td className="px-4 py-2.5 text-ink-700 tabular-nums">{fmtTokens(log.inputTokens + log.outputTokens)}</td>
                                     <td className="px-4 py-2.5 text-ink-500 tabular-nums">{(log.latencyMs / 1000).toFixed(1)}s</td>
@@ -1121,7 +1162,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                             ) : (
                               providerStats.map((stat) => (
                                 <tr key={stat.provider} className="border-t border-ink-900/5 hover:bg-ink-900/[0.02] transition-colors">
-                                  <td className="px-4 py-3 text-ink-800 font-medium">{stat.provider === "openai" ? "OpenAI" : "Anthropic"}</td>
+                                  <td className="px-4 py-3 text-ink-800 font-medium">{providerLabel(stat.provider)}</td>
                                   <td className="px-4 py-3 text-ink-700 text-right tabular-nums">{stat.requests.toLocaleString()}</td>
                                   <td className="px-4 py-3 text-ink-700 text-right tabular-nums">{fmtTokens(stat.inputTokens)}</td>
                                   <td className="px-4 py-3 text-ink-700 text-right tabular-nums">{fmtTokens(stat.outputTokens)}</td>

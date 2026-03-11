@@ -424,6 +424,30 @@ describe("openai proxy routing overrides", () => {
     }
   });
 
+  it("prefers global api key over oauth token when both exist", async () => {
+    const upstreamGlobal = await startMockUpstream();
+    try {
+      mockState.settings = {
+        openaiApiKey: "global-key",
+        openaiBaseUrl: upstreamGlobal.baseUrl,
+      };
+      mockState.oauthToken = "oauth-xyz";
+
+      await startProxy();
+      const base = getProxyBaseUrl();
+      if (!base) throw new Error("Proxy base url unavailable");
+
+      const resp = await postAnthropicMessages(base);
+      expect(resp.status).toBe(200);
+      await resp.text();
+
+      expect(upstreamGlobal.requests).toHaveLength(1);
+      expect(upstreamGlobal.requests[0].authorization).toBe("Bearer global-key");
+    } finally {
+      await upstreamGlobal.close();
+    }
+  });
+
   it("uses oauth token when no api key, while still honoring route base/model", async () => {
     const upstreamAssistant = await startMockUpstream();
     try {

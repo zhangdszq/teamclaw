@@ -143,6 +143,7 @@ interface PromptInputProps {
   sendEvent: (event: ClientEvent) => void;
   sidebarWidth: number;
   rightPanelWidth?: number;
+  contentWidth?: number;
   onHeightChange?: (height: number) => void;
 }
 
@@ -494,7 +495,13 @@ export function usePromptActions(
   };
 }
 
-export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHeightChange }: PromptInputProps) {
+export function PromptInput({
+  sendEvent,
+  sidebarWidth,
+  rightPanelWidth = 0,
+  contentWidth = 768,
+  onHeightChange,
+}: PromptInputProps) {
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
 
@@ -1199,13 +1206,13 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
       ref={sectionRef}
       className={
         hasConversationStarted
-          ? "fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface-cream via-surface-cream to-transparent pb-6 px-4 lg:pb-8 pt-12"
+          ? "fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface-cream via-surface-cream to-transparent pb-6 px-8 lg:pb-8 pt-12"
           : "fixed inset-0 flex flex-col items-center justify-center px-4 pointer-events-none"
       }
-      style={{ marginLeft: `${sidebarWidth}px`, marginRight: `${rightPanelWidth}px`, transition: "margin 0.2s ease" }}
+      style={{ left: `${sidebarWidth}px`, right: `${rightPanelWidth}px`, transition: "left 0.2s ease, right 0.2s ease" }}
     >
       {hasConversationStarted ? (
-        <div className="mx-auto w-full max-w-full lg:max-w-3xl relative">
+        <div className="mx-auto max-w-full relative" style={{ width: `min(100%, ${contentWidth}px)` }}>
           {skillsDropdown}
           {toolbarSkillPickerDropdown}
           {inputCard}

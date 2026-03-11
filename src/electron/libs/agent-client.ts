@@ -107,7 +107,7 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
   console.log("[agent-client] runAgent called, provider:", opts.provider ?? "claude", "cwd:", opts.cwd, "resume:", opts.resume ?? "none");
 
   if (opts.provider === "openai") {
-    console.log("[agent-client] OpenAI env: ANTHROPIC_BASE_URL=", env.ANTHROPIC_BASE_URL, "ANTHROPIC_API_KEY=", env.ANTHROPIC_API_KEY ? `${env.ANTHROPIC_API_KEY.slice(0, 12)}...` : "unset");
+    console.log("[agent-client] Proxy env: provider=", opts.provider, "ANTHROPIC_BASE_URL=", env.ANTHROPIC_BASE_URL, "ANTHROPIC_API_KEY=", env.ANTHROPIC_API_KEY ? `${env.ANTHROPIC_API_KEY.slice(0, 12)}...` : "unset");
   }
 
   let iterable: AsyncIterable<SDKMessage>;
@@ -136,7 +136,7 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
   }
 
   if (opts.provider === "openai") {
-    async function* withOpenAICleanup(): AsyncGenerator<SDKMessage> {
+    async function* withProxyCleanup(): AsyncGenerator<SDKMessage> {
       try {
         for await (const message of iterable) {
           yield message;
@@ -145,7 +145,7 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
         cleanup?.();
       }
     }
-    return withOpenAICleanup();
+    return withProxyCleanup();
   }
 
   const startedAt = Date.now();

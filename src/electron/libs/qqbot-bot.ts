@@ -941,7 +941,7 @@ class QQBotConnection {
       systemPrompt: system,
       resume: claudeSessionId,
       cwd,
-      ...(provider !== "openai" && { env }),
+      ...(provider === "claude" && { env }),
       ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,

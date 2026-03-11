@@ -278,3 +278,87 @@ export function extractPartialText(message: Record<string, unknown>): string | n
     .map((b) => b.text!);
   return texts.length > 0 ? texts.join("") : null;
 }
+
+// ─── MediaGroupBuffer ─────────────────────────────────────────────────────────
+
+export interface MediaGroupItem {
+  filePath: string | null;
+  messageId: number;
+  caption?: string;
+}
+
+export interface FlushedMediaGroup {
+  chatId: string;
+  caption: string;
+  filePaths: string[];
+  messageIds: number[];
+}
+
+const DEFAULT_MEDIA_GROUP_WAIT_MS = 1_500;
+
+/**
+ * Aggregates media-group messages (Telegram albums) arriving as separate updates
+ * into a single batch, then fires a callback with all collected file paths.
+ */
+export class MediaGroupBuffer {
+  private groups = new Map<string, {
+    chatId: string;
+    caption: string;
+    filePaths: string[];
+    messageIds: number[];
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private waitMs: number;
+  private onFlush: (groupKey: string, result: FlushedMediaGroup) => void;
+
+  constructor(
+    onFlush: (groupKey: string, result: FlushedMediaGroup) => void,
+    waitMs = DEFAULT_MEDIA_GROUP_WAIT_MS,
+  ) {
+    this.onFlush = onFlush;
+    this.waitMs = waitMs;
+  }
+
+  add(groupKey: string, chatId: string, item: MediaGroupItem): number {
+    const existing = this.groups.get(groupKey);
+    if (existing) {
+      if (item.filePath) existing.filePaths.push(item.filePath);
+      existing.messageIds.push(item.messageId);
+      if (!existing.caption && item.caption) existing.caption = item.caption;
+      clearTimeout(existing.timer);
+      existing.timer = setTimeout(() => this.flush(groupKey), this.waitMs);
+      return existing.filePaths.length;
+    }
+
+    const timer = setTimeout(() => this.flush(groupKey), this.waitMs);
+    this.groups.set(groupKey, {
+      chatId,
+      caption: item.caption ?? "",
+      filePaths: item.filePath ? [item.filePath] : [],
+      messageIds: [item.messageId],
+      timer,
+    });
+    return item.filePath ? 1 : 0;
+  }
+
+  private flush(groupKey: string): void {
+    const entry = this.groups.get(groupKey);
+    if (!entry) return;
+    this.groups.delete(groupKey);
+    this.onFlush(groupKey, {
+      chatId: entry.chatId,
+      caption: entry.caption,
+      filePaths: entry.filePaths,
+      messageIds: entry.messageIds,
+    });
+  }
+
+  clear(): void {
+    for (const entry of this.groups.values()) clearTimeout(entry.timer);
+    this.groups.clear();
+  }
+
+  get size(): number {
+    return this.groups.size;
+  }
+}

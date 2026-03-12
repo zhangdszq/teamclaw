@@ -413,6 +413,21 @@
       "tags": ["skill", "creator", "eval", "benchmark", "development"]
     },
     {
+    {
+      "name": "operate-coding-tools",
+      "label": "操控编程工具",
+      "description": "当用户需要在本地仓库里真实改代码、修 bug、跑编译验证，或直接查询 Cursor 的本地模型、项目、登录状态时，帮助 Claude 在“委派给 Cursor 执行”和“本机直接检查 Cursor 状态”之间做出正确选择。",
+      "category": "development",
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/operate-coding-tools",
+      "tags": [
+        "cursor",
+        "coding",
+        "delegation",
+        "tooling",
+        "repo",
+        "inspection"
+      ]
+    },
       "name": "feishu-card",
       "label": "飞书卡片发送",
       "description": "向飞书（Lark）用户或群组发送富交互卡片，支持 Markdown（代码块、表格）、标题、彩色头部和按钮。",

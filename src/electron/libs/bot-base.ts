@@ -12,6 +12,7 @@
 import { loadUserSettings } from "./user-settings.js";
 import { getEnhancedEnv } from "./util.js";
 import { getRecentConversationBlocks } from "./memory-store.js";
+import type { StreamMessage } from "../types.js";
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
 
@@ -277,6 +278,59 @@ export function extractPartialText(message: Record<string, unknown>): string | n
     .filter((b) => b.type === "text" && b.text)
     .map((b) => b.text!);
   return texts.length > 0 ? texts.join("") : null;
+}
+
+function getAssistantBufferKey(message: StreamMessage): string | null {
+  if ((message as { type?: string }).type !== "assistant") return null;
+  const assistantMessage = message as {
+    uuid?: unknown;
+    message?: { id?: unknown };
+  };
+  if (typeof assistantMessage.uuid === "string" && assistantMessage.uuid) {
+    return `uuid:${assistantMessage.uuid}`;
+  }
+  if (
+    assistantMessage.message
+    && typeof assistantMessage.message.id === "string"
+    && assistantMessage.message.id
+  ) {
+    return `id:${assistantMessage.message.id}`;
+  }
+  return null;
+}
+
+/**
+ * Persist bot stream messages while buffering assistant snapshots so only the
+ * latest complete assistant message is written between tool/result boundaries.
+ */
+export function bufferPersistedBotMessage(
+  message: StreamMessage,
+  bufferedAssistant: StreamMessage | null,
+  persist: (message: StreamMessage) => void,
+): StreamMessage | null {
+  if (message.type === "stream_event") return bufferedAssistant;
+
+  if (message.type === "assistant") {
+    if (bufferedAssistant) {
+      const previousKey = getAssistantBufferKey(bufferedAssistant);
+      const nextKey = getAssistantBufferKey(message);
+      if (previousKey && nextKey && previousKey !== nextKey) {
+        persist(bufferedAssistant);
+      }
+    }
+    return message;
+  }
+
+  if (bufferedAssistant) persist(bufferedAssistant);
+  persist(message);
+  return null;
+}
+
+export function flushBufferedBotAssistantMessage(
+  bufferedAssistant: StreamMessage | null,
+  persist: (message: StreamMessage) => void,
+): void {
+  if (bufferedAssistant) persist(bufferedAssistant);
 }
 
 // ─── MediaGroupBuffer ─────────────────────────────────────────────────────────

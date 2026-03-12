@@ -26,7 +26,9 @@ import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-co
 import { getClaudeCodePath } from "./util.js";
 import { promptOnce, runAgent } from "./agent-client.js";
 import type { SessionStore } from "./session-store.js";
+import type { StreamMessage } from "../types.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
   FILE_PATH_RE,
@@ -38,6 +40,8 @@ import {
   markProcessed as markProcessedMsg,
   parseReplySegments,
   extractPartialText,
+  bufferPersistedBotMessage,
+  flushBufferedBotAssistantMessage,
 } from "./bot-base.js";
 import { savePendingTask, removePendingTask, loadPendingTasks } from "./pending-tasks.js";
 
@@ -1940,9 +1944,9 @@ class DingtalkConnection {
       let cardDelivered = false;
 
       if (provider === "openai") {
-        replyText = await this.runClaudeQuery(system, userText, msg, provider, hasFiles);
+        replyText = await this.runClaudeQuery(system, userText, msg, provider, sessionId, hasFiles);
       } else if (useCard && preCreatedCard) {
-        const result = await this.runClaudeCard(system, userText, msg, preCreatedCard, inflightTask, provider, hasFiles);
+        const result = await this.runClaudeCard(system, userText, msg, preCreatedCard, inflightTask, provider, sessionId, hasFiles);
         if (result === "__CARD_DELIVERED__") {
           cardDelivered = true;
           replyText = inflightTask.accumulatedContent;
@@ -1950,14 +1954,18 @@ class DingtalkConnection {
           replyText = result;
         }
       } else {
-        replyText = await this.runClaudeQuery(system, userText, msg, provider, hasFiles);
+        replyText = await this.runClaudeQuery(system, userText, msg, provider, sessionId, hasFiles);
       }
 
       // Update inflight with final content
       inflightTask.accumulatedContent = replyText || inflightTask.accumulatedContent;
 
       history.push({ role: "assistant", content: inflightTask.accumulatedContent });
-      this.persistReply(sessionId, inflightTask.accumulatedContent, userText);
+      const logUserText = userText.replace(/\n\n文件路径:[\s\S]*$/, "").trim();
+      recordConversation(
+        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${logUserText}\n**${this.opts.assistantName}**: ${inflightTask.accumulatedContent}\n`,
+        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },
+      );
       updateBotSessionTitle(sessionId, history, `[钉钉]`).catch((e) => console.warn("[DingTalk] Failed to update session title:", e));
 
       // Deliver via fallback chain unless card already self-delivered
@@ -1975,6 +1983,7 @@ class DingtalkConnection {
     userText: string,
     msg: DingtalkMessage,
     provider: "claude" | "openai",
+    sessionId: string,
     hasFiles?: boolean,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
@@ -1984,11 +1993,13 @@ class DingtalkConnection {
     const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId);
 
     let finalText = "";
+    let bufferedAssistant: StreamMessage | null = null;
+    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
     const q = await runAgent(userText, {
       systemPrompt: system,
       resume: claudeSessionId,
       cwd: this.opts.defaultCwd ?? homedir(),
-      mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
+      mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp, ...loadMcporterServers() },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
       ...(provider === "claude" && { env: buildQueryEnv(assistantConfig) }),
@@ -1996,11 +2007,18 @@ class DingtalkConnection {
     });
 
     for await (const message of q) {
+      bufferedAssistant = bufferPersistedBotMessage(
+        message as StreamMessage,
+        bufferedAssistant,
+        persistStreamMessage,
+      );
       if (message.type === "result" && message.subtype === "success") {
         finalText = message.result;
         setBotClaudeSessionId(this.opts.assistantId, message.session_id);
       }
     }
+
+    flushBufferedBotAssistantMessage(bufferedAssistant, persistStreamMessage);
 
     return finalText || "抱歉，无法生成回复。";
   }
@@ -2050,6 +2068,7 @@ class DingtalkConnection {
     card: AICardInstance,
     inflightTask: InflightTask,
     provider: "claude" | "openai",
+    sessionId: string,
     hasFiles?: boolean,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
@@ -2061,13 +2080,15 @@ class DingtalkConnection {
     let finalText = "";
     let accum = "";
     let lastUpdate = 0;
+    let bufferedAssistant: StreamMessage | null = null;
     const THROTTLE_MS = 500;
+    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
 
     const q = await runAgent(userText, {
       systemPrompt: system,
       resume: claudeSessionId,
       cwd: this.opts.defaultCwd ?? homedir(),
-      mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
+      mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp, ...loadMcporterServers() },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
       ...(provider === "claude" && { env: buildQueryEnv(assistantConfig) }),
@@ -2101,6 +2122,11 @@ class DingtalkConnection {
       };
 
       for await (const message of q) {
+        bufferedAssistant = bufferPersistedBotMessage(
+          message as StreamMessage,
+          bufferedAssistant,
+          persistStreamMessage,
+        );
         const msgData = message as Record<string, unknown>;
         if (msgData.type === "result" && msgData.subtype === "success") {
           finalText = msgData.result as string;
@@ -2150,6 +2176,8 @@ class DingtalkConnection {
           }
         }
       }
+
+      flushBufferedBotAssistantMessage(bufferedAssistant, persistStreamMessage);
 
       const text = (finalText || accum).trim() || "抱歉，无法生成回复。";
       inflightTask.accumulatedContent = text;
@@ -2362,36 +2390,6 @@ class DingtalkConnection {
       cleanup();
       console.error(`[DingTalk][send_file] proactive API error:`, err instanceof Error ? err.message : err);
       return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-
-  // ── Persist reply ────────────────────────────────────────────────────────────
-
-  private persistReply(sessionId: string, replyText: string, userText?: string): void {
-    sessionStore?.recordMessage(sessionId, {
-      type: "assistant",
-      uuid: randomUUID(),
-      message: {
-        id: randomUUID(),
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: replyText }],
-        model: this.opts.model || "",
-        stop_reason: "end_turn",
-        stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-      },
-    } as unknown as import("../types.js").StreamMessage);
-
-    if (userText) {
-      // Strip file path instructions before logging — temp paths must not appear in
-      // conversation history, otherwise the next file message will inherit stale
-      // "read this file" instructions and Claude will read the wrong file.
-      const logUserText = userText.replace(/\n\n文件路径:[\s\S]*$/, "").trim();
-      recordConversation(
-        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${logUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },
-      );
     }
   }
 

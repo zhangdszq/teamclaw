@@ -22,12 +22,13 @@ import { runAgent } from "./agent-client.js";
 import { z } from "zod";
 import { EventEmitter } from "events";
 import { homedir } from "os";
-import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
+import type { StreamMessage } from "../types.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
   buildOpenAIOverrides,
@@ -37,6 +38,8 @@ import {
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
   parseReplySegments,
+  bufferPersistedBotMessage,
+  flushBufferedBotAssistantMessage,
 } from "./bot-base.js";
 import { loadAssistantsConfig, patchAssistantBotOwnerIds } from "./assistants-config.js";
 
@@ -809,7 +812,7 @@ class FeishuConnection {
     let streamedFinalText = "";
 
     try {
-      const result = await this.runClaudeQuery(system, userText, messageId, chatId, provider, sessionKey, mediaInfo);
+      const result = await this.runClaudeQuery(system, userText, messageId, chatId, provider, sessionKey, sessionId, mediaInfo);
       replyText = result.text;
       streamedFinalText = result.streamedText;
     } catch (err) {
@@ -831,7 +834,10 @@ class FeishuConnection {
     const persistText = isStreamed ? streamedFinalText : replyText;
 
     history.push({ role: "assistant", content: persistText });
-    this.persistReply(sessionId, persistText, userText);
+    recordConversation(
+      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${persistText}\n`,
+      { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
+    );
 
     // Build @-mention prefix for group replies
     const mentionPrefix = forwardMentions?.length
@@ -888,6 +894,7 @@ class FeishuConnection {
     chatId: string,
     provider: "claude" | "openai",
     sessionKey: string,
+    sessionId: string,
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
   ): Promise<{ text: string; streamedText: string }> {
     const sessionMcp = this.createSessionMcp(messageId, chatId);
@@ -910,6 +917,7 @@ class FeishuConnection {
         "vk-shared": sharedMcp,
         "fs-session": sessionMcp,
         "feishu-ecosystem": feishuMcp,
+        ...loadMcporterServers(),
       },
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
@@ -926,9 +934,11 @@ class FeishuConnection {
     let streamingMsgId: string | null = null;
     let accumulatedText = "";
     let lastPatchLen = 0;
+    let bufferedAssistant: StreamMessage | null = null;
     // Minimum characters between patches to avoid rate limiting
     const PATCH_THRESHOLD = 80;
     let patchTimer: ReturnType<typeof setTimeout> | null = null;
+    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
 
     const doPatch = async (text: string, isFinal = false) => {
       if (patchTimer) { clearTimeout(patchTimer); patchTimer = null; }
@@ -953,6 +963,11 @@ class FeishuConnection {
     };
 
     for await (const message of q) {
+      bufferedAssistant = bufferPersistedBotMessage(
+        message as StreamMessage,
+        bufferedAssistant,
+        persistStreamMessage,
+      );
       if (message.type === "stream_event") {
         const evt = (message as any).event;
         if (evt?.type === "content_block_delta" && evt.delta?.type === "text_delta") {
@@ -969,6 +984,8 @@ class FeishuConnection {
         setBotClaudeSessionId(sessionKey, message.session_id);
       }
     }
+
+    flushBufferedBotAssistantMessage(bufferedAssistant, persistStreamMessage);
 
     if (patchTimer) { clearTimeout(patchTimer); patchTimer = null; }
 
@@ -1577,32 +1594,6 @@ class FeishuConnection {
     } catch (err) {
       cleanup();
       return `发送失败: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-
-  // ── Persist reply ─────────────────────────────────────────────────────────────
-
-  private persistReply(sessionId: string, replyText: string, userText?: string): void {
-    sessionStore?.recordMessage(sessionId, {
-      type: "assistant",
-      uuid: randomUUID(),
-      message: {
-        id: randomUUID(),
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: replyText }],
-        model: this.opts.model || "",
-        stop_reason: "end_turn",
-        stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-      },
-    } as unknown as import("../types.js").StreamMessage);
-
-    if (userText) {
-      recordConversation(
-        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
-      );
     }
   }
 

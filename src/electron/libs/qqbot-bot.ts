@@ -12,7 +12,6 @@
 import WebSocket from "ws";
 import { EventEmitter } from "events";
 import { homedir } from "os";
-import { randomUUID } from "crypto";
 import { readFileSync } from "fs";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -21,7 +20,9 @@ import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
+import type { StreamMessage } from "../types.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
   type BaseBotOptions,
@@ -34,6 +35,8 @@ import {
   markProcessed as markProcessedMsg,
   parseReplySegments,
   extractPartialText,
+  bufferPersistedBotMessage,
+  flushBufferedBotAssistantMessage,
 } from "./bot-base.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -867,14 +870,18 @@ class QQBotConnection {
 
     let replyText: string;
     try {
-      replyText = await this.runClaudeQuery(system, userText, chatKey, provider, isGroup, c2cOpenId, groupOpenId, msgId);
+      replyText = await this.runClaudeQuery(system, userText, chatKey, provider, sessionId, isGroup, c2cOpenId, groupOpenId, msgId);
     } catch (err) {
       console.error("[QQBot] AI error:", err);
       replyText = "抱歉，处理您的消息时遇到了问题，请稍后再试。";
     }
 
     history.push({ role: "assistant", content: replyText });
-    this.persistReply(sessionId, replyText, userText);
+    emitSessionUpdate(sessionId, { status: "idle" });
+    recordConversation(
+      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+      { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
+    );
     updateBotSessionTitle(sessionId, history, "[QQ]").catch(() => {});
 
     // Deliver response
@@ -886,6 +893,7 @@ class QQBotConnection {
     userText: string,
     chatKey: string,
     provider: "claude" | "openai",
+    sessionId: string,
     isGroup: boolean,
     c2cOpenId?: string,
     groupOpenId?: string,
@@ -945,11 +953,18 @@ class QQBotConnection {
       ...(provider === "openai" && { openaiOverrides: buildOpenAIOverrides(assistantConfig, this.opts.model) }),
       pathToClaudeCodeExecutable: claudeCodePath,
       provider,
-      mcpServers: { "vk-shared": sharedMcp, "qq-session": sessionMcp },
+      mcpServers: { "vk-shared": sharedMcp, "qq-session": sessionMcp, ...loadMcporterServers() },
     });
 
     let finalText = "";
+    let bufferedAssistant: StreamMessage | null = null;
+    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
     for await (const msg of q) {
+      bufferedAssistant = bufferPersistedBotMessage(
+        msg as StreamMessage,
+        bufferedAssistant,
+        persistStreamMessage,
+      );
       const m = msg as Record<string, unknown>;
       if (m.type === "result" && m.subtype === "success") {
         finalText = m.result as string;
@@ -959,6 +974,8 @@ class QQBotConnection {
         if (partial) finalText = partial;
       }
     }
+
+    flushBufferedBotAssistantMessage(bufferedAssistant, persistStreamMessage);
 
     return finalText || "（无回复）";
   }
@@ -1062,30 +1079,4 @@ class QQBotConnection {
     return { ok: true };
   }
 
-  // ── Persist reply ──────────────────────────────────────────────────────────
-
-  private persistReply(sessionId: string, replyText: string, userText: string): void {
-    sessionStore?.recordMessage(sessionId, {
-      type: "assistant",
-      uuid: randomUUID(),
-      message: {
-        id: randomUUID(),
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: replyText }],
-        model: this.opts.model || "",
-        stop_reason: "end_turn",
-        stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-      },
-    } as unknown as import("../types.js").StreamMessage);
-    emitSessionUpdate(sessionId, { status: "idle" });
-
-    if (userText) {
-      recordConversation(
-        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
-      );
-    }
-  }
 }

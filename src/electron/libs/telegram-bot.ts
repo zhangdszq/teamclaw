@@ -26,13 +26,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
+import type { StreamMessage } from "../types.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
   type BaseBotOptions,
@@ -46,6 +47,8 @@ import {
   markProcessed as markProcessedMsg,
   parseReplySegments,
   extractPartialText,
+  bufferPersistedBotMessage,
+  flushBufferedBotAssistantMessage,
   MediaGroupBuffer,
   type FlushedMediaGroup,
 } from "./bot-base.js";
@@ -1310,7 +1313,7 @@ class TelegramConnection {
     let result: StreamResult;
 
     try {
-      result = await this.runClaudeQuery(system, userText, ctx, chatId, provider, hasFiles);
+      result = await this.runClaudeQuery(system, userText, ctx, chatId, provider, sessionId, hasFiles);
     } catch (err) {
       console.error("[Telegram] AI error:", err);
       result = { text: "抱歉，处理您的消息时遇到了问题，请稍后再试。", draftMessageId: null };
@@ -1318,7 +1321,10 @@ class TelegramConnection {
 
     const replyText = result.text;
     history.push({ role: "assistant", content: replyText });
-    this.persistReply(sessionId, replyText, userText);
+    recordConversation(
+      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+      { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "Telegram" },
+    );
     updateBotSessionTitle(sessionId, history, "[Telegram]").catch((e) => console.warn("[Telegram] Failed to update session title:", e));
 
     // Finalize: deliver the response
@@ -1480,6 +1486,7 @@ class TelegramConnection {
     ctx: Context,
     chatId: string,
     provider: "claude" | "openai",
+    sessionId: string,
     hasFiles?: boolean,
   ): Promise<StreamResult> {
     const sessionKey = `${this.opts.assistantId}:${chatId}`;
@@ -1496,14 +1503,16 @@ class TelegramConnection {
     let accumulatedText = "";
     let draftMessageId: number | null = null;
     let lastEditTime = 0;
+    let bufferedAssistant: StreamMessage | null = null;
     const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId);
+    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
 
     try {
       const q = await runAgent(userText, {
         systemPrompt: system,
         resume: claudeSessionId,
         cwd: this.opts.defaultCwd ?? homedir(),
-        mcpServers: { "vk-shared": sharedMcp, "tg-session": sessionMcp },
+        mcpServers: { "vk-shared": sharedMcp, "tg-session": sessionMcp, ...loadMcporterServers() },
         pathToClaudeCodeExecutable: claudeCodePath,
         provider,
         ...(provider === "claude" && { env: buildQueryEnv(assistantConfig) }),
@@ -1511,6 +1520,11 @@ class TelegramConnection {
       });
 
       for await (const message of q) {
+        bufferedAssistant = bufferPersistedBotMessage(
+          message as StreamMessage,
+          bufferedAssistant,
+          persistStreamMessage,
+        );
         const msg = message as Record<string, unknown>;
         if (msg.type === "result" && msg.subtype === "success") {
           finalText = msg.result as string;
@@ -1528,6 +1542,8 @@ class TelegramConnection {
           }
         }
       }
+
+      flushBufferedBotAssistantMessage(bufferedAssistant, persistStreamMessage);
     } finally {
       clearInterval(typingInterval);
     }
@@ -1616,29 +1632,4 @@ class TelegramConnection {
     }
   }
 
-  // ── Persist reply ────────────────────────────────────────────────────────────
-
-  private persistReply(sessionId: string, replyText: string, userText?: string): void {
-    sessionStore?.recordMessage(sessionId, {
-      type: "assistant",
-      uuid: randomUUID(),
-      message: {
-        id: randomUUID(),
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: replyText }],
-        model: this.opts.model || "",
-        stop_reason: "end_turn",
-        stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-      },
-    } as unknown as import("../types.js").StreamMessage);
-
-    if (userText) {
-      recordConversation(
-        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "Telegram" },
-      );
-    }
-  }
 }

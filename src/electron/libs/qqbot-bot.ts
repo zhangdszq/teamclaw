@@ -38,6 +38,10 @@ import {
   bufferPersistedBotMessage,
   flushBufferedBotAssistantMessage,
 } from "./bot-base.js";
+import {
+  buildActivatedSkillSection,
+  resolveSkillCommand,
+} from "./skill-context.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -392,7 +396,7 @@ export function getAnyConnectedQQBotAssistantId(): string | null {
 
 export function updateQQBotConfig(
   assistantId: string,
-  updates: Partial<Pick<QQBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd">>,
+  updates: Partial<Pick<QQBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd" | "skillNames">>,
 ): void {
   const conn = pool.get(assistantId);
   if (!conn) return;
@@ -441,6 +445,7 @@ function getBotSession(
   provider: "claude" | "openai",
   model: string | undefined,
   cwd: string | undefined,
+  skillNames?: string[],
 ): string {
   const key = `${assistantId}:${chatId}`;
   if (!sessionStore) throw new Error("[QQBot] SessionStore not injected");
@@ -449,6 +454,7 @@ function getBotSession(
   const session = sessionStore.createSession({
     title: `[QQ] ${assistantName}`,
     assistantId,
+    assistantSkillNames: skillNames ?? [],
     provider,
     model,
     cwd,
@@ -838,6 +844,8 @@ class QQBotConnection {
     groupOpenId?: string,
     msgId?: string,
   ): Promise<void> {
+    const skillContext = resolveSkillCommand(userText, this.opts.skillNames);
+    const effectiveUserText = skillContext?.userText ?? userText;
     const historyKey = `${this.opts.assistantId}:${chatKey}`;
     const history = getHistory(historyKey);
     const provider = this.opts.provider ?? "claude";
@@ -849,14 +857,19 @@ class QQBotConnection {
       provider,
       this.opts.model,
       this.opts.defaultCwd,
+      this.opts.skillNames,
     );
 
-    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
+    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: effectiveUserText });
 
-    history.push({ role: "user", content: userText });
+    history.push({ role: "user", content: effectiveUserText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
+    const memoryContext = await buildSmartMemoryContext(
+      effectiveUserText,
+      this.opts.assistantId,
+      this.opts.defaultCwd,
+    );
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const nowStr = new Date().toLocaleString("zh-CN", { timeZone: tz, hour12: false });
@@ -866,11 +879,12 @@ class QQBotConnection {
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;
 
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, historySection);
+    const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
+    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection);
 
     let replyText: string;
     try {
-      replyText = await this.runClaudeQuery(system, userText, chatKey, provider, sessionId, isGroup, c2cOpenId, groupOpenId, msgId);
+      replyText = await this.runClaudeQuery(system, effectiveUserText, chatKey, provider, sessionId, isGroup, c2cOpenId, groupOpenId, msgId);
     } catch (err) {
       console.error("[QQBot] AI error:", err);
       replyText = "抱歉，处理您的消息时遇到了问题，请稍后再试。";
@@ -879,7 +893,7 @@ class QQBotConnection {
     history.push({ role: "assistant", content: replyText });
     emitSessionUpdate(sessionId, { status: "idle" });
     recordConversation(
-      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
       { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
     );
     updateBotSessionTitle(sessionId, history, "[QQ]").catch(() => {});

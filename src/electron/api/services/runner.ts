@@ -1,6 +1,7 @@
 import type { SDKMessage, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { promptOnce, runAgent, type AgentProvider } from '../../libs/agent-client.js';
 import { createSharedMcpServer } from '../../libs/shared-mcp.js';
+import { loadMcporterServers } from '../../libs/mcporter-loader.js';
 import type { Session } from '../types.js';
 import { recordMessage, updateSession, addPendingPermission } from './session.js';
 import { buildSmartMemoryContext } from '../../libs/memory-store.js';
@@ -235,7 +236,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
       ...(effectiveProvider === 'openai' && { openaiOverrides }),
       pathToClaudeCodeExecutable: claudeCodePath,
       provider: effectiveProvider,
-      mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd }) },
+      mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd }), ...loadMcporterServers() },
       canUseTool: async (toolName, input, { signal, toolUseID }) => {
         if (toolName === 'AskUserQuestion') {
           const toolUseId = toolUseID;

@@ -2,22 +2,118 @@
   "version": "1.0",
   "updatedAt": "2026-03-03",
   "categories": [
-    { "id": "teaching",           "label": "教研专用",       "icon": "graduation","color": "text-emerald-600 bg-emerald-500/10","order": 1  },
-    { "id": "picturebook",        "label": "绘本馆专用",     "icon": "book-open", "color": "text-rose-500 bg-rose-500/10",      "order": 2  },
-    { "id": "product-management", "label": "产品经理专用", "icon": "target",     "color": "text-violet-600 bg-violet-500/10",  "order": 3  },
-    { "id": "operations",         "label": "运营专用",     "icon": "trending",   "color": "text-orange-600 bg-orange-500/10",  "order": 4  },
-    { "id": "video",              "label": "视频处理",       "icon": "video",     "color": "text-red-500 bg-red-500/10",        "order": 4  },
-    { "id": "image",              "label": "图像生成",       "icon": "image",     "color": "text-orange-500 bg-orange-500/10",  "order": 5  },
-    { "id": "writing",            "label": "写作内容",       "icon": "pen",       "color": "text-purple-500 bg-purple-500/10",  "order": 6  },
-    { "id": "social",             "label": "社交媒体",       "icon": "share",     "color": "text-indigo-500 bg-indigo-500/10",  "order": 7  },
-    { "id": "document",           "label": "文档工具",       "icon": "file",      "color": "text-teal-500 bg-teal-500/10",      "order": 8  },
-    { "id": "infographic",        "label": "信息图表",       "icon": "layout",    "color": "text-amber-500 bg-amber-500/10",    "order": 9  },
-    { "id": "development",        "label": "开发工具",       "icon": "code",      "color": "text-blue-500 bg-blue-500/10",      "order": 10 },
-    { "id": "productivity",       "label": "效率工具",       "icon": "zap",       "color": "text-yellow-500 bg-yellow-500/10",  "order": 11 },
-    { "id": "analysis",           "label": "数据分析",       "icon": "chart",     "color": "text-green-500 bg-green-500/10",    "order": 12 },
-    { "id": "design",             "label": "设计创意",       "icon": "palette",   "color": "text-pink-500 bg-pink-500/10",      "order": 13 },
-    { "id": "research",           "label": "研究调查",       "icon": "search",    "color": "text-cyan-500 bg-cyan-500/10",      "order": 14 },
-    { "id": "other",              "label": "其他",           "icon": "box",       "color": "text-gray-500 bg-gray-500/10",      "order": 99 }
+    {
+      "id": "teaching",
+      "label": "教研专用",
+      "icon": "graduation",
+      "color": "text-emerald-600 bg-emerald-500/10",
+      "order": 1
+    },
+    {
+      "id": "picturebook",
+      "label": "绘本馆专用",
+      "icon": "book-open",
+      "color": "text-rose-500 bg-rose-500/10",
+      "order": 2
+    },
+    {
+      "id": "product-management",
+      "label": "产品经理专用",
+      "icon": "target",
+      "color": "text-violet-600 bg-violet-500/10",
+      "order": 3
+    },
+    {
+      "id": "operations",
+      "label": "运营专用",
+      "icon": "trending",
+      "color": "text-orange-600 bg-orange-500/10",
+      "order": 4
+    },
+    {
+      "id": "video",
+      "label": "视频处理",
+      "icon": "video",
+      "color": "text-red-500 bg-red-500/10",
+      "order": 4
+    },
+    {
+      "id": "image",
+      "label": "图像生成",
+      "icon": "image",
+      "color": "text-orange-500 bg-orange-500/10",
+      "order": 5
+    },
+    {
+      "id": "writing",
+      "label": "写作内容",
+      "icon": "pen",
+      "color": "text-purple-500 bg-purple-500/10",
+      "order": 6
+    },
+    {
+      "id": "social",
+      "label": "社交媒体",
+      "icon": "share",
+      "color": "text-indigo-500 bg-indigo-500/10",
+      "order": 7
+    },
+    {
+      "id": "document",
+      "label": "文档工具",
+      "icon": "file",
+      "color": "text-teal-500 bg-teal-500/10",
+      "order": 8
+    },
+    {
+      "id": "infographic",
+      "label": "信息图表",
+      "icon": "layout",
+      "color": "text-amber-500 bg-amber-500/10",
+      "order": 9
+    },
+    {
+      "id": "development",
+      "label": "开发工具",
+      "icon": "code",
+      "color": "text-blue-500 bg-blue-500/10",
+      "order": 10
+    },
+    {
+      "id": "productivity",
+      "label": "效率工具",
+      "icon": "zap",
+      "color": "text-yellow-500 bg-yellow-500/10",
+      "order": 11
+    },
+    {
+      "id": "analysis",
+      "label": "数据分析",
+      "icon": "chart",
+      "color": "text-green-500 bg-green-500/10",
+      "order": 12
+    },
+    {
+      "id": "design",
+      "label": "设计创意",
+      "icon": "palette",
+      "color": "text-pink-500 bg-pink-500/10",
+      "order": 13
+    },
+    {
+      "id": "research",
+      "label": "研究调查",
+      "icon": "search",
+      "color": "text-cyan-500 bg-cyan-500/10",
+      "order": 14
+    },
+    {
+      "id": "other",
+      "label": "其他",
+      "icon": "box",
+      "color": "text-gray-500 bg-gray-500/10",
+      "order": 99
+    }
   ],
   "skills": [
     {
@@ -25,8 +121,15 @@
       "label": "Agent 平台接入配置",
       "description": "一键安装并配置 12+ 平台的上游工具，包括 Twitter/X、Reddit、YouTube、GitHub、Bilibili、小红书、抖音、LinkedIn、Boss直聘、RSS 及任意网页。配置完成后可直接在对话中调用，无需中间层封装。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["agent", "platform", "integration", "twitter", "youtube", "reach"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/agent-reach",
+      "tags": [
+        "agent",
+        "platform",
+        "integration",
+        "twitter",
+        "youtube",
+        "reach"
+      ]
     },
     {
       "name": "smb-file-browser",
@@ -34,39 +137,70 @@
       "description": "连接企业 SMB 文件服务器，浏览和下载教研课件。自动处理 Clash Verge fake-ip DNS 劫持、跨平台挂载（macOS/Windows），首次扫描建立本地索引后搜索秒出，支持大文件断点续传和带宽限制。",
       "category": "teaching",
       "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/smb-file-browser",
-      "tags": ["smb", "file-server", "teaching", "courseware", "download"]
+      "tags": [
+        "smb",
+        "file-server",
+        "teaching",
+        "courseware",
+        "download"
+      ]
     },
     {
       "name": "curriculum-outline-editor",
       "label": "儿童英语课程大纲审校",
       "description": "专为 4-6 岁中国儿童英语课程设计的大纲审校工具。基于 CEFR（Pre-A1/A1）、CCSS 和《3-6 岁儿童学习与发展指南》，修正不自然表达、强化词汇复现原则，输出修改后的 Excel 文件及中文改动说明。",
       "category": "teaching",
-      "installPath": "",
-      "tags": ["teaching", "curriculum", "english", "children", "kindergarten"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/curriculum-outline-editor",
+      "tags": [
+        "teaching",
+        "curriculum",
+        "english",
+        "children",
+        "kindergarten"
+      ]
     },
     {
       "name": "minimax",
       "label": "MiniMax API 工具集",
       "description": "通过 curl 直接调用 MiniMax API，支持 AI 对话补全、文字转语音和 AI 视频生成三大功能。凭据从 ~/.vk-cowork/.env 读取，无需额外配置，适合在终端快速测试和批量调用 MiniMax 能力。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["minimax", "tts", "video", "llm", "api", "curl"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/minimax",
+      "tags": [
+        "minimax",
+        "tts",
+        "video",
+        "llm",
+        "api",
+        "curl"
+      ]
     },
     {
       "name": "teaching-outline-writer",
       "label": "教学大纲编写",
       "description": "根据课程目标、学段和知识点，智能生成结构化教学大纲。支持按单元、课时拆解，自动生成教学目标、重难点分析、教学活动设计和评估方式，适用于课程规划与备课场景。",
       "category": "teaching",
-      "installPath": "",
-      "tags": ["teaching", "outline", "curriculum", "education", "lesson-plan"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/teaching-outline-writer",
+      "tags": [
+        "teaching",
+        "outline",
+        "curriculum",
+        "education",
+        "lesson-plan"
+      ]
     },
     {
       "name": "picturebook-planner",
       "label": "绘本规划助手",
       "description": "帮助规划绘本馆的选书策略、主题书单、阅读活动和馆藏建设方案。根据读者年龄段、主题方向和馆藏现状，生成系统化的绘本采购计划、活动方案和阅读推广内容。",
       "category": "picturebook",
-      "installPath": "",
-      "tags": ["picturebook", "library", "reading", "planning", "children"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/picturebook-planner",
+      "tags": [
+        "picturebook",
+        "library",
+        "reading",
+        "planning",
+        "children"
+      ]
     },
     {
       "name": "youtube-clipper",
@@ -74,111 +208,187 @@
       "description": "YouTube 视频智能剪辑工具。下载视频和字幕，AI 分析生成精细章节（几分钟级别），用户选择片段后自动剪辑、翻译字幕为中英双语、烧录字幕到视频，并生成总结文案。",
       "category": "video",
       "installPath": "https://github.com/op7418/Youtube-clipper-skill",
-      "tags": ["video", "youtube", "subtitle", "clip"]
+      "tags": [
+        "video",
+        "youtube",
+        "subtitle",
+        "clip"
+      ]
     },
     {
       "name": "remotion-video",
       "label": "Remotion 视频创建",
       "description": "使用 Remotion 框架以编程方式创建视频。Remotion 让你用 React 组件定义视频内容，支持动画、字幕、音乐可视化、3D 视频、教程讲解视频等。",
       "category": "video",
-      "installPath": "",
-      "tags": ["video", "remotion", "react", "animation"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/remotion-video",
+      "tags": [
+        "video",
+        "remotion",
+        "react",
+        "animation"
+      ]
     },
     {
       "name": "ffmpeg-usage",
       "label": "FFmpeg 音视频处理",
       "description": "基于 FFmpeg 和第三方 API 的音视频处理，包括格式转换、视频拼接、合并、尺寸调整、压缩、GIF 制作、音频提取、字幕处理、社交平台优化、文案提取、文案转录等。",
       "category": "video",
-      "installPath": "",
-      "tags": ["video", "audio", "ffmpeg", "convert", "compress"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/ffmpeg-usage",
+      "tags": [
+        "video",
+        "audio",
+        "ffmpeg",
+        "convert",
+        "compress"
+      ]
     },
     {
       "name": "baoyu-image-gen",
       "label": "AI 图像生成",
       "description": "基于 OpenAI、Google 和 DashScope API 的 AI 图像生成工具，支持文生图、参考图输入和自定义宽高比，默认按序生成，可按需切换为并行批量生成。",
       "category": "image",
-      "installPath": "",
-      "tags": ["image", "ai", "generation", "openai", "google"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-image-gen",
+      "tags": [
+        "image",
+        "ai",
+        "generation",
+        "openai",
+        "google"
+      ]
     },
     {
       "name": "gemini-image",
       "label": "Gemini 图像生成",
       "description": "当用户想要生成图片、画图、绘画、创建图像、AI 作画时使用此 Skill。支持文生图和图生图。",
       "category": "image",
-      "installPath": "",
-      "tags": ["image", "gemini", "generation", "ai"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/gemini-image",
+      "tags": [
+        "image",
+        "gemini",
+        "generation",
+        "ai"
+      ]
     },
     {
       "name": "baoyu-cover-image",
       "label": "文章封面生成",
       "description": "生成文章封面图，支持 5 个维度（类型、配色、渲染风格、文字、情绪）的组合，涵盖 9 种色彩方案和 6 种渲染风格，支持电影宽屏 (2.35:1)、16:9 和正方形 (1:1) 比例。",
       "category": "image",
-      "installPath": "",
-      "tags": ["image", "cover", "article", "design"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-cover-image",
+      "tags": [
+        "image",
+        "cover",
+        "article",
+        "design"
+      ]
     },
     {
       "name": "baoyu-compress-image",
       "label": "图片压缩优化",
       "description": "将图片压缩为 WebP（默认）或 PNG 格式，自动选择最佳工具。当用户需要压缩图片、优化图片大小、转换为 WebP 时使用。",
       "category": "image",
-      "installPath": "",
-      "tags": ["image", "compress", "webp", "optimize"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-compress-image",
+      "tags": [
+        "image",
+        "compress",
+        "webp",
+        "optimize"
+      ]
     },
     {
       "name": "imagemagick-conversion",
       "label": "ImageMagick 图像处理",
       "description": "使用 ImageMagick 转换和处理图像，支持格式转换、调整大小、批量处理、质量调整和图像变换。",
       "category": "image",
-      "installPath": "",
-      "tags": ["image", "imagemagick", "convert", "resize", "batch"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/imagemagick-conversion",
+      "tags": [
+        "image",
+        "imagemagick",
+        "convert",
+        "resize",
+        "batch"
+      ]
     },
     {
       "name": "algorithmic-art",
       "label": "算法艺术生成",
       "description": "使用 p5.js 创建具有随机种子和交互参数探索的算法艺术，支持流场、粒子系统等生成艺术。创建原创算法艺术而非复制现有艺术家的作品。",
       "category": "image",
-      "installPath": "",
-      "tags": ["art", "algorithm", "p5js", "generative", "creative"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/algorithmic-art",
+      "tags": [
+        "art",
+        "algorithm",
+        "p5js",
+        "generative",
+        "creative"
+      ]
     },
     {
       "name": "canvas-design",
       "label": "Canvas 视觉设计",
       "description": "使用设计哲学在 .png 和 .pdf 文档中创建精美的视觉艺术，适用于创建海报、艺术品、设计或其他静态内容，创建原创视觉设计。",
       "category": "image",
-      "installPath": "",
-      "tags": ["design", "canvas", "poster", "art", "pdf"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/canvas-design",
+      "tags": [
+        "design",
+        "canvas",
+        "poster",
+        "art",
+        "pdf"
+      ]
     },
     {
       "name": "slack-gif-creator",
       "label": "Slack GIF 动图制作",
       "description": "创建针对 Slack 优化的动态 GIF，提供约束条件、验证工具和动画概念。当用户需要为 Slack 创建动态 GIF 时使用。",
       "category": "image",
-      "installPath": "",
-      "tags": ["gif", "slack", "animation", "image"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/slack-gif-creator",
+      "tags": [
+        "gif",
+        "slack",
+        "animation",
+        "image"
+      ]
     },
     {
       "name": "baoyu-danger-gemini-web",
       "label": "Gemini Web 生成",
       "description": "通过逆向工程的 Gemini Web API 生成图像和文本，支持文本生成、从提示生成图像、参考图像视觉输入和多轮对话。",
       "category": "image",
-      "installPath": "",
-      "tags": ["gemini", "image", "text", "generation", "api"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-danger-gemini-web",
+      "tags": [
+        "gemini",
+        "image",
+        "text",
+        "generation",
+        "api"
+      ]
     },
     {
       "name": "baoyu-format-markdown",
       "label": "Markdown 格式化",
       "description": "格式化纯文本或 Markdown 文件，添加前置信息、标题、摘要、标题层级、粗体、列表和代码块。输出到 {filename}-formatted.md。",
       "category": "writing",
-      "installPath": "",
-      "tags": ["markdown", "format", "writing", "article"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-format-markdown",
+      "tags": [
+        "markdown",
+        "format",
+        "writing",
+        "article"
+      ]
     },
     {
       "name": "baoyu-article-illustrator",
       "label": "文章配图生成",
       "description": "分析文章结构，识别需要视觉辅助的位置，使用类型×风格二维方法生成插图。当用户需要为文章配图、添加图片时使用。",
       "category": "writing",
-      "installPath": "",
-      "tags": ["illustration", "article", "image", "writing"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-article-illustrator",
+      "tags": [
+        "illustration",
+        "article",
+        "image",
+        "writing"
+      ]
     },
     {
       "name": "humanizer-zh",
@@ -186,223 +396,376 @@
       "description": "去除文本中的 AI 生成痕迹，使其听起来更自然、更像人类书写。检测并修复夸大的象征意义、宣传性语言、AI 词汇、破折号过度使用等模式。",
       "category": "writing",
       "installPath": "https://github.com/op7418/Humanizer-zh",
-      "tags": ["humanize", "writing", "ai-detection", "chinese"]
+      "tags": [
+        "humanize",
+        "writing",
+        "ai-detection",
+        "chinese"
+      ]
     },
     {
       "name": "doc-coauthoring",
       "label": "文档协作撰写",
       "description": "引导用户通过结构化工作流程共同撰写文档，帮助高效传递上下文、通过迭代完善内容并验证文档效果，适用于撰写技术文档、提案、规范等。",
       "category": "writing",
-      "installPath": "",
-      "tags": ["document", "writing", "coauthoring", "workflow"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/doc-coauthoring",
+      "tags": [
+        "document",
+        "writing",
+        "coauthoring",
+        "workflow"
+      ]
     },
     {
       "name": "internal-comms",
       "label": "内部沟通写作",
       "description": "帮助撰写各种内部沟通材料，包括状态报告、领导层更新、公司新闻通讯、FAQ、事故报告、项目更新等，使用公司偏好的格式。",
       "category": "writing",
-      "installPath": "",
-      "tags": ["communication", "writing", "internal", "report"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/internal-comms",
+      "tags": [
+        "communication",
+        "writing",
+        "internal",
+        "report"
+      ]
     },
     {
       "name": "baoyu-comic",
       "label": "知识漫画创作",
       "description": "知识漫画创作工具，支持多种艺术风格和基调，创建包含详细面板布局和顺序图像生成的原创教育漫画。",
       "category": "writing",
-      "installPath": "",
-      "tags": ["comic", "illustration", "education", "creative"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-comic",
+      "tags": [
+        "comic",
+        "illustration",
+        "education",
+        "creative"
+      ]
     },
     {
       "name": "baoyu-post-to-wechat",
       "label": "发布微信公众号",
       "description": "通过 API 或 Chrome CDP 将内容发布到微信公众号，支持文章发布（HTML、Markdown 或纯文本输入）和图文发布（含多张图片）。",
       "category": "social",
-      "installPath": "",
-      "tags": ["wechat", "social", "publish", "article"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-post-to-wechat",
+      "tags": [
+        "wechat",
+        "social",
+        "publish",
+        "article"
+      ]
     },
     {
       "name": "baoyu-post-to-x",
       "label": "发布到 X/Twitter",
       "description": "将内容和文章发布到 X (Twitter)，支持带图片/视频的常规帖子和 X Articles（长文 Markdown）。使用真实 Chrome 和 CDP 绕过反自动化检测。",
       "category": "social",
-      "installPath": "",
-      "tags": ["twitter", "x", "social", "publish", "tweet"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-post-to-x",
+      "tags": [
+        "twitter",
+        "x",
+        "social",
+        "publish",
+        "tweet"
+      ]
     },
     {
       "name": "baoyu-xhs-images",
       "label": "小红书图片生成",
       "description": "生成针对小红书优化的信息图系列，支持 10 种视觉风格和 8 种布局，将内容分解为 1-10 张卡通风格图片，适合中文社交平台。",
       "category": "social",
-      "installPath": "",
-      "tags": ["xiaohongshu", "rednote", "social", "image", "infographic"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-xhs-images",
+      "tags": [
+        "xiaohongshu",
+        "rednote",
+        "social",
+        "image",
+        "infographic"
+      ]
     },
     {
       "name": "baoyu-danger-x-to-markdown",
       "label": "X 推文转 Markdown",
       "description": "将 X (Twitter) 推文和文章转换为带有 YAML 前置信息的 Markdown 格式，使用逆向工程 API，需要用户同意。",
       "category": "social",
-      "installPath": "",
-      "tags": ["twitter", "x", "markdown", "convert", "save"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-danger-x-to-markdown",
+      "tags": [
+        "twitter",
+        "x",
+        "markdown",
+        "convert",
+        "save"
+      ]
     },
     {
       "name": "baoyu-markdown-to-html",
       "label": "Markdown 转 HTML",
       "description": "将 Markdown 转换为带主题样式的 HTML，兼容微信公众号。支持代码高亮、数学公式、PlantUML、脚注、提示框和信息图。",
       "category": "document",
-      "installPath": "",
-      "tags": ["markdown", "html", "convert", "wechat", "theme"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-markdown-to-html",
+      "tags": [
+        "markdown",
+        "html",
+        "convert",
+        "wechat",
+        "theme"
+      ]
     },
     {
       "name": "pdf",
       "label": "PDF 文件处理",
       "description": "处理 PDF 文件的所有操作：读取/提取文本和表格、合并/拆分 PDF、旋转页面、添加水印、创建新 PDF、填写表单、加密/解密、提取图像和 OCR 扫描件。",
       "category": "document",
-      "installPath": "",
-      "tags": ["pdf", "document", "ocr", "extract", "merge"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/pdf",
+      "tags": [
+        "pdf",
+        "document",
+        "ocr",
+        "extract",
+        "merge"
+      ]
     },
     {
       "name": "docx",
       "label": "Word 文档处理",
       "description": "创建、读取、编辑或操作 Word 文档（.docx 文件），包括目录、标题、页码、信头等格式化内容，以及提取、重组内容，处理跟踪修订或注释。",
       "category": "document",
-      "installPath": "",
-      "tags": ["word", "docx", "document", "office"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/docx",
+      "tags": [
+        "word",
+        "docx",
+        "document",
+        "office"
+      ]
     },
     {
       "name": "pptx",
       "label": "PPT 演示文稿处理",
       "description": "处理 .pptx 文件的所有操作：创建演示文稿、解析/提取内容、编辑修改、合并/拆分幻灯片、处理模板、版式、备注等。",
       "category": "document",
-      "installPath": "",
-      "tags": ["pptx", "powerpoint", "presentation", "slides"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/pptx",
+      "tags": [
+        "pptx",
+        "powerpoint",
+        "presentation",
+        "slides"
+      ]
     },
     {
       "name": "xlsx",
       "label": "Excel 表格处理",
       "description": "处理电子表格文件（.xlsx、.xlsm、.csv、.tsv）：打开、读取、编辑表格，计算公式，格式化，创建图表，清理数据等。",
       "category": "document",
-      "installPath": "",
-      "tags": ["excel", "xlsx", "csv", "spreadsheet", "data"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/xlsx",
+      "tags": [
+        "excel",
+        "xlsx",
+        "csv",
+        "spreadsheet",
+        "data"
+      ]
     },
     {
       "name": "ppocrv5",
       "label": "图片文字识别 OCR",
       "description": "从图片、PDF 或文档中提取文本，支持 URL 和本地文件，具有自适应质量模式，返回包含识别文本、置信度分数和质量指标的结构化 JSON。",
       "category": "document",
-      "installPath": "",
-      "tags": ["ocr", "text", "extract", "image", "pdf"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/ppocrv5",
+      "tags": [
+        "ocr",
+        "text",
+        "extract",
+        "image",
+        "pdf"
+      ]
     },
     {
       "name": "deepl",
       "label": "DeepL 翻译",
       "description": "通过 DeepL API 翻译文本、文档和 XLIFF 文件，支持 /deepl translate、/deepl file 和 /deepl xliff 命令。",
       "category": "document",
-      "installPath": "",
-      "tags": ["translate", "deepl", "language", "xliff"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/deepl",
+      "tags": [
+        "translate",
+        "deepl",
+        "language",
+        "xliff"
+      ]
     },
     {
       "name": "baoyu-slide-deck",
       "label": "演示幻灯片生成",
       "description": "从内容生成专业幻灯片图像，创建包含样式说明的大纲，然后生成单独的幻灯片图像。当用户需要创建幻灯片、演示文稿或 PPT 时使用。",
       "category": "document",
-      "installPath": "",
-      "tags": ["slides", "presentation", "ppt", "generate"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-slide-deck",
+      "tags": [
+        "slides",
+        "presentation",
+        "ppt",
+        "generate"
+      ]
     },
     {
       "name": "baoyu-infographic",
       "label": "专业信息图表",
       "description": "生成专业信息图，支持 20 种布局类型和 17 种视觉风格，分析内容后推荐布局×风格组合，生成可发布的信息图。",
       "category": "infographic",
-      "installPath": "",
-      "tags": ["infographic", "visual", "chart", "design"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-infographic",
+      "tags": [
+        "infographic",
+        "visual",
+        "chart",
+        "design"
+      ]
     },
     {
       "name": "infographic-creator",
       "label": "信息图创建工具",
       "description": "根据给定文本内容创建精美信息图。当用户请求创建信息图时使用。",
       "category": "infographic",
-      "installPath": "",
-      "tags": ["infographic", "create", "visual", "design"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/infographic-creator",
+      "tags": [
+        "infographic",
+        "create",
+        "visual",
+        "design"
+      ]
     },
     {
       "name": "infographic-item-creator",
       "label": "信息图 Item 组件",
       "description": "为信息图仓库生成或更新 Item 组件（TypeScript/TSX）。当需要设计、实现或修改数据项视觉效果、布局逻辑时使用。",
       "category": "infographic",
-      "installPath": "",
-      "tags": ["infographic", "component", "typescript", "tsx"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/infographic-item-creator",
+      "tags": [
+        "infographic",
+        "component",
+        "typescript",
+        "tsx"
+      ]
     },
     {
       "name": "infographic-structure-creator",
       "label": "信息图 Structure 组件",
       "description": "为信息图仓库生成或更新 Structure 组件（TypeScript/TSX），包括列表/比较/序列/层级/关系/地理/图表等布局。",
       "category": "infographic",
-      "installPath": "",
-      "tags": ["infographic", "structure", "layout", "component"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/infographic-structure-creator",
+      "tags": [
+        "infographic",
+        "structure",
+        "layout",
+        "component"
+      ]
     },
     {
       "name": "infographic-syntax-creator",
       "label": "信息图 DSL 语法",
       "description": "生成 AntV 信息图语法输出。当需要将用户内容转换为信息图 DSL（模板选择、数据结构化、主题）时使用。",
       "category": "infographic",
-      "installPath": "",
-      "tags": ["infographic", "dsl", "antv", "syntax"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/infographic-syntax-creator",
+      "tags": [
+        "infographic",
+        "dsl",
+        "antv",
+        "syntax"
+      ]
     },
     {
       "name": "infographic-template-updater",
       "label": "信息图模板更新",
       "description": "添加新信息图模板后更新模板目录和 UI 提示，包括 SKILL.md 模板列表、网站画廊模板映射和 AIPlayground 提示列表。",
       "category": "infographic",
-      "installPath": "",
-      "tags": ["infographic", "template", "update", "catalog"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/infographic-template-updater",
+      "tags": [
+        "infographic",
+        "template",
+        "update",
+        "catalog"
+      ]
     },
     {
       "name": "theme-factory",
       "label": "主题样式工厂",
       "description": "为各类文档（幻灯片、文档、报告、HTML 落地页等）应用主题样式，包含 10 种预设主题（颜色/字体），可应用于任何创建的内容，或按需生成新主题。",
       "category": "infographic",
-      "installPath": "",
-      "tags": ["theme", "style", "design", "color", "typography"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/theme-factory",
+      "tags": [
+        "theme",
+        "style",
+        "design",
+        "color",
+        "typography"
+      ]
     },
     {
       "name": "mcp-builder",
       "label": "MCP 服务器构建",
       "description": "创建高质量 MCP（Model Context Protocol）服务器的指南，使 LLM 能够通过精心设计的工具与外部服务交互，支持 Python (FastMCP) 或 Node/TypeScript (MCP SDK)。",
       "category": "development",
-      "installPath": "",
-      "tags": ["mcp", "server", "api", "integration", "development"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/mcp-builder",
+      "tags": [
+        "mcp",
+        "server",
+        "api",
+        "integration",
+        "development"
+      ]
     },
     {
       "name": "webapp-testing",
       "label": "Web 应用测试",
       "description": "使用 Playwright 与本地 Web 应用程序交互和测试，支持验证前端功能、调试 UI 行为、截取浏览器截图和查看浏览器日志。",
       "category": "development",
-      "installPath": "",
-      "tags": ["testing", "playwright", "frontend", "browser", "debug"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/webapp-testing",
+      "tags": [
+        "testing",
+        "playwright",
+        "frontend",
+        "browser",
+        "debug"
+      ]
     },
     {
       "name": "frontend-design",
       "label": "前端界面设计",
       "description": "创建具有高设计质量的独特生产级前端界面。当用户需要构建 Web 组件、页面、海报或应用程序时使用，生成创意十足、精美的代码和 UI 设计，避免通用 AI 审美。",
       "category": "development",
-      "installPath": "",
-      "tags": ["frontend", "design", "ui", "react", "tailwind", "web"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/frontend-design",
+      "tags": [
+        "frontend",
+        "design",
+        "ui",
+        "react",
+        "tailwind",
+        "web"
+      ]
     },
     {
       "name": "web-artifacts-builder",
       "label": "Web 组件构建套件",
       "description": "使用现代前端 Web 技术（React、Tailwind CSS、shadcn/ui）创建精美的多组件 HTML 产物的工具套件，适用于需要状态管理、路由或 shadcn/ui 组件的复杂产物。",
       "category": "development",
-      "installPath": "",
-      "tags": ["react", "tailwind", "shadcn", "components", "frontend"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/web-artifacts-builder",
+      "tags": [
+        "react",
+        "tailwind",
+        "shadcn",
+        "components",
+        "frontend"
+      ]
     },
     {
       "name": "remotion-best-practices",
       "label": "Remotion 最佳实践",
       "description": "Remotion 的最佳实践指南 - 在 React 中创建视频的框架，涵盖组件设计、性能优化、渲染配置等内容。",
       "category": "development",
-      "installPath": "",
-      "tags": ["remotion", "react", "video", "best-practices"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/remotion-best-practices",
+      "tags": [
+        "remotion",
+        "react",
+        "video",
+        "best-practices"
+      ]
     },
     {
       "name": "skill-creator",
@@ -410,13 +773,18 @@
       "description": "创建新技能、迭代改进已有技能、运行评估测试。支持完整的技能开发工作流：起草、测试、评审、优化触发描述。应用已内置，无需安装。",
       "category": "development",
       "installPath": "https://github.com/anthropics/skills/tree/main/skills/skill-creator",
-      "tags": ["skill", "creator", "eval", "benchmark", "development"]
+      "tags": [
+        "skill",
+        "creator",
+        "eval",
+        "benchmark",
+        "development"
+      ]
     },
-    {
     {
       "name": "operate-coding-tools",
       "label": "操控编程工具",
-      "description": "当用户需要在本地仓库里真实改代码、修 bug、跑编译验证，或直接查询 Cursor 的本地模型、项目、登录状态时，帮助 Claude 在“委派给 Cursor 执行”和“本机直接检查 Cursor 状态”之间做出正确选择。",
+      "description": "当用户希望通过 Cursor 工作流完成真实编码或本机 Cursor 状态检查时使用。关键规则：一旦触发这个 skill，分析与检查必须交给 Cursor 执行，当前操作者模型只负责路由、约束和结果汇总。",
       "category": "development",
       "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/operate-coding-tools",
       "tags": [
@@ -428,100 +796,256 @@
         "inspection"
       ]
     },
+    {
       "name": "feishu-card",
       "label": "飞书卡片发送",
       "description": "向飞书（Lark）用户或群组发送富交互卡片，支持 Markdown（代码块、表格）、标题、彩色头部和按钮。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["feishu", "lark", "card", "message", "notification"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/feishu-card",
+      "tags": [
+        "feishu",
+        "lark",
+        "card",
+        "message",
+        "notification"
+      ]
     },
     {
       "name": "feishu-doc-reader",
       "label": "飞书文档读取",
       "description": "使用飞书开放 API 读取和提取飞书（Lark）文档内容。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["feishu", "lark", "document", "read", "extract"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/feishu-doc-reader",
+      "tags": [
+        "feishu",
+        "lark",
+        "document",
+        "read",
+        "extract"
+      ]
+    },
+    {
+      "name": "dingtalk-docs",
+      "label": "钉钉文档操作",
+      "description": "管理钉钉云文档中的文档、文件夹和内容。支持文档搜索、创建、内容读写（Markdown）和文件夹整理，通过 MCP 服务直接操作钉钉文档。",
+      "category": "document",
+      "installPath": "https://github.com/aliramw/dingtalk-docs",
+      "tags": [
+        "dingtalk",
+        "document",
+        "cloud",
+        "mcp",
+        "collaboration"
+      ]
+    },
+    {
+      "name": "dingtalk-ai-table",
+      "label": "钉钉 AI 表格",
+      "description": "钉钉 AI 表格（多维表）操作技能，覆盖 19 个 MCP 工具。支持表格/字段/记录的增删改查、批量新增字段和批量导入记录，已适配 2026 年新版 schema。",
+      "category": "document",
+      "installPath": "https://github.com/aliramw/dingtalk-ai-table",
+      "tags": [
+        "dingtalk",
+        "table",
+        "spreadsheet",
+        "mcp",
+        "aitable"
+      ]
     },
     {
       "name": "baoyu-url-to-markdown",
       "label": "网页转 Markdown",
       "description": "使用 Chrome CDP 获取任意 URL 并转换为 Markdown，支持两种模式：页面加载后自动捕获，或等待用户信号（适用于需要登录的页面）。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["url", "markdown", "scrape", "web", "convert"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/baoyu-url-to-markdown",
+      "tags": [
+        "url",
+        "markdown",
+        "scrape",
+        "web",
+        "convert"
+      ]
     },
     {
       "name": "find-skills",
       "label": "技能发现助手",
       "description": "帮助用户发现和安装可扩展功能的 Agent 技能，适用于用户询问如何完成某事或寻找特定功能时。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["skill", "discover", "install", "search"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/find-skills",
+      "tags": [
+        "skill",
+        "discover",
+        "install",
+        "search"
+      ]
     },
     {
       "name": "long-term-plan",
       "label": "长期计划制定",
       "description": "帮助用户创建和管理长期项目计划，通过结构化多轮对话引导用户明确目标、拆解里程碑、分解可执行任务并安排日程。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["planning", "project", "schedule", "task", "roadmap"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/long-term-plan",
+      "tags": [
+        "planning",
+        "project",
+        "schedule",
+        "task",
+        "roadmap"
+      ]
     },
     {
       "name": "daily-review",
       "label": "每日工作回顾",
       "description": "每日工作回顾与洞察分析，对用户前一天的对话历史和使用数据进行总结与建议，提供工作效率洞察。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["review", "daily", "analysis", "productivity", "insights"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/daily-review",
+      "tags": [
+        "review",
+        "daily",
+        "analysis",
+        "productivity",
+        "insights"
+      ]
     },
     {
       "name": "deep-review",
       "label": "深度工作分析",
       "description": "深度工作分析与项目洞察，从更长时间维度分析工作模式、项目进展和技术方向，提供战略性建议。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["review", "analysis", "deep", "project", "insights"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/deep-review",
+      "tags": [
+        "review",
+        "analysis",
+        "deep",
+        "project",
+        "insights"
+      ]
     },
     {
       "name": "data-analysis",
       "label": "数据分析",
       "description": "全链路数据分析技能，支持表格（CSV/Excel）、文档（PDF/DOCX/MD）及图像数据的处理，安全探查、质量体检、代码执行、结果验证与报告生成。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["data", "analysis", "csv", "excel", "visualization", "python"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/data-analysis",
+      "tags": [
+        "data",
+        "analysis",
+        "csv",
+        "excel",
+        "visualization",
+        "python"
+      ]
     },
     {
       "name": "sales-coach-lily",
       "label": "销售教练 Lily",
       "description": "基于销冠 Lily 的实战心法，分析销售通话录音，从邀约、诊脉、理念渗透、异议处理、逼单等维度提供专业反馈。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["sales", "coaching", "analysis", "audio"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/sales-coach-lily",
+      "tags": [
+        "sales",
+        "coaching",
+        "analysis",
+        "audio"
+      ]
+    },
+    {
+      "name": "adjust-report",
+      "label": "Adjust 归因分析",
+      "description": "拉取 Adjust Report API 数据并生成归因分析洞见。支持 SKAN（iOS）和标准指标（Android），按渠道、Campaign、日期维度展示安装和事件漏斗，自动计算转化率并给出优化建议。",
+      "category": "operations",
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/adjust-report",
+      "tags": [
+        "adjust",
+        "attribution",
+        "skan",
+        "campaign",
+        "ads",
+        "funnel"
+      ]
+    },
+    {
+      "name": "megaview-openapi",
+      "label": "Megaview 销售分析",
+      "description": "基于 Megaview + StarRocks 的销售能力分析工具。支持员工绩效对比、会话评分、GMV 对比、辅导材料生成、绩效考核优先级排序，为销售管理提供数据驱动的决策支持。",
+      "category": "analysis",
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/megaview-openapi",
+      "tags": [
+        "megaview",
+        "sales",
+        "analysis",
+        "gmv",
+        "coaching",
+        "starRocks"
+      ]
+    },
+    {
+      "name": "aliyun-sms-bulk",
+      "label": "阿里云批量短信",
+      "description": "使用阿里云 MCP 短信服务发送单条或批量群发短信。支持单发（SendMessageWithTemplate）和批量发送（SendBatchSms，最多 100 个号码/次）。",
+      "category": "operations",
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/aliyun-sms-bulk",
+      "tags": [
+        "aliyun",
+        "sms",
+        "bulk",
+        "notification",
+        "mcp"
+      ]
+    },
+    {
+      "name": "debugging",
+      "label": "不放弃调试引擎",
+      "description": "任务失败 2 次以上自动触发的万能激励引擎。防止 AI 放弃、推诿、磨洋工，强制穷尽替代方案、主动排查、验证修复，适用于调试、开发、部署、运维等所有任务类型。",
+      "category": "development",
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/debugging",
+      "tags": [
+        "debugging",
+        "persistence",
+        "troubleshooting",
+        "devops",
+        "resilience"
+      ]
     },
     {
       "name": "niuma-help",
       "label": "牛马 AI 使用引导",
       "description": "牛马 AI 产品使用引导与帮助，解答用户关于功能操作、设置配置等使用问题。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["help", "guide", "product", "usage"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/niuma-help",
+      "tags": [
+        "help",
+        "guide",
+        "product",
+        "usage"
+      ]
     },
     {
       "name": "brand-guidelines",
       "label": "品牌设计规范",
       "description": "将 Anthropic 官方品牌颜色和字体应用于任何可能受益于 Anthropic 视觉风格的产物，包括幻灯片、文档、报告等。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["brand", "design", "anthropic", "style", "guidelines"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/brand-guidelines",
+      "tags": [
+        "brand",
+        "design",
+        "anthropic",
+        "style",
+        "guidelines"
+      ]
     },
     {
       "name": "claude-skills-zh-cn",
       "label": "Claude 中文技能集",
       "description": "中文版本的 Anthropic Skills 技能集合，包含多个常用技能的中文翻译版本。当需要中文技能文档或参考中文技能实现时使用。",
       "category": "productivity",
-      "installPath": "",
-      "tags": ["chinese", "skills", "anthropic", "translation"]
+      "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/claude-skills-zh-cn",
+      "tags": [
+        "chinese",
+        "skills",
+        "anthropic",
+        "translation"
+      ]
     },
     {
       "name": "hr-resume-screener",
@@ -529,7 +1053,14 @@
       "description": "HR 简历批量筛选与评分工具。读取一份或多份 PDF 简历，提取候选人核心信息，按 100 分制对工作背景/技术能力/项目成果/团队管理/岗位适配五个维度打分，并结合 JD 输出适配建议。",
       "category": "productivity",
       "installPath": "https://github.com/zhangdszq/vk-skills/blob/main/hr-resume-screener.skill",
-      "tags": ["hr", "resume", "screening", "pdf", "scoring", "recruiting"]
+      "tags": [
+        "hr",
+        "resume",
+        "screening",
+        "pdf",
+        "scoring",
+        "recruiting"
+      ]
     },
     {
       "name": "minimax-tts",
@@ -537,7 +1068,14 @@
       "description": "使用 MiniMax API 将文本转换为语音并自动播放。支持多种音色、语速调节、情绪控制，以及 speech-2.8 模型专属的语气词标签（笑声、叹气、换气等），生成后直接调用系统播放器播放。",
       "category": "productivity",
       "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/minimax-tts",
-      "tags": ["tts", "speech", "audio", "minimax", "voice", "text-to-speech"]
+      "tags": [
+        "tts",
+        "speech",
+        "audio",
+        "minimax",
+        "voice",
+        "text-to-speech"
+      ]
     },
     {
       "name": "vipkid-ops",
@@ -545,7 +1083,13 @@
       "description": "VIPKID 国际化运营后台助理，操作 sa-manager.lionabc.com 管理端。支持商品包查询、新建、修改，配置优惠券使用限制、库存（追加/扣减/不限制）、赠送权限。⛔ 不执行上架、下架、删除操作。",
       "category": "productivity",
       "installPath": "https://github.com/zhangdszq/vk-skills/tree/main/vipkid-ops",
-      "tags": ["vipkid", "ops", "product", "ecommerce", "internal"]
+      "tags": [
+        "vipkid",
+        "ops",
+        "product",
+        "ecommerce",
+        "internal"
+      ]
     },
     {
       "name": "pm-user-story",
@@ -553,7 +1097,13 @@
       "description": "用 Mike Cohn + Gherkin 格式编写规范的用户故事和验收标准。输出「作为…我希望…以便…」格式的故事，并附带 Given/When/Then 验收条件，确保需求描述清晰可测试。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story/SKILL.md",
-      "tags": ["pm", "user-story", "agile", "requirements", "acceptance-criteria"]
+      "tags": [
+        "pm",
+        "user-story",
+        "agile",
+        "requirements",
+        "acceptance-criteria"
+      ]
     },
     {
       "name": "pm-user-story-mapping",
@@ -561,7 +1111,13 @@
       "description": "使用 Jeff Patton 框架按用户工作流组织故事，形成可发布的功能切片。将零散的用户故事整合成二维地图，横轴为用户活动主干，纵轴为优先级，清晰呈现 MVP 边界。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story-mapping/SKILL.md",
-      "tags": ["pm", "story-map", "agile", "planning", "jeff-patton"]
+      "tags": [
+        "pm",
+        "story-map",
+        "agile",
+        "planning",
+        "jeff-patton"
+      ]
     },
     {
       "name": "pm-user-story-splitting",
@@ -569,7 +1125,13 @@
       "description": "使用 8 种已验证模式将大型用户故事拆分为可独立交付的小故事。避免「金刚石」式的巨型故事，用数据、工作流、操作、触发器等维度合理切割，确保每个故事都在一个迭代内可完成。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story-splitting/SKILL.md",
-      "tags": ["pm", "user-story", "splitting", "agile", "richard-lawrence"]
+      "tags": [
+        "pm",
+        "user-story",
+        "splitting",
+        "agile",
+        "richard-lawrence"
+      ]
     },
     {
       "name": "pm-problem-statement",
@@ -577,7 +1139,13 @@
       "description": "在跳入解决方案之前，用证据驱动的方式框架化客户问题。明确「谁遇到了什么问题、在什么情境下发生、造成了什么影响」，防止团队在错误的问题上浪费精力。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/problem-statement/SKILL.md",
-      "tags": ["pm", "problem", "framing", "discovery", "customer"]
+      "tags": [
+        "pm",
+        "problem",
+        "framing",
+        "discovery",
+        "customer"
+      ]
     },
     {
       "name": "pm-positioning-statement",
@@ -585,7 +1153,13 @@
       "description": "使用 Geoffrey Moore 框架明确目标用户、解决的问题和差异化优势。生成标准格式的定位陈述：「对于…（目标用户），…（产品名）是一款…（品类），它能…（核心价值），不同于…（竞品），我们…（关键差异）。」",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/positioning-statement/SKILL.md",
-      "tags": ["pm", "positioning", "marketing", "geoffrey-moore", "strategy"]
+      "tags": [
+        "pm",
+        "positioning",
+        "marketing",
+        "geoffrey-moore",
+        "strategy"
+      ]
     },
     {
       "name": "pm-press-release",
@@ -593,7 +1167,13 @@
       "description": "用亚马逊逆向工作法撰写未来新闻稿，从用户视角清晰定义产品愿景。先写新闻稿再做产品，强迫团队站在发布日回望，确保功能真正值得做、真正解决用户问题。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/press-release/SKILL.md",
-      "tags": ["pm", "press-release", "amazon", "working-backwards", "vision"]
+      "tags": [
+        "pm",
+        "press-release",
+        "amazon",
+        "working-backwards",
+        "vision"
+      ]
     },
     {
       "name": "pm-proto-persona",
@@ -601,7 +1181,13 @@
       "description": "在完整用户研究前创建假设驱动的原型画像，快速对齐团队认知。轻量、低成本，适合产品早期探索阶段，后续可随研究数据迭代完善，避免团队各持一套「臆想的用户」。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/proto-persona/SKILL.md",
-      "tags": ["pm", "persona", "user-research", "hypothesis", "discovery"]
+      "tags": [
+        "pm",
+        "persona",
+        "user-research",
+        "hypothesis",
+        "discovery"
+      ]
     },
     {
       "name": "pm-customer-journey-map",
@@ -609,7 +1195,13 @@
       "description": "使用 NNGroup 框架绘制客户在所有触点的完整体验地图。呈现用户的行为、思考、情绪和痛点，识别体验断层和改进机会，是产品优化和新功能立项的有力工具。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/customer-journey-map/SKILL.md",
-      "tags": ["pm", "customer-journey", "ux", "touchpoints", "nngroup"]
+      "tags": [
+        "pm",
+        "customer-journey",
+        "ux",
+        "touchpoints",
+        "nngroup"
+      ]
     },
     {
       "name": "pm-jobs-to-be-done",
@@ -617,7 +1209,13 @@
       "description": "使用 JTBD（Jobs To Be Done）框架理解用户真正想要完成的目标，而非表面需求。发现用户「雇佣」产品的深层动机，指导产品创新方向，避免功能堆砌。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/jobs-to-be-done/SKILL.md",
-      "tags": ["pm", "jtbd", "jobs-to-be-done", "innovation", "customer-insight"]
+      "tags": [
+        "pm",
+        "jtbd",
+        "jobs-to-be-done",
+        "innovation",
+        "customer-insight"
+      ]
     },
     {
       "name": "pm-epic-hypothesis",
@@ -625,7 +1223,13 @@
       "description": "将模糊的产品想法转化为可测试的假设，附带明确的成功指标和验证条件。格式：「我们相信…（干预措施）将带来…（结果），当我们看到…（指标变化）时即可验证。」",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/epic-hypothesis/SKILL.md",
-      "tags": ["pm", "hypothesis", "epic", "validation", "metrics"]
+      "tags": [
+        "pm",
+        "hypothesis",
+        "epic",
+        "validation",
+        "metrics"
+      ]
     },
     {
       "name": "pm-storyboard",
@@ -633,7 +1237,13 @@
       "description": "用 6 帧叙事故事板可视化用户操作流程，帮助团队对齐产品体验认知。比文字需求更直观，适合在立项、评审和用户测试前与团队、利益相关方快速沟通产品意图。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/storyboard/SKILL.md",
-      "tags": ["pm", "storyboard", "ux", "visualization", "storytelling"]
+      "tags": [
+        "pm",
+        "storyboard",
+        "ux",
+        "visualization",
+        "storytelling"
+      ]
     },
     {
       "name": "pm-pol-probe",
@@ -641,7 +1251,13 @@
       "description": "在正式开发前定义轻量级、可废弃的验证实验（Proof of Learning）。以最小成本测试关键假设，包含实验目的、假设条件、验证方法、成功标准和学习记录，避免为不确定的想法投入大量工程资源。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/pol-probe/SKILL.md",
-      "tags": ["pm", "validation", "experiment", "hypothesis", "lean"]
+      "tags": [
+        "pm",
+        "validation",
+        "experiment",
+        "hypothesis",
+        "lean"
+      ]
     },
     {
       "name": "pm-recommendation-canvas",
@@ -649,7 +1265,13 @@
       "description": "规范化 AI 驱动产品推荐功能的设计文档，包含推荐目标、用户信号、算法逻辑、评估指标和伦理考量，适合电商、内容、教育等场景的个性化推荐功能立项。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/recommendation-canvas/SKILL.md",
-      "tags": ["pm", "recommendation", "ai", "personalization", "product-design"]
+      "tags": [
+        "pm",
+        "recommendation",
+        "ai",
+        "personalization",
+        "product-design"
+      ]
     },
     {
       "name": "pm-eol-message",
@@ -657,7 +1279,13 @@
       "description": "优雅地传达产品/功能废弃信息，降低用户反感，提供清晰的迁移路径和时间线。包含「为什么」「影响范围」「替代方案」「下线日程」四个关键要素，减少用户流失和负面舆情。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/eol-message/SKILL.md",
-      "tags": ["pm", "eol", "deprecation", "communication", "product-lifecycle"]
+      "tags": [
+        "pm",
+        "eol",
+        "deprecation",
+        "communication",
+        "product-lifecycle"
+      ]
     },
     {
       "name": "pm-pestel-analysis",
@@ -665,7 +1293,13 @@
       "description": "从六个维度系统分析影响产品的外部环境因素：政治（Policy）、经济（Economy）、社会（Society）、技术（Technology）、环境（Environment）、法律（Legal）。适合新市场进入、战略规划和风险评估。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/pestel-analysis/SKILL.md",
-      "tags": ["pm", "pestel", "strategy", "market-analysis", "risk"]
+      "tags": [
+        "pm",
+        "pestel",
+        "strategy",
+        "market-analysis",
+        "risk"
+      ]
     },
     {
       "name": "pm-company-research",
@@ -673,7 +1307,13 @@
       "description": "深度分析竞争对手或目标公司，覆盖商业模式、产品策略、市场定位、团队结构和财务健康度。生成结构化竞品报告，为产品差异化决策提供情报支撑。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/company-research/SKILL.md",
-      "tags": ["pm", "competitive-analysis", "research", "company", "strategy"]
+      "tags": [
+        "pm",
+        "competitive-analysis",
+        "research",
+        "company",
+        "strategy"
+      ]
     },
     {
       "name": "pm-finance-metrics-quickref",
@@ -681,7 +1321,13 @@
       "description": "32+ 个 SaaS 财务指标快速参考手册，包含公式、行业基准和使用场景。涵盖 ARR/MRR、CAC、LTV、NRR、Churn、Rule of 40、Magic Number 等 PM 必懂的财务指标，帮助 PM 在数据驱动决策中更有底气。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/finance-metrics-quickref/SKILL.md",
-      "tags": ["pm", "saas", "metrics", "finance", "kpi"]
+      "tags": [
+        "pm",
+        "saas",
+        "metrics",
+        "finance",
+        "kpi"
+      ]
     },
     {
       "name": "pm-saas-revenue-growth-metrics",
@@ -689,7 +1335,14 @@
       "description": "计算和解读营收、留存和增长指标，包括 MRR/ARR、ARPU、用户流失率、NRR 和扩张收入。帮助 PM 读懂增长仪表盘，发现增长杠杆和留存风险，支撑定价与产品策略决策。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/saas-revenue-growth-metrics/SKILL.md",
-      "tags": ["pm", "saas", "revenue", "growth", "retention", "metrics"]
+      "tags": [
+        "pm",
+        "saas",
+        "revenue",
+        "growth",
+        "retention",
+        "metrics"
+      ]
     },
     {
       "name": "pm-saas-economics-efficiency-metrics",
@@ -697,7 +1350,14 @@
       "description": "评估单位经济效益和资本效率，涵盖 CAC、LTV、回本周期、毛利率、燃烧率和 Rule of 40。量化「烧钱是否烧得值」，为融资决策、定价调整和渠道优化提供财务依据。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/saas-economics-efficiency-metrics/SKILL.md",
-      "tags": ["pm", "saas", "unit-economics", "cac", "ltv", "efficiency"]
+      "tags": [
+        "pm",
+        "saas",
+        "unit-economics",
+        "cac",
+        "ltv",
+        "efficiency"
+      ]
     },
     {
       "name": "pm-altitude-horizon-framework",
@@ -705,7 +1365,13 @@
       "description": "理解 PM 晋升总监的核心思维转变：工作范围（高度）与时间视野（视野）的双轴模型、四个过渡区域、常见失败模式和级联上下文地图。基于《产品玄关》播客第 42 期总结，适合准备晋升的高级 PM。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/altitude-horizon-framework/SKILL.md",
-      "tags": ["pm", "leadership", "career", "director", "promotion"]
+      "tags": [
+        "pm",
+        "leadership",
+        "career",
+        "director",
+        "promotion"
+      ]
     },
     {
       "name": "pm-prioritization-advisor",
@@ -713,7 +1379,14 @@
       "description": "根据你的产品阶段、团队规模和数据成熟度，推荐最合适的优先级框架（RICE、ICE、Kano、MoSCoW 等）。通过 3-5 个问题了解你的情境，给出带理由的框架推荐和实施建议，告别「拍脑袋排优先级」。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/prioritization-advisor/SKILL.md",
-      "tags": ["pm", "prioritization", "rice", "ice", "kano", "roadmap"]
+      "tags": [
+        "pm",
+        "prioritization",
+        "rice",
+        "ice",
+        "kano",
+        "roadmap"
+      ]
     },
     {
       "name": "pm-opportunity-solution-tree",
@@ -721,7 +1394,13 @@
       "description": "基于 Teresa Torres 的连续发现方法，生成机会和解决方案树，推荐最优概念验证方向。从目标出发，逐层展开机会空间和解决方案，帮助团队在正确的问题上投入研发资源。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/opportunity-solution-tree/SKILL.md",
-      "tags": ["pm", "ost", "opportunity", "discovery", "teresa-torres"]
+      "tags": [
+        "pm",
+        "ost",
+        "opportunity",
+        "discovery",
+        "teresa-torres"
+      ]
     },
     {
       "name": "pm-lean-ux-canvas",
@@ -729,7 +1408,13 @@
       "description": "基于 Jeff Gothelf 的 Lean UX Canvas v2，建立假设驱动的产品规划体系。梳理业务问题、用户、产品假设、成功指标和实验设计，让团队在开始开发前先对齐「我们在测试什么」。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/lean-ux-canvas/SKILL.md",
-      "tags": ["pm", "lean-ux", "hypothesis", "canvas", "jeff-gothelf"]
+      "tags": [
+        "pm",
+        "lean-ux",
+        "hypothesis",
+        "canvas",
+        "jeff-gothelf"
+      ]
     },
     {
       "name": "pm-discovery-interview-prep",
@@ -737,7 +1422,13 @@
       "description": "基于 Mom Test 原则规划客户访谈问题，避免引导性提问和「妈妈式赞美」陷阱。根据你的研究目标生成访谈指南，包含开场白、核心问题序列、追问策略和结束语，让每次访谈都产出真实洞察。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/discovery-interview-prep/SKILL.md",
-      "tags": ["pm", "user-research", "interview", "mom-test", "discovery"]
+      "tags": [
+        "pm",
+        "user-research",
+        "interview",
+        "mom-test",
+        "discovery"
+      ]
     },
     {
       "name": "pm-epic-breakdown-advisor",
@@ -745,7 +1436,13 @@
       "description": "使用 Richard Lawrence 的 9 种拆分模式将史诗级需求分解为可实施的用户故事。交互式引导：描述你的 Epic → AI 分析并推荐最优拆分策略 → 生成带验收标准的故事清单，解决「Epic 太大不知如何下手」的常见困境。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/epic-breakdown-advisor/SKILL.md",
-      "tags": ["pm", "epic", "splitting", "agile", "richard-lawrence"]
+      "tags": [
+        "pm",
+        "epic",
+        "splitting",
+        "agile",
+        "richard-lawrence"
+      ]
     },
     {
       "name": "pm-feature-investment-advisor",
@@ -753,7 +1450,13 @@
       "description": "从营收影响、成本结构、ROI 和战略价值多维度评估功能投资，给出「构建/不构建/推迟」决策建议。量化每个功能的预期回报，帮助 PM 向高管清晰呈现投资理由，避免「感觉这个功能很重要」式的决策。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/feature-investment-advisor/SKILL.md",
-      "tags": ["pm", "feature", "roi", "investment", "decision"]
+      "tags": [
+        "pm",
+        "feature",
+        "roi",
+        "investment",
+        "decision"
+      ]
     },
     {
       "name": "pm-finance-based-pricing-advisor",
@@ -761,7 +1464,13 @@
       "description": "用财务影响分析评估定价变更方案，量化 ARPU 变化、转化率影响、流失风险、NRR 和回本周期。在涨价或调整定价模型前，先用数据模拟方案收益，避免定价决策「凭直觉拍板」。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/finance-based-pricing-advisor/SKILL.md",
-      "tags": ["pm", "pricing", "finance", "arpu", "saas"]
+      "tags": [
+        "pm",
+        "pricing",
+        "finance",
+        "arpu",
+        "saas"
+      ]
     },
     {
       "name": "pm-acquisition-channel-advisor",
@@ -769,7 +1478,13 @@
       "description": "使用单位经济、用户质量和可扩展性三维度评估每个获客渠道，给出「扩张/继续测试/关闭」的行动建议。比较不同渠道的 CAC、LTV 和转化效率，帮助增长团队将资源集中在真正有效的渠道上。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/acquisition-channel-advisor/SKILL.md",
-      "tags": ["pm", "growth", "acquisition", "channel", "unit-economics"]
+      "tags": [
+        "pm",
+        "growth",
+        "acquisition",
+        "channel",
+        "unit-economics"
+      ]
     },
     {
       "name": "pm-business-health-diagnostic",
@@ -777,7 +1492,13 @@
       "description": "用关键指标综合诊断 SaaS 业务健康状况，识别红旗风险信号，优先处理增长、留存、效率和资本健康问题。生成业务健康报告并给出优先行动清单，适合季度复盘和融资前准备。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/business-health-diagnostic/SKILL.md",
-      "tags": ["pm", "saas", "business-health", "diagnostic", "metrics"]
+      "tags": [
+        "pm",
+        "saas",
+        "business-health",
+        "diagnostic",
+        "metrics"
+      ]
     },
     {
       "name": "pm-tam-sam-som-calculator",
@@ -785,7 +1506,14 @@
       "description": "用真实数据和可信来源测算 TAM/SAM/SOM 市场规模，支持自上而下和自下而上两种方法。生成带数据引用的市场规模分析报告，为融资 Pitch、新市场进入决策和产品战略提供扎实的市场数据支撑。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/tam-sam-som-calculator/SKILL.md",
-      "tags": ["pm", "market-sizing", "tam", "sam", "som", "strategy"]
+      "tags": [
+        "pm",
+        "market-sizing",
+        "tam",
+        "sam",
+        "som",
+        "strategy"
+      ]
     },
     {
       "name": "pm-problem-framing-canvas",
@@ -793,7 +1521,13 @@
       "description": "使用 MITRE 问题框架法从三个角度重新审视问题：向内看（当前解法的假设）、向外看（更广泛的系统影响）、重构（转换问题视角）。打破「在错误的问题上寻找正确答案」的思维定势。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/problem-framing-canvas/SKILL.md",
-      "tags": ["pm", "problem-framing", "mitre", "systems-thinking", "strategy"]
+      "tags": [
+        "pm",
+        "problem-framing",
+        "mitre",
+        "systems-thinking",
+        "strategy"
+      ]
     },
     {
       "name": "pm-context-engineering-advisor",
@@ -801,7 +1535,13 @@
       "description": "诊断并改善你与 AI 协作的方式：区分「上下文堆砌」（大量输入无意图）和「上下文工程」（有结构地引导注意力）。指导记忆架构、检索策略设计，以及研究→规划→重置→实施的工作循环。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/context-engineering-advisor/SKILL.md",
-      "tags": ["pm", "ai", "context-engineering", "llm", "workflow"]
+      "tags": [
+        "pm",
+        "ai",
+        "context-engineering",
+        "llm",
+        "workflow"
+      ]
     },
     {
       "name": "pm-ai-shaped-readiness-advisor",
@@ -809,7 +1549,13 @@
       "description": "评估你是否已从「用 AI 做事」进化为「用 AI 重塑工作方式」。评估五项核心能力：上下文设计、智能体编排、成果加速、团队-AI 协作、战略差异化，并推荐优先提升方向。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/ai-shaped-readiness-advisor/SKILL.md",
-      "tags": ["pm", "ai", "readiness", "digital-transformation", "leadership"]
+      "tags": [
+        "pm",
+        "ai",
+        "readiness",
+        "digital-transformation",
+        "leadership"
+      ]
     },
     {
       "name": "pm-pol-probe-advisor",
@@ -817,7 +1563,13 @@
       "description": "根据你的假设类型和风险等级，推荐 5 种原型中的最优选择：可行性原型、任务聚焦原型、叙事原型、合成数据原型或氛围编码原型。在正式开发前以最低成本验证最关键的假设。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/pol-probe-advisor/SKILL.md",
-      "tags": ["pm", "prototype", "validation", "experiment", "lean"]
+      "tags": [
+        "pm",
+        "prototype",
+        "validation",
+        "experiment",
+        "lean"
+      ]
     },
     {
       "name": "pm-positioning-workshop",
@@ -825,7 +1577,13 @@
       "description": "通过自适应问题序列引导团队完成产品定位，从竞争环境分析到价值主张提炼，最终形成清晰的定位陈述。适合新产品立项、品牌重塑和进入新市场前的定位对齐工作坊。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/positioning-workshop/SKILL.md",
-      "tags": ["pm", "positioning", "workshop", "brand", "strategy"]
+      "tags": [
+        "pm",
+        "positioning",
+        "workshop",
+        "brand",
+        "strategy"
+      ]
     },
     {
       "name": "pm-customer-journey-mapping-workshop",
@@ -833,7 +1591,13 @@
       "description": "引导团队系统化地绘制客户旅程地图，识别每个触点的痛点，形成优先改善机会清单。交互式多轮引导，适合跨职能产品团队开展用户体验对齐工作坊。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/customer-journey-mapping-workshop/SKILL.md",
-      "tags": ["pm", "workshop", "customer-journey", "ux", "facilitation"]
+      "tags": [
+        "pm",
+        "workshop",
+        "customer-journey",
+        "ux",
+        "facilitation"
+      ]
     },
     {
       "name": "pm-user-story-mapping-workshop",
@@ -841,7 +1605,13 @@
       "description": "引导团队创建完整的用户故事地图，包含主干活动（Backbone）和发布切片（Slices）。帮助团队从用户旅程视角规划产品路线图，清晰定义每个迭代的交付边界。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/user-story-mapping-workshop/SKILL.md",
-      "tags": ["pm", "workshop", "story-mapping", "agile", "facilitation"]
+      "tags": [
+        "pm",
+        "workshop",
+        "story-mapping",
+        "agile",
+        "facilitation"
+      ]
     },
     {
       "name": "pm-director-readiness-advisor",
@@ -849,7 +1619,13 @@
       "description": "针对四种情境为 PM 和新任总监提供过渡期专业指导：备战晋升期、面试准备期、新上任磨合期、上任后重新校准期。基于《产品玄关》播客第 42 期，聚焦工作范围提升和影响力扩展的实战建议。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/director-readiness-advisor/SKILL.md",
-      "tags": ["pm", "career", "director", "leadership", "coaching"]
+      "tags": [
+        "pm",
+        "career",
+        "director",
+        "leadership",
+        "coaching"
+      ]
     },
     {
       "name": "pm-vp-cpo-readiness-advisor",
@@ -857,7 +1633,14 @@
       "description": "为资深总监和高管提供晋升 VP/CPO 的过渡期指导，包含评估新角色前的 CEO 访谈框架，帮助避免「接了一个错误的 VP 职位」的职业风险。基于《产品玄关》播客第 43 期。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/vp-cpo-readiness-advisor/SKILL.md",
-      "tags": ["pm", "career", "vp", "cpo", "executive", "coaching"]
+      "tags": [
+        "pm",
+        "career",
+        "vp",
+        "cpo",
+        "executive",
+        "coaching"
+      ]
     },
     {
       "name": "pm-workshop-facilitation",
@@ -865,7 +1648,13 @@
       "description": "为各类产品工作坊提供标准化的逐步引导协议，包含带编号的推荐选项、进度标签、中断处理和上下文转储快捷方式。确保工作坊节奏清晰、参与者不迷失，是所有交互式 PM 技能的引导底层协议。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/workshop-facilitation/SKILL.md",
-      "tags": ["pm", "facilitation", "workshop", "process", "collaboration"]
+      "tags": [
+        "pm",
+        "facilitation",
+        "workshop",
+        "process",
+        "collaboration"
+      ]
     },
     {
       "name": "pm-discovery-process",
@@ -873,7 +1662,13 @@
       "description": "端到端的产品发现流程，历时 3-4 周：①问题框架化 → ②用户研究与访谈 → ③综合洞察 → ④验证解决方案。帮助团队在开发前确认「值得做」，减少构建错误功能的浪费。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/discovery-process/SKILL.md",
-      "tags": ["pm", "discovery", "workflow", "user-research", "validation"]
+      "tags": [
+        "pm",
+        "discovery",
+        "workflow",
+        "user-research",
+        "validation"
+      ]
     },
     {
       "name": "pm-prd-development",
@@ -881,7 +1676,13 @@
       "description": "结构化 PRD 开发工作流，历时 2-4 天：问题陈述 → 用户画像 → 解决方案设计 → 成功指标 → 用户故事清单。生成高质量 PRD，让工程、设计和业务团队在开发前完全对齐。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/prd-development/SKILL.md",
-      "tags": ["pm", "prd", "requirements", "workflow", "documentation"]
+      "tags": [
+        "pm",
+        "prd",
+        "requirements",
+        "workflow",
+        "documentation"
+      ]
     },
     {
       "name": "pm-product-strategy-session",
@@ -889,7 +1690,13 @@
       "description": "完整的产品战略制定流程，历时 2-4 周：定位陈述 → 问题框架 → 解决方案探索 → 产品路线图。引导团队从市场分析到战略共识，形成可执行的产品战略文档。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/product-strategy-session/SKILL.md",
-      "tags": ["pm", "strategy", "workflow", "roadmap", "positioning"]
+      "tags": [
+        "pm",
+        "strategy",
+        "workflow",
+        "roadmap",
+        "positioning"
+      ]
     },
     {
       "name": "pm-roadmap-planning",
@@ -897,7 +1704,13 @@
       "description": "战略路线图制定完整流程，历时 1-2 周：收集输入 → 定义史诗需求 → 排优先级 → 制定执行顺序 → 向利益相关方沟通。生成清晰的季度/年度路线图，平衡短期交付与长期战略。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/roadmap-planning/SKILL.md",
-      "tags": ["pm", "roadmap", "planning", "workflow", "strategy"]
+      "tags": [
+        "pm",
+        "roadmap",
+        "planning",
+        "workflow",
+        "strategy"
+      ]
     },
     {
       "name": "pm-executive-onboarding-playbook",
@@ -905,7 +1718,13 @@
       "description": "VP/CPO 过渡期 30-60-90 天行动手册：先诊断后行动、挖掘隐性战略意图、评估人才梯队、以证据驱动决策。帮助新上任产品高管避开「入职即大改」的陷阱，基于《产品玄关》播客第 43 期。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/executive-onboarding-playbook/SKILL.md",
-      "tags": ["pm", "executive", "onboarding", "leadership", "cpo"]
+      "tags": [
+        "pm",
+        "executive",
+        "onboarding",
+        "leadership",
+        "cpo"
+      ]
     },
     {
       "name": "pm-skill-authoring-workflow",
@@ -913,7 +1732,13 @@
       "description": "为 AI 智能体创建产品管理技能文件的元工作流：选择添加/构建路径 → 验证合规性 → 更新文档索引 → 打包发布。适合希望将团队 PM 方法论沉淀为可复用 AI 技能的产品团队。",
       "category": "product-management",
       "installPath": "https://github.com/deanpeters/Product-Manager-Skills/blob/main/skills/skill-authoring-workflow/SKILL.md",
-      "tags": ["pm", "skill-creation", "meta", "workflow", "ai-agent"]
+      "tags": [
+        "pm",
+        "skill-creation",
+        "meta",
+        "workflow",
+        "ai-agent"
+      ]
     }
   ]
 }

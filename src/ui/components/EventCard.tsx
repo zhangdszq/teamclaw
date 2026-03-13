@@ -541,9 +541,58 @@ function isImageFile(p: string) {
   return IMAGE_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 }
 
-function parseUserPrompt(raw: string): { attachments: { path: string; name: string; isImage: boolean; isDir: boolean }[]; text: string } {
+function getAttachmentName(filePath: string) {
+  return filePath.split(/[\\/]/).pop() ?? filePath;
+}
+
+type ParsedAttachment = {
+  path: string;
+  name: string;
+  isImage: boolean;
+  isDir: boolean;
+};
+
+const UserImageAttachmentCard = ({ attachment }: { attachment: ParsedAttachment }) => {
+  const [preview, setPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.getImageThumbnail(attachment.path)
+      .then((dataUrl) => {
+        if (!cancelled && dataUrl) setPreview(dataUrl);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [attachment.path]);
+
+  return (
+    <div className="group relative flex-shrink-0">
+      <div className="h-[72px] w-[72px] overflow-hidden rounded-2xl border border-ink-900/10 bg-surface-secondary shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        {preview ? (
+          <img
+            src={preview}
+            alt={attachment.name}
+            className="h-full w-full object-cover"
+            draggable={false}
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center">
+            <svg className="h-6 w-6 animate-pulse text-ink-300" viewBox="0 0 24 24" fill="none">
+              <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+        )}
+      </div>
+      <div className="pointer-events-none absolute inset-x-1.5 bottom-1.5 rounded-lg bg-black/48 px-2 py-1 text-[10px] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
+        <div className="truncate">{attachment.name}</div>
+      </div>
+    </div>
+  );
+};
+
+function parseUserPrompt(raw: string): { attachments: ParsedAttachment[]; text: string } {
   const lines = raw.split("\n");
-  const attachments: { path: string; name: string; isImage: boolean; isDir: boolean }[] = [];
+  const attachments: ParsedAttachment[] = [];
   const textLines: string[] = [];
   for (const line of lines) {
     const imgMatch = line.match(/^请分析这张图片: (.+)$/);
@@ -551,13 +600,13 @@ function parseUserPrompt(raw: string): { attachments: { path: string; name: stri
     const dirMatch = line.match(/^请列出并分析这个文件夹: (.+)$/);
     if (imgMatch) {
       const path = imgMatch[1].trim();
-      attachments.push({ path, name: path.split("/").pop() ?? path, isImage: true, isDir: false });
+      attachments.push({ path, name: getAttachmentName(path), isImage: true, isDir: false });
     } else if (fileMatch) {
       const path = fileMatch[1].trim();
-      attachments.push({ path, name: path.split("/").pop() ?? path, isImage: isImageFile(path), isDir: false });
+      attachments.push({ path, name: getAttachmentName(path), isImage: isImageFile(path), isDir: false });
     } else if (dirMatch) {
       const path = dirMatch[1].trim();
-      attachments.push({ path, name: path.split("/").pop() ?? path, isImage: false, isDir: true });
+      attachments.push({ path, name: getAttachmentName(path), isImage: false, isDir: true });
     } else {
       textLines.push(line);
     }
@@ -578,25 +627,25 @@ const UserMessageCard = ({ message, showIndicator = false, userName = "User" }: 
         {userName}
       </div>
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1">
-            {attachments.map((att) => (
-            <div key={att.path} className="inline-flex items-center gap-1.5 rounded-lg border border-ink-900/10 bg-surface-secondary px-2.5 py-1 text-xs text-ink-600">
-              {att.isImage ? (
-                <svg className="h-3.5 w-3.5 text-accent flex-shrink-0" viewBox="0 0 24 24" fill="none">
-                  <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              ) : att.isDir ? (
-                <svg className="h-3.5 w-3.5 text-yellow-600 flex-shrink-0" viewBox="0 0 24 24" fill="none">
-                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              ) : (
-                <svg className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" viewBox="0 0 24 24" fill="none">
-                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              )}
-              <span className="max-w-[240px] truncate">{att.name}</span>
-            </div>
+        <div className="mt-2 mb-1 flex flex-wrap gap-2">
+          {attachments.map((att) => (
+            att.isImage ? (
+              <UserImageAttachmentCard key={att.path} attachment={att} />
+            ) : (
+              <div key={att.path} className="inline-flex items-center gap-1.5 rounded-lg border border-ink-900/10 bg-surface-secondary px-2.5 py-1 text-xs text-ink-600">
+                {att.isDir ? (
+                  <svg className="h-3.5 w-3.5 text-yellow-600 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                    <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  <svg className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+                <span className="max-w-[240px] truncate">{att.name}</span>
+              </div>
+            )
           ))}
         </div>
       )}

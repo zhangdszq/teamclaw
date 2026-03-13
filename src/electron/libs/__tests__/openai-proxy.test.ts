@@ -34,6 +34,7 @@ vi.mock("../usage-tracker.js", () => ({
 
 import {
   mapClaudeModel,
+  sanitizeToolCallArguments,
   toOpenAIToolId,
   toAnthropicToolId,
   convertAnthropicToResponsesAPI,
@@ -61,6 +62,26 @@ describe("mapClaudeModel", () => {
   it("falls back to gpt-5.4 for unknown models", () => {
     expect(mapClaudeModel("unknown-model-xyz")).toBe("gpt-5.4");
     expect(mapClaudeModel("")).toBe("gpt-5.4");
+  });
+});
+
+describe("sanitizeToolCallArguments", () => {
+  it("removes empty pages from Read tool calls", () => {
+    expect(
+      sanitizeToolCallArguments("Read", JSON.stringify({
+        file_path: "/tmp/app-icon.png",
+        pages: "",
+        offset: 0,
+      })),
+    ).toBe(JSON.stringify({
+      file_path: "/tmp/app-icon.png",
+      offset: 0,
+    }));
+  });
+
+  it("keeps arguments unchanged for other tools", () => {
+    const raw = JSON.stringify({ pages: "" });
+    expect(sanitizeToolCallArguments("OtherTool", raw)).toBe(raw);
   });
 });
 
@@ -329,6 +350,46 @@ async function startMockUpstream() {
   };
 }
 
+async function startMockUpstreamWithEvents(events: Array<Record<string, unknown>>) {
+  const requests: MockUpstreamRequest[] = [];
+  const server = createServer(async (req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/responses") {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
+    let raw = "";
+    for await (const chunk of req) raw += String(chunk);
+    requests.push({
+      url: req.url ?? "",
+      authorization: req.headers.authorization,
+      body: raw ? JSON.parse(raw) : {},
+    });
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    for (const event of events) {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const addr = server.address();
+  if (!addr || typeof addr === "string") throw new Error("Failed to start mock upstream");
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  return {
+    baseUrl,
+    requests,
+    close: async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
 async function postAnthropicMessages(proxyBaseUrl: string): Promise<Response> {
   return fetch(`${proxyBaseUrl}/v1/messages`, {
     method: "POST",
@@ -558,5 +619,47 @@ describe("openai proxy routing overrides", () => {
     const ports = await Promise.all(Array.from({ length: 12 }, () => startProxy()));
     const uniquePorts = Array.from(new Set(ports));
     expect(uniquePorts).toHaveLength(1);
+  });
+
+  it("sanitizes empty Read.pages in streamed function calls", async () => {
+    const upstream = await startMockUpstreamWithEvents([
+      {
+        type: "response.output_item.added",
+        item: { type: "function_call", id: "fc_read1", call_id: "fc_read1", name: "Read" },
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        delta: "{\"file_path\":\"/tmp/app-icon.png\",\"pages\":\"\"}",
+      },
+      {
+        type: "response.function_call_arguments.done",
+        arguments: "{\"file_path\":\"/tmp/app-icon.png\",\"pages\":\"\"}",
+      },
+      {
+        type: "response.completed",
+        response: { usage: { input_tokens: 1, output_tokens: 1 } },
+      },
+    ]);
+
+    try {
+      mockState.settings = {
+        openaiApiKey: "global-key",
+        openaiBaseUrl: upstream.baseUrl,
+      };
+
+      await startProxy();
+      const base = getProxyBaseUrl();
+      if (!base) throw new Error("Proxy base url unavailable");
+
+      const resp = await postAnthropicMessages(base);
+      expect(resp.status).toBe(200);
+      const text = await resp.text();
+
+      expect(text).toContain("\"name\":\"Read\"");
+      expect(text).toContain("\\\"file_path\\\":\\\"/tmp/app-icon.png\\\"");
+      expect(text).not.toContain("\\\"pages\\\":\\\"\\\"");
+    } finally {
+      await upstream.close();
+    }
   });
 });

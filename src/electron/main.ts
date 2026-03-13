@@ -61,6 +61,7 @@ import {
 } from "./libs/qqbot-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { ensureBuiltinMcpServers } from "./libs/builtin-mcps.js";
+import { invalidateMcporterCache, getMcporterConfigPath } from "./libs/mcporter-loader.js";
 import { seedBuiltinSkills } from "./libs/builtin-skills.js";
 // Goals module removed — long-term goals are now handled via SOP + scheduler
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
@@ -163,6 +164,7 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     agentId: dingtalk.agentId,
                     assistantId: assistant.id,
                     assistantName: assistant.name,
+                    skillNames: assistant.skillNames,
                     persona: assistant.persona,
                     coreValues: assistant.coreValues,
                     relationship: assistant.relationship,
@@ -243,6 +245,7 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     domain: feishu.domain,
                     assistantId: assistant.id,
                     assistantName: assistant.name,
+                    skillNames: assistant.skillNames,
                     persona: assistant.persona,
                     coreValues: assistant.coreValues,
                     relationship: assistant.relationship,
@@ -282,6 +285,7 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     clientSecret: qqbot.clientSecret,
                     assistantId: assistant.id,
                     assistantName: assistant.name,
+                    skillNames: assistant.skillNames,
                     persona: assistant.persona,
                     coreValues: assistant.coreValues,
                     relationship: assistant.relationship,
@@ -362,6 +366,20 @@ app.on("ready", async () => {
 
     // Seed built-in MCP servers (opennews, opentwitter) into ~/.claude/settings.json
     ensureBuiltinMcpServers();
+
+    // Watch mcporter.json for changes — new sessions auto-pick-up added/removed HTTP MCP servers
+    try {
+        const mcporterPath = getMcporterConfigPath();
+        if (existsSync(mcporterPath)) {
+            const { watchFile } = await import("fs");
+            watchFile(mcporterPath, { interval: 2000 }, () => {
+                invalidateMcporterCache();
+                console.log("[main] mcporter.json changed — new sessions will use updated MCP servers");
+            });
+        }
+    } catch (err) {
+        console.warn("[main] Failed to watch mcporter.json:", err);
+    }
 
     // Deploy built-in skills (skill-creator, etc.) to ~/.claude/skills/ and ~/.codex/skills/
     seedBuiltinSkills();
@@ -1696,10 +1714,54 @@ app.on("ready", async () => {
                     const skillFilePath = join(skillPath, "SKILL.md");
                     // Only include skills that have a SKILL.md file
                     if (!existsSync(skillFilePath)) continue;
+                    let label: string | undefined;
                     let description: string | undefined;
                     try {
                         const content = readFileSync(skillFilePath, "utf8");
                         const lines = content.split("\n");
+
+                        // Prefer frontmatter metadata when present.
+                        if (lines[0]?.trim() === "---") {
+                            const fmEnd = lines.findIndex((line, idx) => idx > 0 && line.trim() === "---");
+                            if (fmEnd > 0) {
+                                const frontmatterLines = lines.slice(1, fmEnd);
+                                for (let i = 0; i < frontmatterLines.length; i++) {
+                                    const raw = frontmatterLines[i];
+                                    const trimmed = raw.trim();
+
+                                    if (trimmed.startsWith("name:")) {
+                                        const value = trimmed.slice("name:".length).trim().replace(/^['"]|['"]$/g, "");
+                                        if (value) label = value;
+                                        continue;
+                                    }
+
+                                    if (trimmed.startsWith("description:")) {
+                                        const value = trimmed.slice("description:".length).trim();
+                                        if (value && value !== ">" && value !== "|") {
+                                            description = value.replace(/^['"]|['"]$/g, "");
+                                            continue;
+                                        }
+
+                                        const blockLines: string[] = [];
+                                        for (let j = i + 1; j < frontmatterLines.length; j++) {
+                                            const nextRaw = frontmatterLines[j];
+                                            const nextTrimmed = nextRaw.trim();
+                                            if (!nextTrimmed) continue;
+                                            if (!nextRaw.startsWith(" ") && /^[A-Za-z0-9_-]+:\s*/.test(nextTrimmed)) {
+                                                i = j - 1;
+                                                break;
+                                            }
+                                            blockLines.push(nextTrimmed.replace(/^[-*]\s+/, ""));
+                                            i = j;
+                                        }
+                                        if (blockLines.length > 0) {
+                                            description = blockLines.join(" ").substring(0, 300);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         const descriptionLines: string[] = [];
                         let foundFirstHeading = false;
                         let collectingDescription = false;
@@ -1724,7 +1786,7 @@ app.on("ready", async () => {
                             }
                         }
 
-                        if (descriptionLines.length > 0) {
+                        if (!description && descriptionLines.length > 0) {
                             description = descriptionLines.join(" ").substring(0, 300);
                         }
                     } catch {
@@ -1732,6 +1794,7 @@ app.on("ready", async () => {
                     }
                     result.skills.push({
                         name: skillName,
+                        label,
                         fullPath: skillFilePath,
                         description
                     });

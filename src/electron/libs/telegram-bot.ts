@@ -20,12 +20,6 @@ import { z } from "zod";
 import { promptOnce, runAgent } from "./agent-client.js";
 import { EventEmitter } from "events";
 import { homedir } from "os";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 import { loadUserSettings } from "./user-settings.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
@@ -52,6 +46,11 @@ import {
   MediaGroupBuffer,
   type FlushedMediaGroup,
 } from "./bot-base.js";
+import {
+  buildActivatedSkillSection,
+  loadInstalledSkills,
+  resolveSkillCommand,
+} from "./skill-context.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -96,92 +95,6 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
 const MEDIA_GROUP_WAIT_MS = 1_500;
-
-// ─── Skill info loader ───────────────────────────────────────────────────────
-
-interface SkillInfo {
-  name: string;
-  label: string;
-  description: string;
-}
-
-interface SkillCatalogEntry {
-  name: string;
-  label?: string;
-  description?: string;
-}
-
-let _catalogCache: SkillCatalogEntry[] | null = null;
-let _catalogMtime = 0;
-
-function loadSkillCatalog(): SkillCatalogEntry[] {
-  const catalogPath = join(__dirname, "..", "..", "..", "skills-catalog.json");
-  try {
-    const st = statSync(catalogPath);
-    if (_catalogCache && st.mtimeMs === _catalogMtime) return _catalogCache;
-    const raw = JSON.parse(readFileSync(catalogPath, "utf8"));
-    _catalogCache = (raw?.skills ?? []) as SkillCatalogEntry[];
-    _catalogMtime = st.mtimeMs;
-    return _catalogCache;
-  } catch {
-    return _catalogCache ?? [];
-  }
-}
-
-function loadInstalledSkills(): Map<string, SkillInfo> {
-  const result = new Map<string, SkillInfo>();
-  const catalog = loadSkillCatalog();
-  const catalogMap = new Map(catalog.map((s) => [s.name, s]));
-
-  const skillsDirs = [
-    join(homedir(), ".claude", "skills"),
-    join(homedir(), ".cursor", "skills"),
-    join(homedir(), ".codex", "skills"),
-  ];
-
-  for (const dir of skillsDirs) {
-    if (!existsSync(dir)) continue;
-    try {
-      for (const name of readdirSync(dir)) {
-        if (name.startsWith(".") || result.has(name)) continue;
-        const skillDir = join(dir, name);
-        if (!statSync(skillDir).isDirectory()) continue;
-        if (!existsSync(join(skillDir, "SKILL.md"))) continue;
-
-        const catalogEntry = catalogMap.get(name);
-        const label = catalogEntry?.label ?? name;
-        let desc = catalogEntry?.description ?? "";
-
-        if (!desc) {
-          try {
-            const content = readFileSync(join(skillDir, "SKILL.md"), "utf8");
-            const firstLine = content.split("\n").find((l) => l.trim() && !l.trim().startsWith("#"));
-            desc = firstLine?.trim().slice(0, 200) ?? "";
-          } catch { /* ignore */ }
-        }
-
-        result.set(name, { name, label, description: desc });
-      }
-    } catch { /* ignore */ }
-  }
-
-  return result;
-}
-
-function loadSkillContent(skillName: string): string | null {
-  const dirs = [
-    join(homedir(), ".claude", "skills"),
-    join(homedir(), ".cursor", "skills"),
-    join(homedir(), ".codex", "skills"),
-  ];
-  for (const dir of dirs) {
-    const filePath = join(dir, skillName, "SKILL.md");
-    if (existsSync(filePath)) {
-      try { return readFileSync(filePath, "utf8"); } catch { /* ignore */ }
-    }
-  }
-  return null;
-}
 
 // ─── Conversation history / persona (delegated to bot-base) ──────────────────
 
@@ -463,6 +376,7 @@ function getBotSession(
   provider: "claude" | "openai",
   model: string | undefined,
   cwd: string | undefined,
+  skillNames?: string[],
 ): string {
   const key = `${assistantId}:${chatId}`;
   if (!sessionStore) throw new Error("[Telegram] SessionStore not injected");
@@ -471,6 +385,7 @@ function getBotSession(
   const session = sessionStore.createSession({
     title: `[Telegram] ${assistantName}`,
     assistantId,
+    assistantSkillNames: skillNames ?? [],
     provider,
     model,
     cwd,
@@ -1237,29 +1152,15 @@ class TelegramConnection {
   // ── Skill command resolution ────────────────────────────────────────────────
 
   private resolveSkillCommand(text: string): { skillContent: string; userText: string } | null {
-    if (!text.startsWith("/")) return null;
-    const skillNames = this.opts.skillNames ?? [];
-    if (skillNames.length === 0) return null;
-
-    const match = text.match(/^\/(\S+)(?:\s+(.*))?$/s);
-    if (!match) return null;
-    const [, cmd, args] = match;
-
-    const normalizedCmd = cmd.toLowerCase().replace(/@\S+$/, "");
-    const matched = skillNames.find(
-      (name) => name.toLowerCase().replace(/[^a-z0-9_]/g, "_") === normalizedCmd || name.toLowerCase() === normalizedCmd,
+    const resolved = resolveSkillCommand(text, this.opts.skillNames);
+    if (!resolved) return null;
+    console.log(
+      `[Telegram] Skill command activated: ${resolved.skillName} (${resolved.skillContent.length} chars)`,
     );
-    if (!matched) return null;
-
-    const content = loadSkillContent(matched);
-    if (!content) {
-      console.warn(`[Telegram] Skill "${matched}" SKILL.md not found`);
-      return null;
-    }
-
-    const userText = args?.trim() || `请执行技能 ${matched}`;
-    console.log(`[Telegram] Skill command: /${normalizedCmd} → ${matched} (${content.length} chars)`);
-    return { skillContent: content, userText };
+    return {
+      skillContent: resolved.skillContent,
+      userText: resolved.userText,
+    };
   }
 
   // ── Generate reply and deliver ──────────────────────────────────────────────
@@ -1282,6 +1183,7 @@ class TelegramConnection {
       provider,
       this.opts.model,
       this.opts.defaultCwd,
+      this.opts.skillNames,
     );
 
     sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
@@ -1295,9 +1197,7 @@ class TelegramConnection {
     const nowStr = new Date().toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）`;
 
-    const skillSection = skillContent
-      ? `## 当前激活技能\n请严格按照以下技能说明执行用户请求：\n\n${skillContent}`
-      : undefined;
+    const skillSection = buildActivatedSkillSection(skillContent);
 
     // File/image messages must run in an isolated context to avoid mixing
     // previous analyses into the current file response.

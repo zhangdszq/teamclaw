@@ -1,9 +1,10 @@
-import { memo, useState, useCallback, useEffect, useRef } from "react";
+import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
+import { useAppStore } from "../store/useAppStore";
 
 // ─── Toast (singleton pub/sub — ToastHost must be mounted once at app root) ───
 
@@ -77,6 +78,8 @@ function normalizeImageSrc(src?: string): string | undefined {
 }
 
 const IMAGE_DEST_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff|avif)(?:[?#][^)\s>]*)?$/i;
+const SKILL_COMMAND_RE = /(^|[^\w/])(\/([a-z0-9][\w-]*))(?=[\s.,!?;:，。！？；：]|$)/gi;
+const SKILL_COMMAND_EXCLUDED_NODES = new Set(["code", "inlineCode", "html", "link", "linkReference"]);
 
 function isLocalLikeImageDestination(dest: string): boolean {
   return /^(\/|[A-Za-z]:[/\\]|file:\/\/|localfile:\/\/)/.test(dest) && IMAGE_DEST_RE.test(dest);
@@ -95,6 +98,72 @@ function normalizeMarkdownText(text: string): string {
 
 function hasRenderableImageMarkdown(text: string): boolean {
   return /!\[[^\]]*\]\((?:<)?(?:\/|[A-Za-z]:[/\\]|file:\/\/|localfile:\/\/|https?:\/\/|data:)[^)>\n]+(?:>)?\)/i.test(text);
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
+
+function replaceSkillCommandTextNode(node: { type: "text"; value: string }, installedSkillNames: Set<string>) {
+  const value = String(node.value ?? "");
+  const parts: Array<{ type: "text"; value: string } | { type: "html"; value: string }> = [];
+  let cursor = 0;
+
+  for (const match of value.matchAll(SKILL_COMMAND_RE)) {
+    const prefix = match[1] ?? "";
+    const slashCommand = match[2] ?? "";
+    const skillName = match[3] ?? "";
+    if (!skillName || !installedSkillNames.has(skillName)) continue;
+
+    const matchIndex = match.index ?? 0;
+    const commandIndex = matchIndex + prefix.length;
+
+    if (matchIndex > cursor) {
+      parts.push({ type: "text", value: value.slice(cursor, matchIndex) });
+    }
+    if (prefix) {
+      parts.push({ type: "text", value: prefix });
+    }
+
+    parts.push({
+      type: "html",
+      value: `<span data-skill-chip="${escapeHtmlAttribute(skillName)}"></span>`,
+    });
+    cursor = commandIndex + slashCommand.length;
+  }
+
+  if (parts.length === 0) return [node];
+  if (cursor < value.length) {
+    parts.push({ type: "text", value: value.slice(cursor) });
+  }
+  return parts;
+}
+
+function transformSkillCommands(node: any, installedSkillNames: Set<string>) {
+  if (!node || SKILL_COMMAND_EXCLUDED_NODES.has(node.type) || !Array.isArray(node.children)) return;
+
+  const nextChildren: any[] = [];
+  for (const child of node.children) {
+    if (child?.type === "text") {
+      nextChildren.push(...replaceSkillCommandTextNode(child, installedSkillNames));
+      continue;
+    }
+    transformSkillCommands(child, installedSkillNames);
+    nextChildren.push(child);
+  }
+  node.children = nextChildren;
+}
+
+function createSkillChipRemarkPlugin(installedSkillNames: Set<string>) {
+  return function remarkSkillChipPlugin() {
+    return (tree: any) => {
+      if (installedSkillNames.size === 0) return;
+      transformSkillCommands(tree, installedSkillNames);
+    };
+  };
 }
 
 function resolveLocalImagePath(src: string): string | null {
@@ -171,6 +240,30 @@ function ImageActionButton({
     >
       {children}
     </button>
+  );
+}
+
+function SkillChip({
+  skillName,
+  skillLabel,
+  skillDescription,
+}: {
+  skillName: string;
+  skillLabel?: string;
+  skillDescription?: string;
+}) {
+  const displayName = (skillLabel || "").trim() || skillName;
+  const title = [skillLabel, skillDescription].filter(Boolean).join(" · ") || `/${skillName}`;
+  return (
+    <span
+      className="mx-0.5 inline-flex items-center gap-1 rounded-full border border-accent/15 bg-accent/10 px-2 py-[3px] align-middle text-[12px] font-medium leading-none text-accent"
+      title={title}
+    >
+      <svg viewBox="0 0 24 24" className="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M9 18h6M10 22h4M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
+      </svg>
+      <span>{displayName}</span>
+    </span>
   );
 }
 
@@ -453,17 +546,44 @@ function InlineImage({ src, alt, className }: { src: string; alt?: string; class
 }
 
 const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
+  const skills = useAppStore((state) => state.skills);
   const normalizedText = normalizeMarkdownText(String(text ?? ""));
+  const skillMap = useMemo(() => {
+    const map = new Map<string, SkillInfo>();
+    for (const skill of skills) {
+      map.set(skill.name, skill);
+    }
+    return map;
+  }, [skills]);
+  const remarkSkillChipPlugin = useMemo(
+    () => createSkillChipRemarkPlugin(new Set(skillMap.keys())),
+    [skillMap]
+  );
   return (
     <>
       <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkSkillChipPlugin]}
       rehypePlugins={[rehypeRaw, rehypeHighlight]}
       components={{
         h1: (props) => <h1 className="mt-4 text-base font-semibold text-ink-900" {...props} />,
         h2: (props) => <h2 className="mt-3 text-[15px] font-semibold text-ink-900" {...props} />,
         h3: (props) => <h3 className="mt-3 text-sm font-semibold text-ink-800" {...props} />,
         p: (props) => <p className="mt-2 text-sm leading-relaxed text-ink-700" {...props} />,
+        span: (props) => {
+          const extraProps = props as typeof props & Record<string, unknown>;
+          const skillName = typeof extraProps["data-skill-chip"] === "string" ? extraProps["data-skill-chip"] : undefined;
+          if (skillName) {
+            const skill = skillMap.get(skillName);
+            return (
+              <SkillChip
+                skillName={skillName}
+                skillLabel={skill?.label}
+                skillDescription={skill?.description}
+              />
+            );
+          }
+          return <span {...props} />;
+        },
         ul: (props) => <ul className="mt-2 ml-4 grid list-disc gap-1 text-sm" {...props} />,
         ol: (props) => <ol className="mt-2 ml-4 grid list-decimal gap-1 text-sm" {...props} />,
         li: (props) => <li className="min-w-0 text-ink-700 leading-relaxed" {...props} />,

@@ -42,6 +42,10 @@ import {
   flushBufferedBotAssistantMessage,
 } from "./bot-base.js";
 import { loadAssistantsConfig, patchAssistantBotOwnerIds } from "./assistants-config.js";
+import {
+  buildActivatedSkillSection,
+  resolveSkillCommand,
+} from "./skill-context.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -61,6 +65,7 @@ export interface FeishuBotOptions {
   domain?: "feishu" | "lark" | string;
   assistantId: string;
   assistantName: string;
+  skillNames?: string[];
   persona?: string;
   coreValues?: string;
   relationship?: string;
@@ -191,7 +196,7 @@ export function updateFeishuBotConfig(
   assistantId: string,
   updates: Partial<Pick<FeishuBotOptions,
     "provider" | "model" | "persona" | "coreValues" | "relationship" |
-    "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd"
+    "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd" | "skillNames"
   >>,
 ): void {
   const conn = pool.get(assistantId);
@@ -248,6 +253,7 @@ function getBotSession(
   provider: "claude" | "openai",
   model: string | undefined,
   cwd: string | undefined,
+  skillNames?: string[],
   sessionKey?: string,
 ): string {
   if (!sessionStore) throw new Error("[Feishu] SessionStore not injected");
@@ -257,6 +263,7 @@ function getBotSession(
   const session = sessionStore.createSession({
     title: `[飞书] ${assistantName}`,
     assistantId,
+    assistantSkillNames: skillNames ?? [],
     provider,
     model,
     cwd,
@@ -781,6 +788,8 @@ class FeishuConnection {
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
     forwardMentions?: Array<{ id: Record<string, string>; name?: string }>,
   ): Promise<void> {
+    const skillContext = resolveSkillCommand(userText, this.opts.skillNames);
+    const effectiveUserText = skillContext?.userText ?? userText;
     const history = getHistory(sessionKey);
     const provider = this.opts.provider ?? "claude";
 
@@ -790,20 +799,26 @@ class FeishuConnection {
       provider,
       this.opts.model,
       this.opts.defaultCwd,
+      this.opts.skillNames,
       sessionKey,
     );
 
-    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
-    updateBotSessionTitle(sessionId, userText).catch(() => {});
+    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: effectiveUserText });
+    updateBotSessionTitle(sessionId, effectiveUserText).catch(() => {});
 
-    history.push({ role: "user", content: userText });
+    history.push({ role: "user", content: effectiveUserText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
+    const memoryContext = await buildSmartMemoryContext(
+      effectiveUserText,
+      this.opts.assistantId,
+      this.opts.defaultCwd,
+    );
     const historySection = history.length > 1
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;
-    const system = buildStructuredPersona(this.opts, memoryContext, historySection);
+    const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
+    const system = buildStructuredPersona(this.opts, memoryContext, skillSection, historySection);
 
     // Add typing indicator (emoji reaction)
     await this.addTypingReaction(messageId).catch(() => {});
@@ -812,7 +827,7 @@ class FeishuConnection {
     let streamedFinalText = "";
 
     try {
-      const result = await this.runClaudeQuery(system, userText, messageId, chatId, provider, sessionKey, sessionId, mediaInfo);
+      const result = await this.runClaudeQuery(system, effectiveUserText, messageId, chatId, provider, sessionKey, sessionId, mediaInfo);
       replyText = result.text;
       streamedFinalText = result.streamedText;
     } catch (err) {
@@ -835,7 +850,7 @@ class FeishuConnection {
 
     history.push({ role: "assistant", content: persistText });
     recordConversation(
-      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${persistText}\n`,
+      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${persistText}\n`,
       { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
     );
 

@@ -18,6 +18,18 @@ import { homedir } from "os";
 export type AgentProvider = "claude" | "openai";
 export type { SDKMessage, PermissionResult, SDKResultMessage };
 
+const OPENAI_PROXY_SENTINEL = "openai-proxy-dummy";
+const OPENAI_PROXY_PLACEHOLDER_MODEL = "claude-sonnet-4-20250514";
+const OPENAI_ENV_KEYS_TO_CLEAR = [
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+] as const;
+
 export interface PromptOnceOpts {
   model?: string;
   env?: Record<string, string | undefined>;
@@ -50,6 +62,28 @@ type ProviderEnvResult = {
   cleanup?: () => void;
 };
 
+export function buildOpenAIProviderEnv(
+  baseEnv?: Record<string, string | undefined>,
+  proxyUrl?: string,
+): Record<string, string | undefined> {
+  const env = { ...(baseEnv ?? getEnhancedEnv()) };
+
+  // OpenAI provider must not inherit Anthropic/Minimax credentials from process.env,
+  // otherwise the SDK may bypass the local proxy and talk to the wrong upstream.
+  for (const key of OPENAI_ENV_KEYS_TO_CLEAR) {
+    delete env[key];
+  }
+
+  env.ANTHROPIC_API_KEY = OPENAI_PROXY_SENTINEL;
+  env.ANTHROPIC_AUTH_TOKEN = OPENAI_PROXY_SENTINEL;
+  env.ANTHROPIC_MODEL = OPENAI_PROXY_PLACEHOLDER_MODEL;
+  if (proxyUrl) {
+    env.ANTHROPIC_BASE_URL = proxyUrl;
+  }
+
+  return env;
+}
+
 async function getEnvForProvider(
   provider: AgentProvider | undefined,
   baseEnv?: Record<string, string | undefined>,
@@ -60,13 +94,10 @@ async function getEnvForProvider(
     await startProxy();
     const routeId = registerProxyRoute(openaiOverrides);
     const proxyUrl = getProxyBaseUrl(routeId);
-    if (proxyUrl) {
-      env.ANTHROPIC_BASE_URL = proxyUrl;
-      env.ANTHROPIC_API_KEY = "openai-proxy-dummy";
-    }
+    const openaiEnv = buildOpenAIProviderEnv(env, proxyUrl ?? undefined);
     return {
-      env,
-      cleanup: () => unregisterProxyRoute(routeId),
+      env: openaiEnv,
+      cleanup: () => { unregisterProxyRoute(routeId); },
     };
   }
   return { env };
@@ -105,9 +136,22 @@ export async function promptOnce(prompt: string, opts?: PromptOnceOpts): Promise
 export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise<AsyncIterable<SDKMessage>> {
   const { env, cleanup } = await getEnvForProvider(opts.provider, opts.env, opts.openaiOverrides);
   console.log("[agent-client] runAgent called, provider:", opts.provider ?? "claude", "cwd:", opts.cwd, "resume:", opts.resume ?? "none");
+  const settingSources = opts.provider === "openai"
+    ? ([] as ("user" | "project" | "local")[])
+    : getSettingSources();
 
   if (opts.provider === "openai") {
-    console.log("[agent-client] Proxy env: provider=", opts.provider, "ANTHROPIC_BASE_URL=", env.ANTHROPIC_BASE_URL, "ANTHROPIC_API_KEY=", env.ANTHROPIC_API_KEY ? `${env.ANTHROPIC_API_KEY.slice(0, 12)}...` : "unset");
+    console.log(
+      "[agent-client] Proxy env:",
+      "provider=", opts.provider,
+      "ANTHROPIC_BASE_URL=", env.ANTHROPIC_BASE_URL,
+      "ANTHROPIC_AUTH_TOKEN=", env.ANTHROPIC_AUTH_TOKEN === OPENAI_PROXY_SENTINEL ? OPENAI_PROXY_SENTINEL : "unexpected",
+      "ANTHROPIC_MODEL=", env.ANTHROPIC_MODEL ?? "unset",
+      "HOME=", env.HOME ?? "unset",
+      "settingSources=", settingSources.length > 0 ? settingSources.join(",") : "<none>",
+      "routeModel=", opts.openaiOverrides?.model ?? "default",
+      "routeBaseUrl=", opts.openaiOverrides?.baseUrl ?? "default",
+    );
   }
 
   let iterable: AsyncIterable<SDKMessage>;
@@ -124,7 +168,7 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
         includePartialMessages: opts.includePartialMessages ?? true,
         allowDangerouslySkipPermissions: true,
         maxTurns: opts.maxTurns ?? 300,
-        settingSources: getSettingSources(),
+        settingSources,
         mcpServers: opts.mcpServers,
         systemPrompt: opts.systemPrompt,
         canUseTool: opts.canUseTool,

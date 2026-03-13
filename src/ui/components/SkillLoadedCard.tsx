@@ -108,6 +108,7 @@ function SkillIcon({ type, className = "" }: { type: string; className?: string 
 export type SkillLoadedMessage = {
   type: "skill_loaded";
   skillName: string;
+  skillLabel?: string;
   skillContent: string;
   skillDescription?: string;
 };
@@ -212,8 +213,9 @@ function extractInstruction(content: string): string {
 }
 
 export function SkillLoadedCard({ message }: SkillLoadedCardProps) {
-  const { skillName, skillContent, skillDescription } = message;
+  const { skillName, skillLabel, skillContent, skillDescription } = message;
   const [isExpanded, setIsExpanded] = useState(false);
+  const displayName = (skillLabel || "").trim() || skillName;
   
   const category = getSkillCategory(skillName, skillDescription);
   const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
@@ -238,7 +240,7 @@ export function SkillLoadedCard({ message }: SkillLoadedCardProps) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-base font-semibold text-ink-800">已加载 {skillName} 技能</span>
+            <span className="text-base font-semibold text-ink-800">已加载 {displayName} 技能</span>
             <span className="flex items-center gap-1 text-xs text-success">
               <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
                 <circle cx="12" cy="12" r="4" />

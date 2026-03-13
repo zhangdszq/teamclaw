@@ -25,10 +25,16 @@ import {
   findKnowledgeCandidateBySession,
   updateKnowledgeCandidate,
 } from './libs/knowledge-store.js';
-import { IMAGE_INLINE_RULE } from './libs/bot-base.js';
 import { buildConversationDigest, extractExperienceViaAI } from './libs/experience-extractor.js';
 import { appendDailyMemory, ScopedMemory } from './libs/memory-store.js';
 import {
+  applyAssistantContextToPrompt,
+  loadSkillContent,
+  normalizeSkillNames,
+  resolveSkillCommand,
+} from './libs/skill-context.js';
+import {
+  buildContinuePrompt,
   buildResumeFallbackPrompt,
   isResumeReadyMessage,
   shouldFallbackFromContinueError,
@@ -37,6 +43,13 @@ import {
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
 const sessions = new SessionStore(DB_PATH);
+
+function areSkillNamesEqual(a?: string[], b?: string[]): boolean {
+  const left = normalizeSkillNames(a);
+  const right = normalizeSkillNames(b);
+  if (left.length !== right.length) return false;
+  return left.every((name, index) => name === right[index]);
+}
 
 /**
  * Ensure AGENTS.md exists in the working directory.
@@ -302,30 +315,6 @@ function useEmbeddedApi(): boolean {
   return isEmbeddedApiRunning();
 }
 
-function applyAssistantContext(prompt: string, skillNames?: string[], persona?: string, assistantId?: string): string {
-  const config = assistantId ? loadAssistantsConfig() : undefined;
-  const assistant = config?.assistants.find((a: any) => a.id === assistantId);
-
-  const sections: string[] = [];
-  const name = assistant?.name;
-  const p = persona || assistant?.persona;
-  const identity = [name ? `你的名字是「${name}」。` : "", p?.trim() ?? ""].filter(Boolean).join("\n");
-  if (identity) sections.push(`## 你的身份\n${identity}`);
-  if (assistant?.coreValues?.trim()) sections.push(`## 核心价值观\n${assistant.coreValues.trim()}`);
-  if (assistant?.relationship?.trim()) sections.push(`## 与用户的关系\n${assistant.relationship.trim()}`);
-  if (assistant?.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${assistant.cognitiveStyle.trim()}`);
-  if (assistant?.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${assistant.operatingGuidelines.trim()}`);
-  if (config?.userContext?.trim()) sections.push(`## 关于用户\n${config.userContext.trim()}`);
-
-  const normalized = (skillNames ?? []).map((s) => s.trim()).filter(Boolean);
-  if (normalized.length > 0) sections.push(normalized.map((s) => `/${s}`).join("\n"));
-
-  sections.push(IMAGE_INLINE_RULE);
-
-  if (sections.length === 0) return prompt;
-  return `${sections.join("\n\n")}\n\n${prompt}`;
-}
-
 function syncResumeStateFromMessage(sessionId: string, message: unknown): void {
   const session = sessions.getSession(sessionId);
   if (!session || !message || typeof message !== 'object') return;
@@ -348,9 +337,22 @@ function toRunnerProvider(provider?: Session['provider']): 'claude' | 'openai' {
   return 'claude';
 }
 
-async function continueWithLocalHistoryFallback(session: Session, prompt: string): Promise<void> {
+async function continueWithLocalHistoryFallback(
+  session: Session,
+  prompt: string,
+  activatedSkillContent?: string,
+): Promise<void> {
   const history = sessions.getSessionHistory(session.id);
-  const fallbackPrompt = buildResumeFallbackPrompt(history?.messages ?? [], prompt);
+  const fallbackPrompt = buildResumeFallbackPrompt(
+    history?.messages ?? [],
+    prompt,
+    session.assistantSkillNames,
+  );
+  const effectiveFallbackPrompt = applyAssistantContextToPrompt(fallbackPrompt, {
+    skillNames: session.assistantSkillNames,
+    assistantId: session.assistantId,
+    activatedSkillContent,
+  });
   const sessionProvider = session.provider ?? 'claude';
 
   console.log('[IPC] Falling back to local-history continue:', session.id);
@@ -368,12 +370,13 @@ async function continueWithLocalHistoryFallback(session: Session, prompt: string
           cwd: session.cwd,
           title: session.title,
           allowedTools: session.allowedTools,
-          prompt: fallbackPrompt,
+          prompt: effectiveFallbackPrompt,
           externalSessionId: session.id,
           provider: sessionProvider,
           model: session.model,
           assistantId: session.assistantId,
           assistantSkillNames: session.assistantSkillNames,
+          assistantActivatedSkillContent: activatedSkillContent,
         },
         (apiEvent) => {
           if ('payload' in apiEvent && 'sessionId' in (apiEvent.payload as any)) {
@@ -410,14 +413,8 @@ async function continueWithLocalHistoryFallback(session: Session, prompt: string
     return;
   }
 
-  const effectivePrompt = applyAssistantContext(
-    fallbackPrompt,
-    session.assistantSkillNames,
-    undefined,
-    session.assistantId
-  );
   runClaude({
-      prompt: effectivePrompt,
+      prompt: effectiveFallbackPrompt,
       session,
       provider: toRunnerProvider(sessionProvider),
       onEvent: emit,
@@ -493,7 +490,19 @@ export async function handleClientEvent(event: ClientEvent) {
     if (event.payload.assistantSkillNames?.length) {
       console.log('[IPC] session.start with skills:', event.payload.assistantSkillNames);
     }
-    const effectivePrompt = applyAssistantContext(event.payload.prompt, event.payload.assistantSkillNames, event.payload.assistantPersona, event.payload.assistantId);
+    const startSkillContext = resolveSkillCommand(event.payload.prompt, event.payload.assistantSkillNames);
+    let activatedSkillContent = startSkillContext?.skillContent;
+    if (!activatedSkillContent && event.payload.assistantSkillNames?.length) {
+      const firstSkill = event.payload.assistantSkillNames[0];
+      activatedSkillContent = loadSkillContent(firstSkill) ?? undefined;
+    }
+    const resolvedStartPrompt = startSkillContext?.userText ?? event.payload.prompt;
+    const effectivePrompt = applyAssistantContextToPrompt(resolvedStartPrompt, {
+      skillNames: event.payload.assistantSkillNames,
+      persona: event.payload.assistantPersona,
+      assistantId: event.payload.assistantId,
+      activatedSkillContent,
+    });
     const session = sessions.createSession({
       cwd: event.payload.cwd,
       title: event.payload.title,
@@ -534,13 +543,14 @@ export async function handleClientEvent(event: ClientEvent) {
             cwd: event.payload.cwd,
             title: event.payload.title,
             allowedTools: event.payload.allowedTools,
-            prompt: event.payload.prompt,
+            prompt: resolvedStartPrompt,
             externalSessionId: session.id,
             provider,
             model: event.payload.model,
             assistantId: session.assistantId,
             assistantSkillNames: session.assistantSkillNames,
             assistantPersona: event.payload.assistantPersona,
+            assistantActivatedSkillContent: activatedSkillContent,
           },
           (apiEvent) => {
             // Map API session ID to local session ID
@@ -618,6 +628,18 @@ export async function handleClientEvent(event: ClientEvent) {
       return;
     }
 
+    const nextSkillNames = normalizeSkillNames(event.payload.assistantSkillNames);
+    const shouldSwitchSkills = nextSkillNames.length > 0 && !areSkillNamesEqual(session.assistantSkillNames, nextSkillNames);
+    if (shouldSwitchSkills) {
+      sessions.updateSession(session.id, {
+        assistantSkillNames: nextSkillNames,
+        // Force local-history fallback so the refreshed skill context is injected.
+        resumeReady: false,
+      });
+      session.assistantSkillNames = nextSkillNames;
+      session.resumeReady = false;
+    }
+
     sessions.updateSession(session.id, {
       lastPrompt: event.payload.prompt,
     });
@@ -639,10 +661,27 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     const sessionProvider = session.provider ?? 'claude';
+    const continueSkillContext = resolveSkillCommand(event.payload.prompt, session.assistantSkillNames);
+    let continueActivatedContent = continueSkillContext?.skillContent;
+    if (!continueActivatedContent && session.assistantSkillNames?.length) {
+      const firstSkill = session.assistantSkillNames[0];
+      continueActivatedContent = loadSkillContent(firstSkill) ?? undefined;
+    }
+    const resolvedContinuePrompt = continueSkillContext?.userText ?? event.payload.prompt;
+    const continuedPrompt = buildContinuePrompt(resolvedContinuePrompt, session.assistantSkillNames);
+    const effectiveContinuedPrompt = applyAssistantContextToPrompt(continuedPrompt, {
+      skillNames: session.assistantSkillNames,
+      assistantId: session.assistantId,
+      activatedSkillContent: continueActivatedContent,
+    });
     const canResumeRemotely = Boolean(session.claudeSessionId && session.resumeReady);
 
-    if (!canResumeRemotely) {
-      await continueWithLocalHistoryFallback(session, event.payload.prompt);
+    if (!canResumeRemotely || shouldSwitchSkills) {
+      await continueWithLocalHistoryFallback(
+        session,
+        resolvedContinuePrompt,
+        continueSkillContext?.skillContent,
+      );
       return;
     }
 
@@ -654,7 +693,7 @@ export async function handleClientEvent(event: ClientEvent) {
       try {
         await apiContinueSession(
           session.claudeSessionId!,
-          event.payload.prompt,
+          continuedPrompt,
           (apiEvent) => {
             if ('payload' in apiEvent && 'sessionId' in (apiEvent.payload as any)) {
               (apiEvent.payload as any).sessionId = session.id;
@@ -678,16 +717,27 @@ export async function handleClientEvent(event: ClientEvent) {
             externalSessionId: session.id,
             provider: sessionProvider,
             model: session.model,
+            assistantId: session.assistantId,
+            assistantSkillNames: session.assistantSkillNames,
+            assistantActivatedSkillContent: continueSkillContext?.skillContent,
           }
         );
         if (shouldFallback) {
           usedFallback = true;
-          await continueWithLocalHistoryFallback(session, event.payload.prompt);
+          await continueWithLocalHistoryFallback(
+            session,
+            resolvedContinuePrompt,
+            continueSkillContext?.skillContent,
+          );
         }
       } catch (error) {
         if (shouldFallbackFromContinueError(error)) {
           usedFallback = true;
-          await continueWithLocalHistoryFallback(session, event.payload.prompt);
+          await continueWithLocalHistoryFallback(
+            session,
+            resolvedContinuePrompt,
+            continueSkillContext?.skillContent,
+          );
           return;
         }
         sessions.updateSession(session.id, { status: 'error' });
@@ -719,14 +769,25 @@ export async function handleClientEvent(event: ClientEvent) {
       }
     } else {
       // Fallback: direct SDK when sidecar is unavailable
+      let usedFallback = false;
       runClaude({
-          prompt: event.payload.prompt,
+          prompt: effectiveContinuedPrompt,
           session,
           resumeSessionId: session.claudeSessionId,
           provider: toRunnerProvider(sessionProvider),
           onEvent: emit,
           onSessionUpdate: (updates) => {
             sessions.updateSession(session.id, updates);
+          },
+          onContinueMissingConversation: async () => {
+            if (usedFallback) return;
+            usedFallback = true;
+            runnerHandles.delete(session.id);
+            await continueWithLocalHistoryFallback(
+              session,
+              resolvedContinuePrompt,
+              continueSkillContext?.skillContent,
+            );
           },
         })
           .then((handle) => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { useIPC } from "./hooks/useIPC";
 import { useAppStore } from "./store/useAppStore";
@@ -717,6 +717,27 @@ function App() {
     prevActiveSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
+  // Sync assistant selector when active session changes (e.g. on app startup)
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const session = sessions[activeSessionId];
+    const sessionAssistantId = session?.assistantId;
+    if (!sessionAssistantId || sessionAssistantId === selectedAssistantId) return;
+    const assistant = assistantsList.find((a) => a.id === sessionAssistantId);
+    if (assistant) {
+      useAppStore.getState().setSelectedAssistant(
+        assistant.id,
+        assistant.skillNames ?? [],
+        assistant.provider,
+        assistant.model,
+        assistant.persona,
+        assistant.skillTags ?? [],
+      );
+      const savedCwd = loadAssistantCwdLocal(assistant.id);
+      if (savedCwd) useAppStore.getState().setCwd(savedCwd);
+    }
+  }, [activeSessionId, assistantsList]);
+
   // Send DingTalk notification when a scheduled-task session completes
   const prevSessionStatusRef = useRef<Record<string, string>>({});
   useEffect(() => {
@@ -1217,7 +1238,7 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-surface-cream">
       <TitleBar />
-      <div className="flex flex-1 min-h-0 relative">
+      <div className="flex flex-1 min-h-0 overflow-hidden relative">
       <Sidebar
         connected={connected}
         onNewSession={handleNewSession}
@@ -1242,7 +1263,7 @@ function App() {
       />
 
       <main
-        className="flex flex-1 flex-col bg-surface-cream"
+        className="flex flex-1 flex-col min-w-0 bg-surface-cream"
         style={{
           marginLeft: `${effectiveSidebarWidth}px`,
           marginRight: showWorkspacePanel ? `${WORKSPACE_PANEL_WIDTH}px` : 0,
@@ -1361,7 +1382,11 @@ function App() {
           </div>
         ) : null}
 
-        <div ref={scrollContainerRef} className={`select-text flex-1 px-8 pt-6 ${(messages.length > 0 || isLoadingHistory) ? "overflow-y-auto" : "overflow-hidden"} ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`} style={{ paddingBottom: (messages.length > 0 || isLoadingHistory) ? `${inputAreaHeight + 16}px` : 0 }}>
+        <div
+          ref={scrollContainerRef}
+          className={`select-text flex-1 overflow-x-hidden px-8 pt-6 ${(messages.length > 0 || isLoadingHistory) ? "overflow-y-auto" : "overflow-hidden"} ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`}
+          style={{ paddingBottom: (messages.length > 0 || isLoadingHistory) ? `${inputAreaHeight + 16}px` : 0 }}
+        >
           <div
             className="mx-auto max-w-full"
             style={{ width: `min(100%, ${chatContentWidth}px)` }}
@@ -1371,55 +1396,74 @@ function App() {
               <MessageSkeleton />
             ) : messages.length === 0 ? null : (
               <>
-              {/* Session start time pill — WeChat-style separator */}
-              {activeSession?.createdAt && (
-                <div className="flex justify-center pb-2">
-                  <span className="text-[11px] text-muted-light/80 bg-ink-900/[0.04] rounded-full px-3 py-0.5 select-none">
-                    {formatConversationTime(activeSession.createdAt)}
-                  </span>
-                </div>
-              )}
               {/* 打字机动画进行时，从列表中隐藏正在被动画展示的消息（避免重复显示） */}
-              {groupMessages(
-                (animatingMsgUuid
-                  ? messages.filter(msg => (msg as any).uuid !== animatingMsgUuid)
-                  : messages
-                ).filter(msg => (msg as any).type !== "stream_event")
-              ).map((group, gIdx, arr) => {
-                const isLastGroup = gIdx === arr.length - 1;
-                if (group.type === "process") {
-                  return (
-                    <ProcessGroup
-                      key={group.key}
-                      messages={group.messages}
-                      isLast={isLastGroup}
-                      isRunning={isRunning}
-                      showSystemInfo={false}
-                      onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
-                      onLikeMessage={handleLikeMessage}
-                      likeScopeId={activeSessionId || "no-session"}
-                      likedMessageKeys={likedMessageKeys}
-                      assistantName={activeAssistantName}
-                      userName={userName}
-                    />
-                  );
-                }
-                return (
-                  <MessageCard
-                    key={group.key}
-                    message={group.message}
-                    isLast={isLastGroup}
-                    isRunning={isRunning}
-                    showSystemInfo={showSystemInfo}
-                    onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
-                    onLikeMessage={handleLikeMessage}
-                    likeScopeId={activeSessionId || "no-session"}
-                    likedMessageKeys={likedMessageKeys}
-                    assistantName={activeAssistantName}
-                    userName={userName}
-                  />
+              {(() => {
+                const groups = groupMessages(
+                  (animatingMsgUuid
+                    ? messages.filter(msg => (msg as any).uuid !== animatingMsgUuid)
+                    : messages
+                  ).filter(msg => (msg as any).type !== "stream_event")
                 );
-              })}
+                let lastShownTs = 0;
+                return groups.map((group, gIdx, arr) => {
+                  const isLastGroup = gIdx === arr.length - 1;
+                  const firstMsg = group.type === "single" ? group.message : group.messages[0];
+                  const isUserTurn = firstMsg?.type === "user_prompt";
+                  const msgTs = (firstMsg as any)?._ts as number | undefined;
+
+                  let timePill: React.ReactNode = null;
+                  if (isUserTurn && msgTs) {
+                    const gap = msgTs - lastShownTs;
+                    if (gap >= 5 * 60 * 1000 || lastShownTs === 0) {
+                      lastShownTs = msgTs;
+                      timePill = (
+                        <div key={`time-${msgTs}`} className="flex justify-center py-2">
+                          <span className="text-[11px] text-muted-light/80 bg-ink-900/[0.04] rounded-full px-3 py-0.5 select-none">
+                            {formatConversationTime(msgTs)}
+                          </span>
+                        </div>
+                      );
+                    }
+                  }
+
+                  if (group.type === "process") {
+                    return (
+                      <React.Fragment key={group.key}>
+                        {timePill}
+                        <ProcessGroup
+                          messages={group.messages}
+                          isLast={isLastGroup}
+                          isRunning={isRunning}
+                          showSystemInfo={false}
+                          onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
+                          onLikeMessage={handleLikeMessage}
+                          likeScopeId={activeSessionId || "no-session"}
+                          likedMessageKeys={likedMessageKeys}
+                          assistantName={activeAssistantName}
+                          userName={userName}
+                        />
+                      </React.Fragment>
+                    );
+                  }
+                  return (
+                    <React.Fragment key={group.key}>
+                      {timePill}
+                      <MessageCard
+                        message={group.message}
+                        isLast={isLastGroup}
+                        isRunning={isRunning}
+                        showSystemInfo={showSystemInfo}
+                        onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
+                        onLikeMessage={handleLikeMessage}
+                        likeScopeId={activeSessionId || "no-session"}
+                        likedMessageKeys={likedMessageKeys}
+                        assistantName={activeAssistantName}
+                        userName={userName}
+                      />
+                    </React.Fragment>
+                  );
+                });
+              })()}
               </>
             )}
 

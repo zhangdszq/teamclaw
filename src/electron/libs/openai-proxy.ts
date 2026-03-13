@@ -87,6 +87,25 @@ export function mapClaudeModel(model: string): string {
   return "gpt-5.4";
 }
 
+export function sanitizeToolCallArguments(toolName: string, rawArguments: string): string {
+  if (!rawArguments.trim()) return rawArguments;
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(rawArguments) as Record<string, unknown>;
+  } catch {
+    return rawArguments;
+  }
+
+  // gpt-5.4 occasionally emits pages="" for the built-in Read tool.
+  // Claude Code rejects that value, while omitting the field works.
+  if (toolName === "Read" && typeof parsed.pages === "string" && parsed.pages.trim() === "") {
+    delete parsed.pages;
+  }
+
+  return JSON.stringify(parsed);
+}
+
 // ─── Tool ID Conversion ─────────────────────────────────────
 
 export function toOpenAIToolId(anthropicId: string): string {
@@ -355,12 +374,28 @@ async function* streamResponsesAPI(
   let hasEmittedStart = false;
   let blockIndex = 0;
   let currentBlockType: string | null = null;
+  let currentToolName: string | null = null;
+  let currentToolArguments = "";
   let stopReason = "end_turn";
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
 
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+
+  const flushToolArguments = async function* (): AsyncGenerator<{ event: string; data: Record<string, unknown> }> {
+    if (currentBlockType !== "tool_use" || !currentToolArguments) return;
+    const sanitized = sanitizeToolCallArguments(currentToolName ?? "", currentToolArguments);
+    yield {
+      event: "content_block_delta",
+      data: {
+        type: "content_block_delta",
+        index: blockIndex,
+        delta: { type: "input_json_delta", partial_json: sanitized },
+      },
+    };
+    currentToolArguments = "";
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -421,15 +456,20 @@ async function* streamResponsesAPI(
         }
 
         if (currentBlockType !== null) {
+          yield* flushToolArguments();
           yield { event: "content_block_stop", data: { type: "content_block_stop", index: blockIndex } };
           blockIndex++;
         }
 
         if (item.type === "message") {
           currentBlockType = "text";
+          currentToolName = null;
+          currentToolArguments = "";
           yield { event: "content_block_start", data: { type: "content_block_start", index: blockIndex, content_block: { type: "text", text: "" } } };
         } else if (item.type === "function_call") {
           currentBlockType = "tool_use";
+          currentToolName = String(item.name ?? "");
+          currentToolArguments = "";
           const openAIId = (item.call_id || item.id) as string;
           stopReason = "tool_use";
           yield {
@@ -442,6 +482,8 @@ async function* streamResponsesAPI(
           };
         } else if (item.type === "reasoning") {
           currentBlockType = "thinking";
+          currentToolName = null;
+          currentToolArguments = "";
           yield { event: "content_block_start", data: { type: "content_block_start", index: blockIndex, content_block: { type: "thinking", thinking: "" } } };
         }
       }
@@ -467,7 +509,14 @@ async function* streamResponsesAPI(
       if (eventType === "response.function_call_arguments.delta") {
         const delta = event.delta as string;
         if (delta && currentBlockType === "tool_use") {
-          yield { event: "content_block_delta", data: { type: "content_block_delta", index: blockIndex, delta: { type: "input_json_delta", partial_json: delta } } };
+          currentToolArguments += delta;
+        }
+      }
+
+      if (eventType === "response.function_call_arguments.done" && currentBlockType === "tool_use") {
+        const finalArguments = event.arguments as string | undefined;
+        if (typeof finalArguments === "string" && finalArguments.length > 0) {
+          currentToolArguments = finalArguments;
         }
       }
     }
@@ -486,6 +535,7 @@ async function* streamResponsesAPI(
     yield { event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } } };
     yield { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } };
   } else if (currentBlockType !== null) {
+    yield* flushToolArguments();
     yield { event: "content_block_stop", data: { type: "content_block_stop", index: blockIndex } };
   }
 

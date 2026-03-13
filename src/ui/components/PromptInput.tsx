@@ -180,15 +180,13 @@ export interface UsePromptActionsOptions {
   skills?: SkillInfo[];
   /** 用户当前主动选中的技能名（null = 未手动选择） */
   activeSkillName?: string | null;
-  /** 自动选中技能后的回调（用于更新工具栏） */
-  onAutoSelectSkill?: (skill: SkillInfo) => void;
 }
 
 export function usePromptActions(
   sendEvent: (event: ClientEvent) => void,
   options: UsePromptActionsOptions = {},
 ) {
-  const { skills: optionSkills, activeSkillName, onAutoSelectSkill } = options;
+  const { skills: optionSkills, activeSkillName } = options;
 
   const prompt = useAppStore((state) => state.prompt);
   const cwd = useAppStore((state) => state.cwd);
@@ -345,6 +343,11 @@ export function usePromptActions(
     if (!prompt.trim() && attachments.length === 0) return;
 
     let finalPrompt = prompt.trim();
+
+    if (activeSkillName && finalPrompt) {
+      finalPrompt = `/${activeSkillName} ${finalPrompt}`;
+    }
+
     const hasAttachments = attachments.length > 0;
 
     if (hasAttachments) {
@@ -384,7 +387,6 @@ export function usePromptActions(
         const best = findBestSkill(finalPrompt, assistantSkills);
         if (best) {
           resolvedSkillNames = [best.name];
-          onAutoSelectSkill?.(best);
         } else {
           resolvedSkillNames = selectedAssistantSkillNames;
         }
@@ -426,15 +428,45 @@ export function usePromptActions(
         setGlobalError("Session is still running. Please wait for it to finish.");
         return;
       }
-      sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt: finalPrompt } });
+      sendEvent({
+        type: "session.continue",
+        payload: {
+          sessionId: activeSessionId,
+          prompt: finalPrompt,
+          ...(activeSkillName ? { assistantSkillNames: [activeSkillName] } : {}),
+        },
+      });
     }
     setPrompt("");
-  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills, onAutoSelectSkill]);
+  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills]);
+
+  const revertSessionToBeforeLastPrompt = useAppStore((state) => state.revertSessionToBeforeLastPrompt);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;
+
+    const session = useAppStore.getState().sessions[activeSessionId];
+    if (session) {
+      const msgs = session.messages;
+      let lastUserIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if ((msgs[i] as any).type === "user_prompt") { lastUserIdx = i; break; }
+      }
+      if (lastUserIdx >= 0) {
+        const hasAssistantReply = msgs.slice(lastUserIdx + 1).some((m: any) =>
+          m.type === "assistant" && Array.isArray(m.message?.content) &&
+          m.message.content.some((c: any) => c.type === "text" && c.text?.trim())
+        );
+        if (!hasAssistantReply) {
+          const lastPrompt = (msgs[lastUserIdx] as any).prompt as string;
+          revertSessionToBeforeLastPrompt(activeSessionId);
+          setPrompt(lastPrompt);
+        }
+      }
+    }
+
     sendEvent({ type: "session.stop", payload: { sessionId: activeSessionId } });
-  }, [activeSessionId, sendEvent]);
+  }, [activeSessionId, sendEvent, revertSessionToBeforeLastPrompt, setPrompt]);
 
   // handleStartFromModal can be called with optional params (for scheduled tasks)
   const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string; assistantId?: string; workflowSopId?: string; scheduledTaskId?: string }) => {
@@ -505,6 +537,7 @@ export function PromptInput({
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
 
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
   const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
   const selectedAssistantSkillTags = useAppStore((state) => state.selectedAssistantSkillTags);
   const hasMessages = useAppStore((state) => {
@@ -559,7 +592,6 @@ export function PromptInput({
   } = usePromptActions(sendEvent, {
     skills,
     activeSkillName: activeToolbarSkill?.name ?? null,
-    onAutoSelectSkill: setActiveToolbarSkill,
   });
 
   // Enter compact chat layout as soon as a run starts, even before first message arrives.
@@ -665,6 +697,17 @@ export function PromptInput({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showToolbarSkillPicker]);
 
+  // 新建对话时（当前 session 被清空），重置已选技能与技能选择器状态
+  useEffect(() => {
+    if (activeSessionId !== null) return;
+    setPrompt("");
+    setActiveToolbarSkill(null);
+    setShowToolbarSkillPicker(false);
+    setToolbarSkillFilter("");
+    setShowSkills(false);
+    setSkillFilter("");
+  }, [activeSessionId, setPrompt]);
+
   // Check if we should show skills selector, and sync toolbar skill state with prompt
   useEffect(() => {
     const trimmed = prompt.trimStart();
@@ -680,13 +723,6 @@ export function PromptInput({
       setShowSkills(false);
       setSkillFilter("");
     }
-
-    // If toolbar shows an active skill but the prompt no longer has its prefix, clear it
-    setActiveToolbarSkill(prev => {
-      if (!prev) return prev;
-      const expectedPrefix = `/${prev.name} `;
-      return trimmed.startsWith(expectedPrefix) ? prev : null;
-    });
   }, [prompt]);
 
   // Scroll selected item into view
@@ -699,43 +735,19 @@ export function PromptInput({
     }
   }, [selectedIndex, showSkills]);
 
-  const handleSelectSkill = useCallback(async (skill: SkillInfo) => {
+  const handleSelectSkill = useCallback((skill: SkillInfo) => {
     setShowSkills(false);
     setActiveToolbarSkill(skill);
-    
-    // Read full skill content
-    try {
-      const content = await window.electron.readSkillContent(skill.fullPath);
-      if (content) {
-        // Get current session ID
-        const state = useAppStore.getState();
-        const sessionId = state.activeSessionId;
-        
-        if (sessionId) {
-          // Add skill_loaded message to the session
-          state.addLocalMessage(sessionId, {
-            type: "skill_loaded",
-            skillName: skill.name,
-            skillContent: content,
-            skillDescription: skill.description
-          });
-        }
-        
-        // Also set prompt with skill slash command for Claude to use
-        setPrompt(`/${skill.name} `);
-      } else {
-        // Fallback if content couldn't be loaded
-        setPrompt(`/${skill.name} `);
-      }
-    } catch (error) {
-      console.error("Failed to load skill content:", error);
-      setPrompt(`/${skill.name} `);
+    const trimmed = prompt.trimStart();
+    if (trimmed.startsWith("/") && !trimmed.includes(" ")) {
+      setPrompt("");
     }
-    
     promptRef.current?.focus();
-  }, [setPrompt]);
+  }, [prompt, setPrompt]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
+
     // Handle skill selection navigation
     if (showSkills && filteredSkills.length > 0) {
       if (e.key === "ArrowDown") {
@@ -1102,9 +1114,6 @@ export function PromptInput({
               <span className="truncate">{activeToolbarSkill.label || activeToolbarSkill.name}</span>
               <button
                 onClick={() => {
-                  const prefix = `/${activeToolbarSkill.name} `;
-                  const currentPrompt = useAppStore.getState().prompt;
-                  setPrompt(currentPrompt.startsWith(prefix) ? currentPrompt.slice(prefix.length) : currentPrompt);
                   setActiveToolbarSkill(null);
                 }}
                 className="flex-shrink-0 flex h-4 w-4 items-center justify-center rounded-full hover:bg-accent/20 text-accent/70 hover:text-accent transition-colors"

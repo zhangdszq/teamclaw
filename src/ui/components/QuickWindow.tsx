@@ -264,6 +264,8 @@ export function QuickWindow() {
   }, [prompt, sending, sendEvent, assistants, selectedAssistantId, activeSkill]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+
     if (showSkillPicker && filteredSkills.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();

@@ -204,10 +204,14 @@ export class SessionStore {
 
     const messages = (this.db
       .prepare(
-        `select data from messages where session_id = ? order by created_at asc`
+        `select data, created_at from messages where session_id = ? order by created_at asc`
       )
       .all(id) as Array<Record<string, unknown>>)
-      .map((row) => JSON.parse(String(row.data)) as StreamMessage);
+      .map((row) => {
+        const msg = JSON.parse(String(row.data)) as StreamMessage;
+        (msg as any)._ts = Number(row.created_at);
+        return msg;
+      });
 
     return {
       session: {

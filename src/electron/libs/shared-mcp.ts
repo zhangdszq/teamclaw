@@ -11,7 +11,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { join } from "path";
+import { isAbsolute, join, resolve } from "path";
 import os from "os";
 import { parse as parseToml } from "smol-toml";
 import { app } from "electron";
@@ -47,6 +47,7 @@ import { loadAssistantsConfig } from "./assistants-config.js";
 import { loadUserSettings } from "./user-settings.js";
 import { resolveAppAsset } from "../pathResolver.js";
 import { ensurePyPackages, ensurePythonEnv, getManagedPythonInfo, getPythonEnvDir } from "./python-env.js";
+import { delegateToCursor } from "./acp-bridge.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1163,6 +1164,35 @@ const distillMemoryTool = tool(
 
 // ── Atomic Power Tools (inspired by GenericAgent) ───────────────────────────
 
+function createDelegateToCursorTool(sessionCwd?: string) {
+  return tool(
+    "delegate_to_cursor",
+    "将编码任务委派给 Cursor agent 执行。\n\n" +
+      "适合场景：复杂代码修改、多文件重构、需要 IDE 上下文的实现任务。\n" +
+      "如果当前任务使用了 Cursor 工作流，你不应自己完成实质分析，而应把边界清晰、可执行的任务交给 Cursor，并基于 Cursor 的结果继续。",
+    {
+      task: z.string().describe("要委派给 Cursor 的具体编码任务"),
+      cwd: z.string().optional().describe("工作目录。支持绝对路径；相对路径会基于当前会话目录解析"),
+    },
+    async (input) => {
+      const task = String(input.task ?? "").trim();
+      if (!task) return ok("task 不能为空");
+
+      const baseCwd = sessionCwd || os.homedir();
+      const requestedCwd = input.cwd ? String(input.cwd).trim() : "";
+      const targetCwd = requestedCwd
+        ? (isAbsolute(requestedCwd) ? requestedCwd : resolve(baseCwd, requestedCwd))
+        : baseCwd;
+
+      try {
+        return ok(await delegateToCursor(task, targetCwd));
+      } catch (err) {
+        return ok(`委派 Cursor 失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
 function createRunScriptTool(sessionCwd?: string) {
   return tool(
   "run_script",
@@ -2129,6 +2159,7 @@ export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
   // Experience documentation — writes to knowledge/experience/ as draft
   { name: "save_experience", category: "记忆", description: "沉淀操作经验文档（步骤、踩坑点等），写入知识库候选", sopExclude: true },
   // Script & Automation
+  { name: "delegate_to_cursor", category: "代理", description: "把实质编码分析与修改委派给 Cursor agent 执行，当前模型只负责路由和总结" },
   { name: "run_script",      category: "脚本", description: "执行 Python / PowerShell / Node.js 脚本，支持超时控制" },
   { name: "desktop_control", category: "桌面", description: "发送键盘输入或控制鼠标，实现桌面自动化" },
   { name: "take_screenshot", category: "桌面", description: "截取当前桌面屏幕截图" },
@@ -2334,6 +2365,7 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionId?:
       // Memory Distillation
       distillMemoryTool,
       // Atomic Power Tools
+      createDelegateToCursorTool(sessionCwd),
       createRunScriptTool(sessionCwd),
       processControlTool,
       clipboardTool,

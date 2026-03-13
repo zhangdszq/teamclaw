@@ -31,6 +31,7 @@ import { createSharedMcpServer } from "./shared-mcp.js";
 import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
+  type BaseBotOptions,
   FILE_PATH_RE,
   buildOpenAIOverrides,
   buildQueryEnv,
@@ -44,6 +45,10 @@ import {
   flushBufferedBotAssistantMessage,
 } from "./bot-base.js";
 import { savePendingTask, removePendingTask, loadPendingTasks } from "./pending-tasks.js";
+import {
+  buildActivatedSkillSection,
+  resolveSkillCommand,
+} from "./skill-context.js";
 
 function getLocalIp(): string {
   const nets = networkInterfaces();
@@ -70,6 +75,7 @@ export interface DingtalkBotOptions {
   // Identity
   assistantId: string;
   assistantName: string;
+  skillNames?: string[];
   persona?: string;
   coreValues?: string;
   relationship?: string;
@@ -856,7 +862,7 @@ export function getAnyConnectedDingtalkAssistantId(): string | null {
 /** Update runtime config of a running bot without restarting the connection. */
 export function updateDingtalkBotConfig(
   assistantId: string,
-  updates: Partial<Pick<DingtalkBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd" | "messageType" | "cardTemplateId" | "cardTemplateKey" | "dmPolicy" | "groupPolicy" | "allowFrom">>,
+  updates: Partial<Pick<DingtalkBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd" | "skillNames" | "messageType" | "cardTemplateId" | "cardTemplateKey" | "dmPolicy" | "groupPolicy" | "allowFrom">>,
 ): void {
   const conn = pool.get(assistantId);
   if (!conn) return;
@@ -1214,6 +1220,7 @@ function getBotSession(
   provider: "claude" | "openai",
   model: string | undefined,
   cwd: string | undefined,
+  skillNames?: string[],
 ): string {
   if (!sessionStore) throw new Error("[DingTalk] SessionStore not injected");
   const existingId = botSessionIds.get(assistantId);
@@ -1221,6 +1228,7 @@ function getBotSession(
   const session = sessionStore.createSession({
     title: `[钉钉] ${assistantName}`,
     assistantId,
+    assistantSkillNames: skillNames ?? [],
     provider,
     model,
     cwd,
@@ -1903,6 +1911,8 @@ class DingtalkConnection {
     hasFiles: boolean,
     preCreatedCard: AICardInstance | null,
   ): Promise<void> {
+    const skillContext = resolveSkillCommand(userText, this.opts.skillNames);
+    const effectiveUserText = skillContext?.userText ?? userText;
     const history = getHistory(this.opts.assistantId);
     const provider = this.opts.provider ?? "claude";
     const useCard = this.opts.messageType === "card" && !!this.opts.cardTemplateId && !!preCreatedCard;
@@ -1913,14 +1923,19 @@ class DingtalkConnection {
       provider,
       this.opts.model,
       this.opts.defaultCwd,
+      this.opts.skillNames,
     );
 
-    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
+    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: effectiveUserText });
 
-    history.push({ role: "user", content: userText });
+    history.push({ role: "user", content: effectiveUserText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
+    const memoryContext = await buildSmartMemoryContext(
+      effectiveUserText,
+      this.opts.assistantId,
+      this.opts.defaultCwd,
+    );
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const msgNow = msg.createAt ?? Date.now();
@@ -1932,7 +1947,14 @@ class DingtalkConnection {
       ? buildHistoryContextDt(history.slice(0, -1), this.opts.assistantId)
       : undefined;
 
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, historySection);
+    const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
+    const system = buildStructuredPersona(
+      this.opts as BaseBotOptions,
+      currentTimeContext,
+      memoryContext,
+      skillSection,
+      historySection,
+    );
 
     // Register inflight task for reconnect recovery
     const inflightKey = msg.msgId ?? `${Date.now()}-${Math.random()}`;
@@ -1944,9 +1966,9 @@ class DingtalkConnection {
       let cardDelivered = false;
 
       if (provider === "openai") {
-        replyText = await this.runClaudeQuery(system, userText, msg, provider, sessionId, hasFiles);
+        replyText = await this.runClaudeQuery(system, effectiveUserText, msg, provider, sessionId, hasFiles);
       } else if (useCard && preCreatedCard) {
-        const result = await this.runClaudeCard(system, userText, msg, preCreatedCard, inflightTask, provider, sessionId, hasFiles);
+        const result = await this.runClaudeCard(system, effectiveUserText, msg, preCreatedCard, inflightTask, provider, sessionId, hasFiles);
         if (result === "__CARD_DELIVERED__") {
           cardDelivered = true;
           replyText = inflightTask.accumulatedContent;
@@ -1954,14 +1976,14 @@ class DingtalkConnection {
           replyText = result;
         }
       } else {
-        replyText = await this.runClaudeQuery(system, userText, msg, provider, sessionId, hasFiles);
+        replyText = await this.runClaudeQuery(system, effectiveUserText, msg, provider, sessionId, hasFiles);
       }
 
       // Update inflight with final content
       inflightTask.accumulatedContent = replyText || inflightTask.accumulatedContent;
 
       history.push({ role: "assistant", content: inflightTask.accumulatedContent });
-      const logUserText = userText.replace(/\n\n文件路径:[\s\S]*$/, "").trim();
+      const logUserText = effectiveUserText.replace(/\n\n文件路径:[\s\S]*$/, "").trim();
       recordConversation(
         `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${logUserText}\n**${this.opts.assistantName}**: ${inflightTask.accumulatedContent}\n`,
         { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },

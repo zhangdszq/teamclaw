@@ -8,8 +8,10 @@ import {
 } from '../services/session.js';
 import { runClaude, stopSession, type ServerEvent } from '../services/runner.js';
 import type { AgentProvider } from '../types.js';
-import { loadAssistantsConfig } from '../../libs/assistants-config.js';
-import { IMAGE_INLINE_RULE } from '../../libs/bot-base.js';
+import {
+  applyAssistantContextToPrompt,
+  resolveSkillCommand,
+} from '../../libs/skill-context.js';
 
 const agent = new Hono();
 
@@ -21,30 +23,6 @@ async function parseBody<T>(c: any): Promise<{ success: true; data: T } | { succ
   } catch {
     return { success: false, error: 'Invalid JSON body' };
   }
-}
-
-function applyAssistantContext(prompt: string, skillNames?: string[], persona?: string, assistantId?: string): string {
-  const config = assistantId ? loadAssistantsConfig() : undefined;
-  const assistant = config?.assistants.find((a: any) => a.id === assistantId);
-
-  const sections: string[] = [];
-  const name = assistant?.name;
-  const p = persona || assistant?.persona;
-  const identity = [name ? `你的名字是「${name}」。` : "", p?.trim() ?? ""].filter(Boolean).join("\n");
-  if (identity) sections.push(`## 你的身份\n${identity}`);
-  if (assistant?.coreValues?.trim()) sections.push(`## 核心价值观\n${assistant.coreValues.trim()}`);
-  if (assistant?.relationship?.trim()) sections.push(`## 与用户的关系\n${assistant.relationship.trim()}`);
-  if (assistant?.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${assistant.cognitiveStyle.trim()}`);
-  if (assistant?.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${assistant.operatingGuidelines.trim()}`);
-  if (config?.userContext?.trim()) sections.push(`## 关于用户\n${config.userContext.trim()}`);
-
-  const normalized = (skillNames ?? []).map((s) => s.trim()).filter(Boolean);
-  if (normalized.length > 0) sections.push(normalized.map((s) => `/${s}`).join("\n"));
-
-  sections.push(IMAGE_INLINE_RULE);
-
-  if (sections.length === 0) return prompt;
-  return `${sections.join("\n\n")}\n\n${prompt}`;
 }
 
 // Helper to create SSE stream
@@ -98,6 +76,7 @@ agent.post('/start', async (c) => {
     assistantId?: string;
     assistantSkillNames?: string[];
     assistantPersona?: string;
+    assistantActivatedSkillContent?: string;
   }>();
 
   if (!body.prompt) {
@@ -148,8 +127,27 @@ agent.post('/start', async (c) => {
     }
   }
 
+  if (
+    body.assistantActivatedSkillContent !== undefined &&
+    typeof body.assistantActivatedSkillContent !== 'string'
+  ) {
+    return c.json({ error: 'assistantActivatedSkillContent must be a string' }, 400);
+  }
+
   const provider: AgentProvider = body.provider ?? 'claude';
-  const effectivePrompt = applyAssistantContext(body.prompt, body.assistantSkillNames, body.assistantPersona, body.assistantId);
+  const startSkillContext = body.assistantActivatedSkillContent
+    ? {
+        userText: body.prompt,
+        skillContent: body.assistantActivatedSkillContent,
+      }
+    : resolveSkillCommand(body.prompt, body.assistantSkillNames);
+  const effectiveUserPrompt = startSkillContext?.userText ?? body.prompt;
+  const effectivePrompt = applyAssistantContextToPrompt(effectiveUserPrompt, {
+    skillNames: body.assistantSkillNames,
+    persona: body.assistantPersona,
+    assistantId: body.assistantId,
+    activatedSkillContent: startSkillContext?.skillContent,
+  });
 
   // Create session with external ID if provided
   const session = createSession({
@@ -225,6 +223,9 @@ agent.post('/continue', async (c) => {
     externalSessionId?: string;
     provider?: AgentProvider;
     model?: string;
+    assistantId?: string;
+    assistantSkillNames?: string[];
+    assistantActivatedSkillContent?: string;
   }>();
 
   if (!body.sessionId) {
@@ -256,7 +257,45 @@ agent.post('/continue', async (c) => {
     }
   }
 
+  if (body.assistantId !== undefined) {
+    if (typeof body.assistantId !== 'string' || body.assistantId.trim() === '') {
+      return c.json({ error: 'assistantId must be a non-empty string' }, 400);
+    }
+  }
+
+  if (body.assistantSkillNames !== undefined) {
+    if (!Array.isArray(body.assistantSkillNames)) {
+      return c.json({ error: 'assistantSkillNames must be an array' }, 400);
+    }
+    for (const item of body.assistantSkillNames) {
+      if (typeof item !== 'string') {
+        return c.json({ error: 'assistantSkillNames must contain only strings' }, 400);
+      }
+    }
+  }
+
+  if (
+    body.assistantActivatedSkillContent !== undefined &&
+    typeof body.assistantActivatedSkillContent !== 'string'
+  ) {
+    return c.json({ error: 'assistantActivatedSkillContent must be a string' }, 400);
+  }
+
   const continueProvider: AgentProvider = body.provider ?? 'claude';
+  const continueSkillContext = body.assistantActivatedSkillContent
+    ? {
+        userText: body.prompt,
+        skillContent: body.assistantActivatedSkillContent,
+      }
+    : resolveSkillCommand(body.prompt, body.assistantSkillNames);
+  const effectiveContinuePrompt = applyAssistantContextToPrompt(
+    continueSkillContext?.userText ?? body.prompt,
+    {
+      skillNames: body.assistantSkillNames,
+      assistantId: body.assistantId,
+      activatedSkillContent: continueSkillContext?.skillContent,
+    },
+  );
 
   // Create a temporary session for this query with external ID
   const tempSession = createSession({
@@ -264,6 +303,8 @@ agent.post('/continue', async (c) => {
     title: body.title || 'Continued Session',
     prompt: body.prompt,
     externalId: body.externalSessionId,
+    assistantId: body.assistantId,
+    assistantSkillNames: body.assistantSkillNames,
   });
   tempSession.provider = continueProvider;
   tempSession.model = body.model;
@@ -307,7 +348,7 @@ agent.post('/continue', async (c) => {
 
     // Dispatch to correct runner based on provider
     const runnerOpts = {
-      prompt: body.prompt,
+      prompt: effectiveContinuePrompt,
       session: tempSession,
       resumeSessionId: body.sessionId,
       model: body.model,

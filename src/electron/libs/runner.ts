@@ -11,7 +11,9 @@ import { loadUserSettings } from "./user-settings.js";
 import { loadAssistantsConfig, type AssistantConfig } from "./assistants-config.js";
 import { buildSmartMemoryContext } from "./memory-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
+import { loadMcporterServers } from "./mcporter-loader.js";
 import { runAgent } from "./agent-client.js";
+import { shouldFallbackFromContinueError } from "./session-resume.js";
 import { app } from "electron";
 import { join } from "path";
 import { homedir } from "os";
@@ -24,6 +26,7 @@ export type RunnerOptions = {
   provider?: "claude" | "openai";
   onEvent: (event: ServerEvent) => void;
   onSessionUpdate?: (updates: Partial<Session>) => void;
+  onContinueMissingConversation?: () => void | Promise<void>;
 };
 
 export type RunnerHandle = {
@@ -110,7 +113,15 @@ function buildOpenAIOverrides(
 }
 
 export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
-  const { prompt, session, resumeSessionId, provider, onEvent, onSessionUpdate } = options;
+  const {
+    prompt,
+    session,
+    resumeSessionId,
+    provider,
+    onEvent,
+    onSessionUpdate,
+    onContinueMissingConversation,
+  } = options;
   const abortController = new AbortController();
   const effectiveProvider = provider ?? session.provider ?? "claude";
 
@@ -139,6 +150,29 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
     onEvent({ type: "permission.request", payload: { sessionId: session.id, toolUseId, toolName, input } });
   };
 
+  const fallbackToLocalHistory = async (source: "result" | "error") => {
+    if (!onContinueMissingConversation) return false;
+    const prefix = source === "result"
+      ? "[Runner/fallback] Continue session missing upstream conversation, using local history"
+      : "[Runner/fallback] Continue session threw missing upstream conversation, using local history";
+    console.warn(prefix);
+    try {
+      await onContinueMissingConversation();
+      return true;
+    } catch (fallbackError) {
+      onEvent({
+        type: "session.status",
+        payload: {
+          sessionId: session.id,
+          status: "error",
+          title: session.title,
+          error: String(fallbackError),
+        },
+      });
+      return true;
+    }
+  };
+
   (async () => {
     try {
       const q = await runAgent(effectivePrompt, {
@@ -148,7 +182,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
         ...(effectiveProvider === "claude" && { env: enhancedEnv }),
         ...(effectiveProvider === "openai" && { openaiOverrides: providerOverrides }),
         provider: effectiveProvider,
-        mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }) },
+        mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }), ...loadMcporterServers() },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
           if (toolName === "AskUserQuestion") {
             const toolUseId = toolUseID;
@@ -182,6 +216,15 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
           }
         }
 
+        if (
+          resumeSessionId &&
+          onContinueMissingConversation &&
+          message.type === "result" &&
+          shouldFallbackFromContinueError(message)
+        ) {
+          if (await fallbackToLocalHistory("result")) return;
+        }
+
         sendMessage(message);
 
         if (message.type === "result") {
@@ -196,6 +239,9 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") return;
+      if (resumeSessionId && onContinueMissingConversation && shouldFallbackFromContinueError(error)) {
+        if (await fallbackToLocalHistory("error")) return;
+      }
       onEvent({ type: "session.status", payload: { sessionId: session.id, status: "error", title: session.title, error: String(error) } });
     }
   })();

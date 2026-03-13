@@ -116,6 +116,7 @@ export async function startSession(
     assistantId?: string;
     assistantSkillNames?: string[];
     assistantPersona?: string;
+    assistantActivatedSkillContent?: string;
   },
   onEvent: StreamCallback
 ): Promise<void> {
@@ -161,7 +162,16 @@ export async function continueSession(
   claudeSessionId: string,
   prompt: string,
   onEvent: StreamCallback,
-  options?: { cwd?: string; title?: string; externalSessionId?: string; provider?: string; model?: string }
+  options?: {
+    cwd?: string;
+    title?: string;
+    externalSessionId?: string;
+    provider?: string;
+    model?: string;
+    assistantId?: string;
+    assistantSkillNames?: string[];
+    assistantActivatedSkillContent?: string;
+  }
 ): Promise<void> {
   await ensureEmbeddedApi();
 
@@ -174,7 +184,7 @@ export async function continueSession(
   }
   
   try {
-    const response = await fetch(url, {
+    const response = await sseFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -187,9 +197,12 @@ export async function continueSession(
         externalSessionId: options?.externalSessionId,
         provider: options?.provider,
         model: options?.model,
+        assistantId: options?.assistantId,
+        assistantSkillNames: options?.assistantSkillNames,
+        assistantActivatedSkillContent: options?.assistantActivatedSkillContent,
       }),
       signal: abortController.signal,
-    });
+    }, abortController.signal);
 
     if (!response.ok) {
       const error = await response.json();

@@ -288,7 +288,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [skillFilter, setSkillFilter] = useState<"all" | "installed" | "available">("all");
+  const [skillFilter, setSkillFilter] = useState<"all" | "installed" | "local" | "available">("all");
 
   // Catalog state
   const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
@@ -514,8 +514,8 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
         result.push({
           name: s.name,
           skillKey: s.name,
-          label: s.name,
-          description: undefined,
+          label: (s as any).label || s.name,
+          description: s.description,
           category: getSkillCategoryFromText(s.name, s.description || ""),
           isInstalled: true,
           isLocalOnly: true,
@@ -558,6 +558,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     let result = mergedSkills;
 
     if (skillFilter === "installed") result = result.filter((s) => s.isInstalled);
+    else if (skillFilter === "local") result = result.filter((s) => s.isLocalOnly);
     else if (skillFilter === "available") result = result.filter((s) => !s.isInstalled);
 
     if (selectedCategory) result = result.filter((s) => s.category === selectedCategory);
@@ -575,6 +576,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
   }, [mergedSkills, skillFilter, selectedCategory, searchQuery]);
 
   const installedCount = useMemo(() => mergedSkills.filter((s) => s.isInstalled).length, [mergedSkills]);
+  const localCount = useMemo(() => mergedSkills.filter((s) => s.isLocalOnly).length, [mergedSkills]);
   const availableCount = useMemo(() => mergedSkills.filter((s) => !s.isInstalled).length, [mergedSkills]);
 
   // Different modal sizes for different tabs
@@ -584,50 +586,35 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-900/30 backdrop-blur-sm" />
-        <Dialog.Content 
-          className={`fixed z-50 bg-surface shadow-elevated overflow-hidden transition-all duration-300 ${
-            isSkillTab 
-              ? "inset-4 rounded-2xl" 
-              : "left-1/2 top-1/2 w-full max-w-lg max-h-[85vh] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/5 p-6 overflow-y-auto"
+        <Dialog.Content
+          className={`fixed z-50 overflow-hidden transition-all duration-300 ${
+            isSkillTab
+              ? "left-1/2 top-1/2 flex h-[calc(100vh-72px)] max-h-[720px] w-[calc(100vw-96px)] max-w-[1080px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-ink-900/8 bg-surface-secondary shadow-elevated"
+              : "left-1/2 top-1/2 w-full max-w-lg max-h-[85vh] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/5 bg-surface p-6 overflow-y-auto shadow-elevated"
           }`}
+          style={isSkillTab ? { fontFamily: '"Söhne", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif' } : undefined}
         >
           {isSkillTab ? (
             // Full-screen 技能市场
             <div className="flex flex-col h-full">
               {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-ink-900/10">
-                <div className="flex items-center gap-4">
-                  <Dialog.Title className="text-xl font-semibold text-ink-800">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-ink-900/8 flex-shrink-0">
+                <div className="min-w-0">
+                  <Dialog.Title className="text-[16px] font-semibold text-ink-900 tracking-tight">
                     技能市场
                   </Dialog.Title>
-                  {/* Filter pills */}
-                  <div className="flex items-center gap-1 rounded-xl bg-surface-secondary p-1">
-                    {(["all", "installed", "available"] as const).map((f) => {
-                      const labels = { all: `全部 ${mergedSkills.length}`, installed: `已安装 ${installedCount}`, available: `可安装 ${availableCount}` };
-                      return (
-                        <button
-                          key={f}
-                          onClick={() => setSkillFilter(f)}
-                          className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
-                            skillFilter === f
-                              ? "bg-accent text-white shadow-sm"
-                              : "text-ink-600 hover:text-ink-800"
-                          }`}
-                        >
-                          {labels[f]}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <p className="mt-0.5 text-[12px] text-ink-400">
+                    浏览、安装并分配技能，界面风格与设置页保持一致。
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   {/* Manual install */}
                   <button
                     onClick={() => { setShowInstallForm(!showInstallForm); setInstallResult(null); }}
-                    className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
+                    className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[13px] font-medium transition-colors ${
                       showInstallForm
                         ? "bg-accent text-white"
-                        : "border border-ink-900/10 bg-surface-secondary text-ink-700 hover:bg-surface-tertiary"
+                        : "border border-ink-900/10 bg-surface/70 text-ink-700 hover:bg-surface"
                     }`}
                   >
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -648,15 +635,15 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                       placeholder="搜索技能..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-52 rounded-xl border border-ink-900/10 bg-surface-secondary pl-10 pr-4 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                      className="w-56 rounded-xl border border-ink-900/10 bg-surface/70 pl-10 pr-4 py-2 text-[13px] text-ink-800 placeholder:text-ink-300 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
                     />
                   </div>
                   <Dialog.Close asChild>
                     <button
-                      className="rounded-full p-2 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+                      className="rounded-full p-1.5 text-ink-400 hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
                       aria-label="Close"
                     >
-                      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                      <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M18 6L6 18M6 6l12 12" />
                       </svg>
                     </button>
@@ -667,7 +654,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
               {/* Manual Install Form — only shown when clicking 手动安装 */}
               {showInstallForm && (
-                <div className="px-6 py-3 border-b border-ink-900/10 bg-surface-secondary/50">
+                <div className="px-6 py-3 border-b border-ink-900/8 bg-surface-secondary/70">
                   <div className="flex items-center gap-3">
                     <div className="flex-1 relative">
                       <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" fill="none" stroke="currentColor" strokeWidth="2">
@@ -680,7 +667,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                         value={installUrl}
                         onChange={(e) => setInstallUrl(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter") handleInstallSkill(); }}
-                        className="w-full rounded-xl border border-ink-900/10 bg-surface pl-10 pr-4 py-2.5 text-sm text-ink-800 font-mono placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                        className="w-full rounded-xl border border-ink-900/10 bg-surface/80 pl-10 pr-4 py-2.5 text-[13px] text-ink-800 font-mono placeholder:text-ink-300 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
                         disabled={installing}
                       />
                     </div>
@@ -717,16 +704,19 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
               <div className="flex flex-1 overflow-hidden">
                 {/* Category Sidebar */}
-                <div className="w-52 border-r border-ink-900/10 p-4 overflow-y-auto">
-                  <div className="text-xs font-medium text-muted uppercase tracking-wider mb-3">分类</div>
-                  <div className="space-y-0.5">
+                <div className="w-[204px] border-r border-ink-900/8 flex-shrink-0 overflow-y-auto py-3 px-2.5 bg-surface-secondary">
+                  <div className="px-3 pb-2">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink-400">分类</div>
+                  </div>
+                  <div>
                     <button
                       onClick={() => setSelectedCategory(null)}
-                      className={`w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
+                      className={`w-full flex items-center gap-2.5 px-3 py-[8px] rounded-lg text-[13px] transition-all text-left mb-0.5 ${
                         selectedCategory === null
-                          ? "bg-accent text-white"
-                          : "text-ink-700 hover:bg-surface-tertiary"
+                          ? "font-medium text-white"
+                          : "text-ink-600 hover:bg-black/5 hover:text-ink-900"
                       }`}
+                      style={selectedCategory === null ? { background: "var(--color-accent)" } : undefined}
                     >
                       <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
                         <rect x="3" y="3" width="7" height="7" />
@@ -735,7 +725,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                         <rect x="14" y="14" width="7" height="7" />
                       </svg>
                       <span className="truncate">全部</span>
-                      <span className="ml-auto text-xs opacity-70 flex-shrink-0">{mergedSkills.length}</span>
+                      <span className={`ml-auto text-[11px] flex-shrink-0 ${selectedCategory === null ? "text-white/80" : "text-ink-400"}`}>{mergedSkills.length}</span>
                     </button>
                     {availableCategories.map(category => {
                       const config = categoryConfig[category];
@@ -745,15 +735,16 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                         <button
                           key={category}
                           onClick={() => setSelectedCategory(category)}
-                          className={`w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
+                          className={`w-full flex items-center gap-2.5 px-3 py-[8px] rounded-lg text-[13px] transition-all text-left mb-0.5 ${
                             selectedCategory === category
-                              ? "bg-accent text-white"
-                              : "text-ink-700 hover:bg-surface-tertiary"
+                              ? "font-medium text-white"
+                              : "text-ink-600 hover:bg-black/5 hover:text-ink-900"
                           }`}
+                          style={selectedCategory === category ? { background: "var(--color-accent)" } : undefined}
                         >
                           <CategoryIcon type={config.icon} className="h-4 w-4 flex-shrink-0" />
                           <span className="truncate">{config.label}</span>
-                          <span className="ml-auto text-xs opacity-70 flex-shrink-0">
+                          <span className={`ml-auto text-[11px] flex-shrink-0 ${selectedCategory === category ? "text-white/80" : "text-ink-400"}`}>
                             {installedInCat}/{catSkills.length}
                           </span>
                         </button>
@@ -764,7 +755,43 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                 </div>
 
                 {/* Skills Grid */}
-                <div ref={skillsGridRef} className="flex-1 p-6 overflow-y-auto">
+                <div ref={skillsGridRef} className="flex-1 overflow-y-auto bg-surface-secondary">
+                  <div className="sticky top-0 z-10 border-b border-ink-900/8 bg-surface-secondary/95 px-6 py-4 backdrop-blur-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-[14px] font-medium text-ink-800">
+                          {selectedCategory ? (categoryConfig[selectedCategory]?.label ?? "分类技能") : "全部技能"}
+                        </h3>
+                        <p className="mt-0.5 text-[12px] text-ink-400">
+                          当前共 {filteredSkills.length} 个结果，已安装 {installedCount} 个，本地独有 {localCount} 个，可安装 {availableCount} 个。
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 rounded-xl bg-surface/70 p-1 border border-ink-900/8">
+                        {(["all", "installed", "local", "available"] as const).map((f) => {
+                          const labels = {
+                            all: `全部 ${mergedSkills.length}`,
+                            installed: `已安装 ${installedCount}`,
+                            local: `本地独有 ${localCount}`,
+                            available: `可安装 ${availableCount}`,
+                          };
+                          return (
+                            <button
+                              key={f}
+                              onClick={() => setSkillFilter(f)}
+                              className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors ${
+                                skillFilter === f
+                                  ? "bg-accent text-white shadow-sm"
+                                  : "text-ink-600 hover:text-ink-900 hover:bg-black/5"
+                              }`}
+                            >
+                              {labels[f]}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-6">
                   {(loading || catalogLoading) ? (
                     <div className="flex flex-col items-center justify-center h-full gap-3">
                       <svg className="h-8 w-8 animate-spin text-muted" viewBox="0 0 24 24" fill="none">
@@ -779,14 +806,17 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                         <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                       </svg>
                       <p className="mt-4 text-lg text-muted">
-                        {searchQuery ? "没有找到匹配的技能" : skillFilter === "available" ? "没有可安装的技能" : skillFilter === "installed" ? "还没有已安装的技能" : "暂无技能"}
+                        {searchQuery ? "没有找到匹配的技能" : skillFilter === "available" ? "没有可安装的技能" : skillFilter === "installed" ? "还没有已安装的技能" : skillFilter === "local" ? "还没有本地独有的技能" : "暂无技能"}
                       </p>
                       {skillFilter === "installed" && (
                         <p className="mt-2 text-sm text-muted-light">从上方技能列表点击「安装」即可一键安装</p>
                       )}
+                      {skillFilter === "local" && (
+                        <p className="mt-2 text-sm text-muted-light">这里会显示本地已安装、但远端技能目录中不存在的技能。</p>
+                      )}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                       {filteredSkills.map((skill) => {
                         const config = categoryConfig[skill.category] ?? categoryConfig["other"];
                         const isInstalling = installingNames.has(skill.name);
@@ -795,18 +825,18 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                             key={skill.name}
                             className={`group rounded-2xl border p-5 transition-all duration-200 ${
                               skill.isInstalled
-                                ? "border-ink-900/10 bg-surface-secondary hover:border-accent/30 hover:shadow-md"
-                                : "border-dashed border-ink-900/15 bg-surface hover:border-accent/40 hover:bg-accent/3"
+                                ? "border-ink-900/8 bg-surface/88 shadow-[0_8px_24px_rgba(0,0,0,0.03)] hover:-translate-y-[1px] hover:border-accent/25 hover:shadow-[0_14px_32px_rgba(0,0,0,0.05)]"
+                                : "border-ink-900/8 bg-surface/75 shadow-[0_8px_24px_rgba(0,0,0,0.02)] hover:-translate-y-[1px] hover:border-accent/30 hover:bg-surface/92 hover:shadow-[0_14px_32px_rgba(0,0,0,0.05)]"
                             }`}
                           >
                             {/* Header */}
                             <div className="flex items-start gap-3">
-                              <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${config.color} flex-shrink-0`}>
+                              <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${config.color} flex-shrink-0 ring-1 ring-black/5`}>
                                 <CategoryIcon type={config.icon} className="h-6 w-6" />
                               </div>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-2">
-                                  <h3 className="text-base font-semibold text-ink-800 truncate">
+                                  <h3 className="text-[15px] font-semibold text-ink-800 truncate tracking-tight">
                                     {skill.label || skill.name}
                                   </h3>
                                   {skill.isInstalled ? (
@@ -835,12 +865,12 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                         </div>
                                       ) : (
                                         <>
-                                          <span className="flex items-center gap-1 text-[11px] text-success font-medium">
+                                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700 font-medium">
                                             <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor"><circle cx="12" cy="12" r="4" /></svg>
                                             已安装
                                           </span>
                                           {skill.isLocalOnly && (
-                                            <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">本地</span>
+                                            <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700">本地</span>
                                           )}
                                           <button
                                             onClick={() => setConfirmDeleteName(skill.skillKey)}
@@ -859,7 +889,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                       onClick={() => handleInstallFromCatalog(skill)}
                                       disabled={isInstalling || !skill.installPath}
                                       title={!skill.installPath ? "暂无安装地址" : ""}
-                                      className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-40 flex-shrink-0"
+                                      className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-40 flex-shrink-0"
                                     >
                                       {isInstalling ? (
                                         <>
@@ -882,8 +912,10 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                     </button>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-2 mt-0.5">
-                                  <span className="text-[11px] font-medium text-muted">{config.label}</span>
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                  <span className="inline-flex items-center rounded-full bg-ink-900/[0.05] px-2 py-0.5 text-[10px] font-medium text-ink-500">
+                                    {config.label}
+                                  </span>
                                   {skill.label && skill.label !== skill.name && (
                                     <span className="text-[10px] text-muted-light font-mono">{skill.name}</span>
                                   )}
@@ -892,9 +924,9 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                             </div>
 
                             {/* Description — from catalog JSON only */}
-                            <div className="mt-3 p-3 bg-surface rounded-xl border border-ink-900/5">
-                              <p className="text-sm text-ink-700 leading-relaxed line-clamp-3">
-                                {skill.description || (skill.isLocalOnly ? "本地已安装，暂无目录描述。" : "暂无描述信息。")}
+                            <div className="mt-3 rounded-xl border border-ink-900/6 bg-surface-secondary/70 p-3.5">
+                              <p className="text-[13px] text-ink-700 leading-6 line-clamp-3">
+                                {skill.description || (skill.isLocalOnly ? "本地已安装，暂未读取到技能说明。" : "暂无描述信息。")}
                               </p>
                             </div>
 
@@ -904,7 +936,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                               const isManaging = managingSkillName === skill.skillKey;
                               return (
                                 <div className="mt-3">
-                                  <div className="flex items-center justify-between">
+                                  <div className="flex items-center justify-between gap-3">
                                     <div className="flex items-center gap-1.5 flex-wrap">
                                       {owners.length > 0 ? owners.map((a) => (
                                         <span key={a.id} className="inline-flex items-center rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
@@ -988,8 +1020,8 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
                             {/* Footer: git source for non-installed catalog skills */}
                             {!skill.isInstalled && skill.installPath && (
-                              <div className="mt-2.5 flex items-center text-[10px] text-muted-light">
-                                <span className="font-mono truncate text-accent/60">{skill.installPath}</span>
+                              <div className="mt-3 flex items-center text-[10px] text-muted-light">
+                                <span className="rounded-lg bg-ink-900/[0.04] px-2 py-1 font-mono truncate text-ink-400">{skill.installPath}</span>
                               </div>
                             )}
                           </div>
@@ -997,6 +1029,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                       })}
                     </div>
                   )}
+                  </div>
                 </div>
               </div>
             </div>

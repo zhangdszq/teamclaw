@@ -110,8 +110,6 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("save-mcp-server", server),
     deleteMcpServer: (name: string) => 
         ipcInvoke("delete-mcp-server", name),
-    readSkillContent: (skillPath: string) => 
-        ipcInvoke("read-skill-content", skillPath),
     installSkill: (url: string) => 
         ipcInvoke("install-skill", url),
     deleteSkill: (skillName: string) =>

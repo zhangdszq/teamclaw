@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientEvent } from "../types";
 import { useAppStore } from "../store/useAppStore";
-import { findBestSkillMatch } from "../../shared/skill-matcher";
 
 const DEFAULT_ALLOWED_TOOLS = "Read,Edit,Bash";
 const MAX_ROWS = 12;
@@ -149,8 +148,6 @@ interface PromptInputProps {
 }
 
 export interface UsePromptActionsOptions {
-  /** 当前可用的技能列表（来自组件 state） */
-  skills?: SkillInfo[];
   /** 用户当前主动选中的技能名（null = 未手动选择） */
   activeSkillName?: string | null;
 }
@@ -159,7 +156,7 @@ export function usePromptActions(
   sendEvent: (event: ClientEvent) => void,
   options: UsePromptActionsOptions = {},
 ) {
-  const { skills: optionSkills, activeSkillName } = options;
+  const { activeSkillName } = options;
 
   const prompt = useAppStore((state) => state.prompt);
   const cwd = useAppStore((state) => state.cwd);
@@ -343,27 +340,14 @@ export function usePromptActions(
     // 1. No active session
     // 2. Active session's provider differs from selected provider
     // 3. Active session's assistant differs from selected assistant
-    // 4. Requests with attachments should always start a fresh session
     const activeProvider = activeSession?.provider ?? "claude";
     const activeAssistantId = activeSession?.assistantId;
     const assistantChanged = Boolean(selectedAssistantId) && activeAssistantId !== selectedAssistantId;
-    const needNewSession = hasAttachments || !activeSessionId || (activeProvider !== provider) || assistantChanged;
+    const needNewSession = !activeSessionId || (activeProvider !== provider) || assistantChanged;
 
     if (needNewSession) {
-      // ── 自动选择技能 ──────────────────────────────────────────────────────────
-      // 若用户未手动指定技能，且助理配置了技能，则按 prompt 关键词自动匹配最合适的
       let resolvedSkillNames: string[] | undefined;
-      if (!activeSkillName && selectedAssistantSkillNames.length > 0) {
-        const assistantSkills = (optionSkills ?? []).filter((s) =>
-          selectedAssistantSkillNames.includes(s.name)
-        );
-        const best = findBestSkillMatch(finalPrompt, assistantSkills);
-        if (best) {
-          resolvedSkillNames = [best.name];
-        } else {
-          resolvedSkillNames = selectedAssistantSkillNames;
-        }
-      } else if (activeSkillName) {
+      if (activeSkillName) {
         // 用户手动选择了技能，只用这一个
         resolvedSkillNames = [activeSkillName];
       } else {
@@ -411,7 +395,7 @@ export function usePromptActions(
       });
     }
     setPrompt("");
-  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills]);
+  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName]);
 
   const revertSessionToBeforeLastPrompt = useAppStore((state) => state.revertSessionToBeforeLastPrompt);
 
@@ -517,6 +501,10 @@ export function PromptInput({
     const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
     return (session?.messages?.length ?? 0) > 0;
   });
+  const isLoadingHistory = useAppStore((state) => {
+    const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
+    return Boolean(session && !session.hydrated);
+  });
   const provider = useAppStore((state) => state.provider);
   void provider;
 
@@ -563,12 +551,12 @@ export function PromptInput({
     handlePaste,
     handleDrop,
   } = usePromptActions(sendEvent, {
-    skills,
     activeSkillName: activeToolbarSkill?.name ?? null,
   });
 
-  // Enter compact chat layout as soon as a run starts, even before first message arrives.
-  const hasConversationStarted = hasMessages || isRunning;
+  // Keep the composer docked when loading an existing session, otherwise the welcome
+  // layout briefly overlaps with the history skeleton during session switches.
+  const hasConversationStarted = hasMessages || isRunning || isLoadingHistory;
 
   // Native DOM listeners — React synthetic events are unreliable in Electron for file drops
   useEffect(() => {

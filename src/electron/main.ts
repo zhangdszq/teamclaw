@@ -63,6 +63,7 @@ import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { ensureBuiltinMcpServers } from "./libs/builtin-mcps.js";
 import { invalidateMcporterCache, getMcporterConfigPath } from "./libs/mcporter-loader.js";
 import { seedBuiltinSkills } from "./libs/builtin-skills.js";
+import { listInstalledSkills } from "./libs/skill-context.js";
 // Goals module removed — long-term goals are now handled via SOP + scheduler
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureOpenAIAuthSync } from "./libs/openai-auth.js";
@@ -810,10 +811,17 @@ app.on("ready", async () => {
     ipcMainHandle("generate-skill-tags", async (_: any, persona: string, skillNames: string[], assistantName: string) => {
         try {
             const { generateSkillTags } = await import("./api/services/runner.js");
-            return await generateSkillTags(persona, skillNames, assistantName);
+            return {
+                ok: true,
+                tags: await generateSkillTags(persona, skillNames, assistantName),
+            };
         } catch (error) {
             console.error("[main] Failed to generate skill tags:", error);
-            return [];
+            return {
+                ok: false,
+                tags: [],
+                error: error instanceof Error ? error.message : String(error),
+            };
         }
     });
 
@@ -1696,152 +1704,16 @@ app.on("ready", async () => {
             console.error("Failed to read MCP servers:", error);
         }
 
-        // Read Skills from ~/.claude/skills directory
         try {
-            const skillsDir = join(claudeDir, "skills");
-            if (existsSync(skillsDir) && statSync(skillsDir).isDirectory()) {
-                const skillDirs = readdirSync(skillsDir);
-                for (const skillName of skillDirs) {
-                    // Skip hidden directories and non-directory entries
-                    if (skillName.startsWith(".")) continue;
-                    const skillPath = join(skillsDir, skillName);
-                    try {
-                        if (!statSync(skillPath).isDirectory()) continue;
-                    } catch {
-                        // broken symlink or inaccessible entry — skip
-                        continue;
-                    }
-                    const skillFilePath = join(skillPath, "SKILL.md");
-                    // Only include skills that have a SKILL.md file
-                    if (!existsSync(skillFilePath)) continue;
-                    let label: string | undefined;
-                    let description: string | undefined;
-                    try {
-                        const content = readFileSync(skillFilePath, "utf8");
-                        const lines = content.split("\n");
-
-                        // Prefer frontmatter metadata when present.
-                        if (lines[0]?.trim() === "---") {
-                            const fmEnd = lines.findIndex((line, idx) => idx > 0 && line.trim() === "---");
-                            if (fmEnd > 0) {
-                                const frontmatterLines = lines.slice(1, fmEnd);
-                                for (let i = 0; i < frontmatterLines.length; i++) {
-                                    const raw = frontmatterLines[i];
-                                    const trimmed = raw.trim();
-
-                                    if (trimmed.startsWith("name:")) {
-                                        const value = trimmed.slice("name:".length).trim().replace(/^['"]|['"]$/g, "");
-                                        if (value) label = value;
-                                        continue;
-                                    }
-
-                                    if (trimmed.startsWith("description:")) {
-                                        const value = trimmed.slice("description:".length).trim();
-                                        if (value && value !== ">" && value !== "|") {
-                                            description = value.replace(/^['"]|['"]$/g, "");
-                                            continue;
-                                        }
-
-                                        const blockLines: string[] = [];
-                                        for (let j = i + 1; j < frontmatterLines.length; j++) {
-                                            const nextRaw = frontmatterLines[j];
-                                            const nextTrimmed = nextRaw.trim();
-                                            if (!nextTrimmed) continue;
-                                            if (!nextRaw.startsWith(" ") && /^[A-Za-z0-9_-]+:\s*/.test(nextTrimmed)) {
-                                                i = j - 1;
-                                                break;
-                                            }
-                                            blockLines.push(nextTrimmed.replace(/^[-*]\s+/, ""));
-                                            i = j;
-                                        }
-                                        if (blockLines.length > 0) {
-                                            description = blockLines.join(" ").substring(0, 300);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        const descriptionLines: string[] = [];
-                        let foundFirstHeading = false;
-                        let collectingDescription = false;
-
-                        for (const line of lines) {
-                            const trimmed = line.trim();
-                            if (!foundFirstHeading && !trimmed) continue;
-                            if (trimmed.startsWith("#")) {
-                                if (!foundFirstHeading) {
-                                    foundFirstHeading = true;
-                                    collectingDescription = true;
-                                    continue;
-                                } else {
-                                    break;
-                                }
-                            }
-                            if (collectingDescription && trimmed) {
-                                if (trimmed.startsWith("```")) continue;
-                                if (trimmed.startsWith("- `") || trimmed.startsWith("* `")) continue;
-                                descriptionLines.push(trimmed);
-                                if (descriptionLines.length >= 3 || descriptionLines.join(" ").length > 300) break;
-                            }
-                        }
-
-                        if (!description && descriptionLines.length > 0) {
-                            description = descriptionLines.join(" ").substring(0, 300);
-                        }
-                    } catch {
-                        // Ignore read errors
-                    }
-                    result.skills.push({
-                        name: skillName,
-                        label,
-                        fullPath: skillFilePath,
-                        description
-                    });
-                }
-            }
+            result.skills = listInstalledSkills().map((skill) => ({
+                name: skill.name,
+                label: skill.label,
+                fullPath: skill.fullPath,
+                description: skill.description,
+                category: skill.category,
+            }));
         } catch (error) {
             console.error("Failed to read Skills:", error);
-        }
-
-        // Enrich skills with catalog metadata (label, description, category)
-        try {
-            const catalogPath = resolveAppAsset("skills-catalog.json");
-            if (existsSync(catalogPath)) {
-                const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
-                const catalogSkills: { name: string; label?: string; description?: string; category?: string; installPath?: string }[] = catalog.skills ?? [];
-
-                // Build lookup: catalog name -> catalog entry, AND derived dir name -> catalog entry
-                const byName = new Map<string, typeof catalogSkills[0]>();
-                const byDirName = new Map<string, typeof catalogSkills[0]>();
-                for (const cs of catalogSkills) {
-                    byName.set(cs.name, cs);
-                    if (cs.installPath) {
-                        const url = cs.installPath.replace(/\.git\/?$/, "").replace(/\/+$/, "");
-                        const blobM = url.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+\/(.+)$/);
-                        let dirName: string;
-                        if (blobM) {
-                            const parts = blobM[1].split("/");
-                            const last = parts[parts.length - 1];
-                            dirName = last.includes(".") ? parts[parts.length - 2] ?? "" : last;
-                        } else {
-                            dirName = url.split("/").pop() ?? "";
-                        }
-                        if (dirName) byDirName.set(dirName, cs);
-                    }
-                }
-
-                for (const skill of result.skills) {
-                    const match = byName.get(skill.name) ?? byDirName.get(skill.name);
-                    if (match) {
-                        if (match.label) skill.label = match.label;
-                        if (match.description) skill.description = match.description;
-                        if (match.category) skill.category = match.category;
-                    }
-                }
-            }
-        } catch {
-            // Catalog enrichment is best-effort
         }
 
         return result;
@@ -1919,19 +1791,6 @@ app.on("ready", async () => {
         } catch (error) {
             console.error("Failed to delete MCP server:", error);
             return { success: false, message: `删除失败: ${error instanceof Error ? error.message : String(error)}` };
-        }
-    });
-
-    // Read skill content
-    ipcMainHandle("read-skill-content", (_: any, skillPath: string) => {
-        try {
-            if (existsSync(skillPath)) {
-                return readFileSync(skillPath, "utf8");
-            }
-            return null;
-        } catch (error) {
-            console.error("Failed to read skill content:", error);
-            return null;
         }
     });
 

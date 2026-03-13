@@ -190,17 +190,23 @@ export function AssistantManagerModal({
   const handleGenerateTags = async () => {
     if (!editing) return;
     setGeneratingTags(true);
+    setSaveError(null);
     try {
-      const tags = await window.electron.generateSkillTags(
+      const result = await window.electron.generateSkillTags(
         editing.persona,
         editing.skillNames,
         editing.name,
       );
-      if (tags.length > 0) {
-        setEditing({ ...editing, skillTags: tags });
+      if (!result.ok) {
+        setSaveError(result.error || "生成技能标签失败，请重试");
+        return;
+      }
+      if (result.tags.length > 0) {
+        setEditing({ ...editing, skillTags: result.tags });
       }
     } catch (err) {
       console.error("Failed to generate skill tags:", err);
+      setSaveError(err instanceof Error ? err.message : "生成技能标签失败，请重试");
     } finally {
       setGeneratingTags(false);
     }

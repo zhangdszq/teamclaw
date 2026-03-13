@@ -693,10 +693,6 @@ export const MessageCard = memo(function MessageCard({
     return <UserMessageCard message={message} showIndicator={showIndicator} userName={userName} />;
   }
 
-  if (message.type === "skill_loaded") {
-    return null;
-  }
-
   const sdkMessage = message as SDKMessage;
 
   // Always hide system init and successful session result

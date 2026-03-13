@@ -10,6 +10,8 @@ import { runClaude, stopSession, type ServerEvent } from '../services/runner.js'
 import type { AgentProvider } from '../types.js';
 import {
   applyAssistantContextToPrompt,
+  loadInstalledSkills,
+  partitionInstalledSkillNames,
   resolveSkillPromptContext,
 } from '../../libs/skill-context.js';
 
@@ -135,16 +137,27 @@ agent.post('/start', async (c) => {
   }
 
   const provider: AgentProvider = body.provider ?? 'claude';
+  const installedSkills = loadInstalledSkills();
+  const { availableSkillNames, missingSkillNames } = partitionInstalledSkillNames(
+    body.assistantSkillNames,
+    installedSkills,
+  );
+  if (missingSkillNames.length > 0) {
+    console.warn(
+      `[agent.start] Ignoring missing assistant skills: ${missingSkillNames.join(', ')}`,
+    );
+  }
+  const effectiveSkillNames = availableSkillNames.length > 0 ? availableSkillNames : undefined;
   const startSkillContext = body.assistantActivatedSkillContent
     ? {
         skillName: "",
         userText: body.prompt,
         skillContent: body.assistantActivatedSkillContent,
       }
-    : resolveSkillPromptContext(body.prompt, body.assistantSkillNames);
+    : resolveSkillPromptContext(body.prompt, effectiveSkillNames, { installedSkills });
   const effectiveUserPrompt = startSkillContext?.userText ?? body.prompt;
   const effectivePrompt = applyAssistantContextToPrompt(effectiveUserPrompt, {
-    skillNames: body.assistantSkillNames,
+    skillNames: effectiveSkillNames,
     persona: body.assistantPersona,
     assistantId: body.assistantId,
     activatedSkillContent: startSkillContext?.skillContent,
@@ -158,7 +171,7 @@ agent.post('/start', async (c) => {
     prompt: body.prompt,
     externalId: body.externalSessionId,
     assistantId: body.assistantId,
-    assistantSkillNames: body.assistantSkillNames,
+    assistantSkillNames: effectiveSkillNames,
   });
   session.provider = provider;
   session.model = body.model;
@@ -283,17 +296,28 @@ agent.post('/continue', async (c) => {
   }
 
   const continueProvider: AgentProvider = body.provider ?? 'claude';
+  const installedSkills = loadInstalledSkills();
+  const { availableSkillNames, missingSkillNames } = partitionInstalledSkillNames(
+    body.assistantSkillNames,
+    installedSkills,
+  );
+  if (missingSkillNames.length > 0) {
+    console.warn(
+      `[agent.continue] Ignoring missing assistant skills: ${missingSkillNames.join(', ')}`,
+    );
+  }
+  const effectiveSkillNames = availableSkillNames.length > 0 ? availableSkillNames : undefined;
   const continueSkillContext = body.assistantActivatedSkillContent
     ? {
         skillName: "",
         userText: body.prompt,
         skillContent: body.assistantActivatedSkillContent,
       }
-    : resolveSkillPromptContext(body.prompt, body.assistantSkillNames);
+    : resolveSkillPromptContext(body.prompt, effectiveSkillNames, { installedSkills });
   const effectiveContinuePrompt = applyAssistantContextToPrompt(
     continueSkillContext?.userText ?? body.prompt,
     {
-      skillNames: body.assistantSkillNames,
+      skillNames: effectiveSkillNames,
       assistantId: body.assistantId,
       activatedSkillContent: continueSkillContext?.skillContent,
     },
@@ -306,7 +330,7 @@ agent.post('/continue', async (c) => {
     prompt: body.prompt,
     externalId: body.externalSessionId,
     assistantId: body.assistantId,
-    assistantSkillNames: body.assistantSkillNames,
+    assistantSkillNames: effectiveSkillNames,
   });
   tempSession.provider = continueProvider;
   tempSession.model = body.model;

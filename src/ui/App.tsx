@@ -175,7 +175,7 @@ type MessageGroup =
 
 function isProcessMessage(msg: StreamMessage): boolean {
   const m = msg as any;
-  if (m.type === "user_prompt" || m.type === "skill_loaded") return false;
+  if (m.type === "user_prompt") return false;
   if (m.type === "system" || m.type === "result") return false;
   // stream_event messages are intermediate SSE chunks — treat as process so they
   // don't split consecutive tool-call/thinking groups into multiple ProcessGroups

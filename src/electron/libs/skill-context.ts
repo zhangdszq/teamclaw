@@ -11,7 +11,13 @@ export interface SkillInfo {
   name: string;
   label: string;
   description: string;
+  category?: string;
   triggers?: string[];
+}
+
+export interface InstalledSkillInfo extends SkillInfo {
+  fullPath: string;
+  sourceDir: string;
 }
 
 export interface ResolvedSkillCommand {
@@ -26,6 +32,23 @@ export interface ResolveSkillPromptOptions {
   installedSkills?: Map<string, SkillInfo>;
   contentLoader?: (skillName: string) => string | null;
 }
+
+const SKILL_DIRS = [
+  join(homedir(), ".claude", "skills"),
+  join(homedir(), ".cursor", "skills"),
+  join(homedir(), ".codex", "skills"),
+];
+
+type CatalogCacheState = {
+  path: string | null;
+  mtimeMs: number | null;
+  lookup: Map<string, CatalogEntry>;
+};
+
+type InstalledSkillsCacheState = {
+  fingerprint: string;
+  entries: InstalledSkillInfo[];
+};
 
 function extractBacktickedIdentifiers(content: string): string[] {
   const matches = content.matchAll(/`([a-zA-Z0-9_-]+)`/g);
@@ -51,6 +74,56 @@ export function toSkillCommandName(skillName: string): string {
   return skillName.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 32);
 }
 
+function cloneSkillInfo(skill: SkillInfo): SkillInfo {
+  return {
+    ...skill,
+    triggers: skill.triggers ? [...skill.triggers] : undefined,
+  };
+}
+
+function cloneInstalledSkillInfo(skill: InstalledSkillInfo): InstalledSkillInfo {
+  return {
+    ...cloneSkillInfo(skill),
+    fullPath: skill.fullPath,
+    sourceDir: skill.sourceDir,
+  };
+}
+
+function getFileMtimeMs(filePath: string): number | null {
+  try {
+    return statSync(filePath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function buildInstalledSkillsFingerprint(): string {
+  const catalogPath = resolveCatalogPath();
+  const catalogFingerprint = `${catalogPath ?? "no-catalog"}:${catalogPath ? getFileMtimeMs(catalogPath) ?? "missing" : "missing"}`;
+
+  return [catalogFingerprint, ...SKILL_DIRS.map((dir) => {
+    if (!existsSync(dir)) return `${dir}:missing`;
+    try {
+      const entries: string[] = [];
+      for (const name of readdirSync(dir).sort()) {
+        if (name.startsWith(".")) continue;
+        const skillDir = join(dir, name);
+        try {
+          if (!statSync(skillDir).isDirectory()) continue;
+        } catch {
+          entries.push(`${name}:unreadable`);
+          continue;
+        }
+        entries.push(`${name}:${getFileMtimeMs(join(skillDir, "SKILL.md")) ?? "missing"}`);
+      }
+      return `${dir}:${entries.join("|")}`;
+    } catch (error) {
+      console.warn(`[skills] Failed to scan skill directory ${dir}:`, error);
+      return `${dir}:unreadable`;
+    }
+  })].join("||");
+}
+
 // ── Catalog enrichment ─────────────────────────────────────────────────────────
 
 interface CatalogEntry {
@@ -62,7 +135,8 @@ interface CatalogEntry {
   installPath?: string;
 }
 
-let catalogCache: Map<string, CatalogEntry> | undefined;
+let catalogCacheState: CatalogCacheState | undefined;
+let installedSkillsCacheState: InstalledSkillsCacheState | undefined;
 
 function resolveCatalogPath(): string | null {
   const candidates: string[] = [];
@@ -80,14 +154,27 @@ function resolveCatalogPath(): string | null {
 }
 
 function loadCatalogLookup(): Map<string, CatalogEntry> {
-  if (catalogCache) return catalogCache;
-  catalogCache = new Map();
   const catalogPath = resolveCatalogPath();
-  if (!catalogPath) return catalogCache;
+  const mtimeMs = catalogPath ? getFileMtimeMs(catalogPath) : null;
+
+  if (
+    catalogCacheState &&
+    catalogCacheState.path === catalogPath &&
+    catalogCacheState.mtimeMs === mtimeMs
+  ) {
+    return new Map(catalogCacheState.lookup);
+  }
+
+  const lookup = new Map<string, CatalogEntry>();
+  if (!catalogPath || mtimeMs == null) {
+    catalogCacheState = { path: catalogPath, mtimeMs, lookup };
+    return new Map(lookup);
+  }
+
   try {
     const raw = JSON.parse(readFileSync(catalogPath, "utf8")) as { skills?: CatalogEntry[] };
     for (const entry of raw.skills ?? []) {
-      catalogCache.set(entry.name, entry);
+      lookup.set(entry.name, entry);
       if (entry.installPath) {
         const url = entry.installPath.replace(/\.git\/?$/, "").replace(/\/+$/, "");
         const blobMatch = url.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+\/(.+)$/);
@@ -99,11 +186,15 @@ function loadCatalogLookup(): Map<string, CatalogEntry> {
         } else {
           dirName = url.split("/").pop() ?? "";
         }
-        if (dirName && !catalogCache.has(dirName)) catalogCache.set(dirName, entry);
+        if (dirName && !lookup.has(dirName)) lookup.set(dirName, entry);
       }
     }
-  } catch { /* best-effort */ }
-  return catalogCache;
+  } catch (error) {
+    console.warn(`[skills] Failed to parse catalog ${catalogPath}:`, error);
+  }
+
+  catalogCacheState = { path: catalogPath, mtimeMs, lookup };
+  return new Map(lookup);
 }
 
 export function enrichSkillWithCatalog(skill: SkillInfo): SkillInfo {
@@ -113,6 +204,7 @@ export function enrichSkillWithCatalog(skill: SkillInfo): SkillInfo {
   const enriched = { ...skill };
   if (entry.label) enriched.label = entry.label;
   if (entry.description) enriched.description = entry.description;
+  if (entry.category) enriched.category = entry.category;
   const triggers = new Set<string>(skill.triggers ?? []);
   for (const tag of entry.tags ?? []) triggers.add(tag.toLowerCase());
   for (const phrase of extractTriggerPhrases(enriched.description)) triggers.add(phrase);
@@ -234,21 +326,38 @@ export function parseSkillMarkdownMetadata(
   return { label, description };
 }
 
-export function loadInstalledSkills(): Map<string, SkillInfo> {
-  const result = new Map<string, SkillInfo>();
-  const skillsDirs = [
-    join(homedir(), ".claude", "skills"),
-    join(homedir(), ".cursor", "skills"),
-    join(homedir(), ".codex", "skills"),
-  ];
+export function listInstalledSkills(): InstalledSkillInfo[] {
+  const fingerprint = buildInstalledSkillsFingerprint();
+  if (installedSkillsCacheState?.fingerprint === fingerprint) {
+    return installedSkillsCacheState.entries.map(cloneInstalledSkillInfo);
+  }
 
-  for (const dir of skillsDirs) {
+  const result: InstalledSkillInfo[] = [];
+  const sourceByName = new Map<string, string>();
+  const duplicateMessages: string[] = [];
+
+  for (const dir of SKILL_DIRS) {
     if (!existsSync(dir)) continue;
     try {
       for (const name of readdirSync(dir)) {
-        if (name.startsWith(".") || result.has(name)) continue;
+        if (name.startsWith(".")) continue;
         const skillDir = join(dir, name);
-        if (!statSync(skillDir).isDirectory()) continue;
+        let skillDirIsDirectory = false;
+        try {
+          skillDirIsDirectory = statSync(skillDir).isDirectory();
+        } catch (error) {
+          console.warn(`[skills] Failed to inspect skill directory ${skillDir}:`, error);
+          continue;
+        }
+        if (!skillDirIsDirectory) continue;
+
+        if (sourceByName.has(name)) {
+          duplicateMessages.push(
+            `"${name}" in ${skillDir} (using ${sourceByName.get(name)})`,
+          );
+          continue;
+        }
+
         const skillFile = join(skillDir, "SKILL.md");
         if (!existsSync(skillFile)) continue;
 
@@ -259,35 +368,78 @@ export function loadInstalledSkills(): Map<string, SkillInfo> {
           const content = readFileSync(skillFile, "utf8");
           ({ label, description } = parseSkillMarkdownMetadata(content, name));
           mdTriggers = extractTriggerPhrases(description);
-        } catch {
-          // Ignore malformed local skills.
+        } catch (error) {
+          console.warn(`[skills] Failed to parse skill metadata from ${skillFile}:`, error);
         }
 
-        const base: SkillInfo = { name, label, description, triggers: mdTriggers };
-        result.set(name, enrichSkillWithCatalog(base));
+        const enriched = enrichSkillWithCatalog({
+          name,
+          label,
+          description,
+          triggers: mdTriggers,
+        });
+        result.push({
+          ...enriched,
+          fullPath: skillFile,
+          sourceDir: dir,
+        });
+        sourceByName.set(name, skillDir);
       }
-    } catch {
-      // Ignore unreadable skill directories.
+    } catch (error) {
+      console.warn(`[skills] Failed to read skill directory ${dir}:`, error);
     }
   }
 
+  if (duplicateMessages.length > 0) {
+    const preview = duplicateMessages.slice(0, 5).join("; ");
+    const suffix = duplicateMessages.length > 5
+      ? `; ...and ${duplicateMessages.length - 5} more`
+      : "";
+    console.warn(`[skills] Duplicate skills detected, keeping the first installed copy: ${preview}${suffix}`);
+  }
+
+  installedSkillsCacheState = {
+    fingerprint,
+    entries: result.map(cloneInstalledSkillInfo),
+  };
   return result;
 }
 
-export function loadSkillContent(skillName: string): string | null {
-  const dirs = [
-    join(homedir(), ".claude", "skills"),
-    join(homedir(), ".cursor", "skills"),
-    join(homedir(), ".codex", "skills"),
-  ];
-  for (const dir of dirs) {
-    const filePath = join(dir, skillName, "SKILL.md");
-    if (!existsSync(filePath)) continue;
-    try {
-      return readFileSync(filePath, "utf8");
-    } catch {
-      // Ignore unreadable skill files.
+export function loadInstalledSkills(): Map<string, SkillInfo> {
+  return new Map(
+    listInstalledSkills().map(({ fullPath, sourceDir, ...skill }) => [skill.name, cloneSkillInfo(skill)]),
+  );
+}
+
+export function resolveInstalledSkillPath(skillName: string): string | null {
+  return listInstalledSkills().find((skill) => skill.name === skillName)?.fullPath ?? null;
+}
+
+export function partitionInstalledSkillNames(
+  skillNames?: string[],
+  installedSkills: Map<string, SkillInfo> = loadInstalledSkills(),
+): { availableSkillNames: string[]; missingSkillNames: string[] } {
+  const availableSkillNames: string[] = [];
+  const missingSkillNames: string[] = [];
+
+  for (const name of normalizeSkillNames(skillNames)) {
+    if (installedSkills.has(name)) {
+      availableSkillNames.push(name);
+    } else {
+      missingSkillNames.push(name);
     }
+  }
+
+  return { availableSkillNames, missingSkillNames };
+}
+
+export function loadSkillContent(skillName: string): string | null {
+  const filePath = resolveInstalledSkillPath(skillName);
+  if (!filePath) return null;
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch (error) {
+    console.warn(`[skills] Failed to read skill file ${filePath}:`, error);
   }
   return null;
 }
@@ -296,10 +448,9 @@ function getConfiguredSkillInfos(
   skillNames?: string[],
   installedSkills: Map<string, SkillInfo> = loadInstalledSkills(),
 ): SkillInfo[] {
-  return normalizeSkillNames(skillNames).map((name) => {
-    const installed = installedSkills.get(name);
-    return installed ?? { name, label: name, description: "" };
-  });
+  return partitionInstalledSkillNames(skillNames, installedSkills).availableSkillNames.map((name) =>
+    cloneSkillInfo(installedSkills.get(name)!),
+  );
 }
 
 export function buildAvailableSkillsSection(

@@ -6,7 +6,7 @@
  * Runs an in-process HTTP server on 127.0.0.1 (auto-assigned port).
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
-import { getValidOpenAIToken } from "./openai-auth.js";
+import { getMissingOpenAIScopes, getValidOpenAIToken } from "./openai-auth.js";
 import { loadUserSettings } from "./user-settings.js";
 import crypto from "crypto";
 import { recordUsage } from "./usage-tracker.js";
@@ -596,8 +596,14 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
   }
 
   if (!token) {
+    const missingScopes = !routeApiKey && !settings.openaiApiKey
+      ? getMissingOpenAIScopes(settings.openaiTokens?.accessToken)
+      : [];
+    const message = missingScopes.length > 0
+      ? `OpenAI OAuth 授权缺少必要权限（${missingScopes.join(", ")}），请重新登录 ChatGPT。`
+      : "OpenAI authentication not configured. Please set an API key or login via OAuth.";
     res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "OpenAI authentication not configured. Please set an API key or login via OAuth." } }));
+    res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message } }));
     return;
   }
 

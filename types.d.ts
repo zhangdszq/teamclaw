@@ -20,6 +20,9 @@ type OpenAIAuthStatus = {
     loggedIn: boolean;
     email?: string;
     expiresAt?: number;
+    needsReauth?: boolean;
+    missingScopes?: string[];
+    error?: string;
 }
 
 type OpenAILoginResult = {
@@ -730,7 +733,6 @@ type EventPayloadMapping = {
     "skill-catalog": SkillCatalogData;
     "save-mcp-server": SaveMcpResult;
     "delete-mcp-server": SaveMcpResult;
-    "read-skill-content": string | null;
     "install-skill": { success: boolean; skillName: string; message: string };
     "delete-skill": { success: boolean; message: string };
     "get-assistants-config": AssistantsConfig;
@@ -780,7 +782,7 @@ type EventPayloadMapping = {
     "get-provider-stats": ProviderStat[];
     "clear-usage-logs": boolean;
     "read-dir": DirEntry[];
-    "generate-skill-tags": string[];
+    "generate-skill-tags": { ok: boolean; tags: string[]; error?: string };
     // Plan table
     "get-plan-items": PlanItem[];
     "retry-plan-item": { ok: boolean; error?: string };
@@ -911,7 +913,6 @@ interface Window {
         skillCatalog: () => Promise<SkillCatalogData>;
         saveMcpServer: (server: McpServer) => Promise<SaveMcpResult>;
         deleteMcpServer: (name: string) => Promise<SaveMcpResult>;
-        readSkillContent: (skillPath: string) => Promise<string | null>;
         installSkill: (url: string) => Promise<{ success: boolean; skillName: string; message: string }>;
         deleteSkill: (skillName: string) => Promise<{ success: boolean; message: string }>;
         getAssistantsConfig: () => Promise<AssistantsConfig>;
@@ -993,7 +994,7 @@ interface Window {
         updatePlanItemSession: (planItemId: string, sessionId: string) => Promise<{ ok: boolean; error?: string }>;
         onPlanItemsChanged: (callback: () => void) => UnsubscribeFunction;
         readDir: (dirPath: string) => Promise<DirEntry[]>;
-        generateSkillTags: (persona: string, skillNames: string[], assistantName: string) => Promise<string[]>;
+        generateSkillTags: (persona: string, skillNames: string[], assistantName: string) => Promise<{ ok: boolean; tags: string[]; error?: string }>;
         // Quick window
         getQuickWindowShortcut: () => Promise<string>;
         saveQuickWindowShortcut: (shortcut: string) => Promise<boolean>;

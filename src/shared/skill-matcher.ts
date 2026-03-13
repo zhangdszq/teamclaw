@@ -6,6 +6,7 @@ export type SkillMatchCandidate = {
 };
 
 const MIN_MATCH_SCORE = 2;
+const MIN_UNAMBIGUOUS_TIE_SCORE = 4;
 
 function tokenizeSkillText(text: string): string[] {
   return [...new Set(text
@@ -112,16 +113,25 @@ export function findBestSkillMatch<T extends SkillMatchCandidate>(
 ): T | null {
   if (availableSkills.length === 0) return null;
 
+  const sortedSkills = [...availableSkills].sort((left, right) =>
+    left.name.localeCompare(right.name, "en"),
+  );
+
   let best: T | null = null;
   let bestScore = 0;
+  let secondBestScore = 0;
 
-  for (const skill of availableSkills) {
+  for (const skill of sortedSkills) {
     const score = scoreSkillMatch(prompt, skill);
     if (score > bestScore) {
+      secondBestScore = bestScore;
       bestScore = score;
       best = skill;
+      continue;
     }
+    if (score > secondBestScore) secondBestScore = score;
   }
 
+  if (bestScore === secondBestScore && bestScore < MIN_UNAMBIGUOUS_TIE_SCORE) return null;
   return bestScore >= MIN_MATCH_SCORE ? best : null;
 }

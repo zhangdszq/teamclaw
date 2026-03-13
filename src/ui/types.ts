@@ -5,15 +5,7 @@ export type UserPromptMessage = {
   prompt: string;
 };
 
-export type SkillLoadedMessage = {
-  type: "skill_loaded";
-  skillName: string;
-  skillLabel?: string;
-  skillContent: string;
-  skillDescription?: string;
-};
-
-export type StreamMessage = SDKMessage | UserPromptMessage | SkillLoadedMessage;
+export type StreamMessage = SDKMessage | UserPromptMessage;
 
 export type SessionStatus = "idle" | "running" | "completed" | "error";
 

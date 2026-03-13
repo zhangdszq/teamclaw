@@ -29,7 +29,9 @@ import { buildConversationDigest, extractExperienceViaAI } from './libs/experien
 import { appendDailyMemory, ScopedMemory } from './libs/memory-store.js';
 import {
   applyAssistantContextToPrompt,
+  loadInstalledSkills,
   normalizeSkillNames,
+  partitionInstalledSkillNames,
   resolveSkillPromptContext,
 } from './libs/skill-context.js';
 import {
@@ -489,12 +491,22 @@ export async function handleClientEvent(event: ClientEvent) {
     if (event.payload.assistantSkillNames?.length) {
       console.log('[IPC] session.start with skills:', event.payload.assistantSkillNames);
     }
-    const startSkillContext = resolveSkillPromptContext(event.payload.prompt, event.payload.assistantSkillNames, {
+    const installedSkills = loadInstalledSkills();
+    const { availableSkillNames, missingSkillNames } = partitionInstalledSkillNames(
+      event.payload.assistantSkillNames,
+      installedSkills,
+    );
+    if (missingSkillNames.length > 0) {
+      console.warn('[IPC] Ignoring missing assistant skills on start:', missingSkillNames);
+    }
+    const effectiveSkillNames = availableSkillNames.length > 0 ? availableSkillNames : undefined;
+    const startSkillContext = resolveSkillPromptContext(event.payload.prompt, effectiveSkillNames, {
       autoActivate: !event.payload.background,
+      installedSkills,
     });
     const resolvedStartPrompt = startSkillContext?.userText ?? event.payload.prompt;
     const effectivePrompt = applyAssistantContextToPrompt(resolvedStartPrompt, {
-      skillNames: event.payload.assistantSkillNames,
+      skillNames: effectiveSkillNames,
       persona: event.payload.assistantPersona,
       assistantId: event.payload.assistantId,
       activatedSkillContent: startSkillContext?.skillContent,
@@ -507,7 +519,7 @@ export async function handleClientEvent(event: ClientEvent) {
       provider,
       model: event.payload.model,
       assistantId: event.payload.assistantId,
-      assistantSkillNames: event.payload.assistantSkillNames,
+      assistantSkillNames: effectiveSkillNames,
       background: event.payload.background,
       workflowSopId: event.payload.workflowSopId,
       scheduledTaskId: event.payload.scheduledTaskId,
@@ -546,7 +558,7 @@ export async function handleClientEvent(event: ClientEvent) {
             provider,
             model: event.payload.model,
             assistantId: session.assistantId,
-            assistantSkillNames: session.assistantSkillNames,
+            assistantSkillNames: effectiveSkillNames,
             assistantPersona: event.payload.assistantPersona,
             assistantActivatedSkillContent: startSkillContext?.skillContent,
           },
@@ -626,7 +638,14 @@ export async function handleClientEvent(event: ClientEvent) {
       return;
     }
 
-    const nextSkillNames = normalizeSkillNames(event.payload.assistantSkillNames);
+    const installedSkills = loadInstalledSkills();
+    const { availableSkillNames: nextSkillNames, missingSkillNames } = partitionInstalledSkillNames(
+      event.payload.assistantSkillNames,
+      installedSkills,
+    );
+    if (missingSkillNames.length > 0) {
+      console.warn('[IPC] Ignoring missing assistant skills on continue:', missingSkillNames);
+    }
     const shouldSwitchSkills = nextSkillNames.length > 0 && !areSkillNamesEqual(session.assistantSkillNames, nextSkillNames);
     if (shouldSwitchSkills) {
       sessions.updateSession(session.id, {
@@ -664,6 +683,7 @@ export async function handleClientEvent(event: ClientEvent) {
     const continueSkillContext = resolveSkillPromptContext(event.payload.prompt, session.assistantSkillNames, {
       autoActivate: !session.background,
       preferredSkillName: session.activatedSkillName,
+      installedSkills,
     });
     const continueActivatedContent = continueSkillContext?.skillContent ?? session.activatedSkillContent;
     const resolvedContinuePrompt = continueSkillContext?.userText ?? event.payload.prompt;

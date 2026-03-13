@@ -6,6 +6,11 @@ const mockState = vi.hoisted(() => ({
     openaiApiKey?: string;
     openaiBaseUrl?: string;
     openaiModel?: string;
+    openaiTokens?: {
+      accessToken: string;
+      refreshToken: string;
+      expiresAt: number;
+    };
   },
   oauthToken: "oauth-token",
 }));
@@ -26,6 +31,9 @@ vi.mock("../user-settings.js", () => ({
 
 vi.mock("../openai-auth.js", () => ({
   getValidOpenAIToken: vi.fn(async () => mockState.oauthToken),
+  getMissingOpenAIScopes: vi.fn((accessToken?: string | null) =>
+    accessToken === "scopeless-token" ? ["api.responses.write", "model.request"] : []
+  ),
 }));
 
 vi.mock("../usage-tracker.js", () => ({
@@ -586,6 +594,26 @@ describe("openai proxy routing overrides", () => {
     expect(resp.status).toBe(401);
     const body = await resp.json() as { error?: { type?: string } };
     expect(body.error?.type).toBe("authentication_error");
+  });
+
+  it("returns a re-login hint when stored OAuth token lacks required scopes", async () => {
+    mockState.settings = {
+      openaiTokens: {
+        accessToken: "scopeless-token",
+        refreshToken: "refresh-token",
+        expiresAt: Date.now() + 60_000,
+      },
+    };
+    mockState.oauthToken = "";
+    await startProxy();
+    const base = getProxyBaseUrl();
+    if (!base) throw new Error("Proxy base url unavailable");
+
+    const resp = await postAnthropicMessages(base);
+    expect(resp.status).toBe(401);
+    const body = await resp.json() as { error?: { message?: string } };
+    expect(body.error?.message).toContain("重新登录 ChatGPT");
+    expect(body.error?.message).toContain("api.responses.write");
   });
 
   it("returns 400 for invalid json body", async () => {

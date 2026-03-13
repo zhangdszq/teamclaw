@@ -230,7 +230,6 @@ function summarizeStreamMessage(message: StreamMessage): { role: string; text: s
     const text = trimPreviewText(String(raw.prompt ?? ""));
     return text ? { role: "用户", text } : null;
   }
-  if (raw.type === "skill_loaded") return null;
   if (raw.type === "assistant") {
     const contents: any[] = raw.message?.content ?? [];
     const text = trimPreviewText(

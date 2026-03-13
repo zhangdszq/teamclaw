@@ -12,6 +12,7 @@ import {
   buildAvailableSkillsSection,
   buildActivatedSkillSection,
   parseSkillMarkdownMetadata,
+  partitionInstalledSkillNames,
   resolveSkillCommand,
   resolveSkillPromptContext,
 } from "../skill-context.js";
@@ -101,6 +102,17 @@ describe("skill-context helpers", () => {
     expect(section).toContain("拉取 Adjust 数据");
   });
 
+  it("omits missing skills from the available skills section", () => {
+    const installedSkills = new Map([
+      ["adjust-report", { name: "adjust-report", label: "Adjust 归因分析", description: "拉取 Adjust 数据" }],
+    ]);
+
+    const section = buildAvailableSkillsSection(["adjust-report", "missing-skill"], installedSkills);
+
+    expect(section).toContain("adjust-report");
+    expect(section).not.toContain("missing-skill");
+  });
+
   it("auto-activates the best matching skill for plain prompts", () => {
     const installedSkills = new Map([
       ["aliyun-sms-bulk", { name: "aliyun-sms-bulk", label: "阿里云短信", description: "发送短信通知" }],
@@ -188,6 +200,15 @@ version: 0.1.0
     expect(match).toBeNull();
   });
 
+  it("avoids weak ambiguous auto-matches when multiple skills tie", () => {
+    const match = findBestSkillMatch("帮我看数据", [
+      { name: "sales-report", label: "销售报告", description: "查看销售数据" },
+      { name: "ops-report", label: "运营报告", description: "查看运营数据" },
+    ]);
+
+    expect(match).toBeNull();
+  });
+
   it("reuses the preferred skill on ambiguous follow-up prompts", () => {
     const result = resolveSkillPromptContext(
       "继续",
@@ -263,5 +284,16 @@ version: 0.1.0
     expect(section).toContain("`mcp_sms`");
     expect(section).toContain("OAuth");
     expect(section).toContain("不要误判为工具不存在");
+  });
+
+  it("partitions configured skill names into available and missing lists", () => {
+    const installedSkills = new Map([
+      ["adjust-report", { name: "adjust-report", label: "Adjust 归因分析", description: "拉取 Adjust 数据" }],
+    ]);
+
+    expect(partitionInstalledSkillNames(["adjust-report", "missing-skill"], installedSkills)).toEqual({
+      availableSkillNames: ["adjust-report"],
+      missingSkillNames: ["missing-skill"],
+    });
   });
 });

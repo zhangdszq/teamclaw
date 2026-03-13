@@ -172,6 +172,9 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
   const [openaiLoggedIn, setOpenaiLoggedIn] = useState(false);
   const [openaiEmail, setOpenaiEmail] = useState<string | undefined>();
   const [openaiExpiresAt, setOpenaiExpiresAt] = useState<number | undefined>();
+  const [openaiNeedsReauth, setOpenaiNeedsReauth] = useState(false);
+  const [openaiMissingScopes, setOpenaiMissingScopes] = useState<string[]>([]);
+  const [openaiStatusError, setOpenaiStatusError] = useState<string | null>(null);
   const [openaiLoggingIn, setOpenaiLoggingIn] = useState(false);
   const [openaiError, setOpenaiError] = useState<string | null>(null);
   const [openaiAuthMode, setOpenaiAuthMode] = useState<"oauth" | "api">("oauth");
@@ -217,8 +220,13 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
       setOpenaiLoggedIn(status.loggedIn);
       setOpenaiEmail(status.email);
       setOpenaiExpiresAt(status.expiresAt);
+      setOpenaiNeedsReauth(Boolean(status.needsReauth));
+      setOpenaiMissingScopes(status.missingScopes ?? []);
+      setOpenaiStatusError(status.error ?? null);
     } catch {
-      // Ignore
+      setOpenaiNeedsReauth(false);
+      setOpenaiMissingScopes([]);
+      setOpenaiStatusError(null);
     }
   };
 
@@ -730,7 +738,90 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                       {/* OAuth mode */}
                       {openaiAuthMode === "oauth" && (
                         <>
-                          {openaiLoggedIn ? (
+                          {openaiNeedsReauth ? (
+                            <>
+                              <div className="rounded-xl border border-warning/20 bg-warning/5 p-4">
+                                <div className="flex items-start gap-3">
+                                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-warning/10 flex-shrink-0">
+                                    <svg viewBox="0 0 24 24" className="h-5 w-5 text-warning" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <path d="M12 9v4" />
+                                      <path d="M12 17h.01" />
+                                      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                    </svg>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[14px] font-medium text-ink-800">OpenAI 需要重新登录</p>
+                                    {openaiEmail && (
+                                      <p className="text-[13px] text-ink-500 truncate">{openaiEmail}</p>
+                                    )}
+                                    <p className="text-[13px] text-ink-500 mt-1 leading-relaxed">
+                                      {openaiStatusError ?? "当前 OAuth 凭证权限不足，无法继续发起 OpenAI 请求。"}
+                                    </p>
+                                    {openaiMissingScopes.length > 0 && (
+                                      <p className="text-[12px] text-ink-400 mt-1">
+                                        缺少权限：{openaiMissingScopes.join(", ")}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  setOpenaiLoggingIn(true);
+                                  setOpenaiError(null);
+                                  try {
+                                    const result = await window.electron.openaiLogin();
+                                    if (result.success) {
+                                      setOpenaiLoggedIn(true);
+                                      setOpenaiNeedsReauth(false);
+                                      setOpenaiMissingScopes([]);
+                                      setOpenaiStatusError(null);
+                                      setOpenaiEmail(result.email);
+                                      const [settings, assistantsConfig] = await Promise.all([
+                                        window.electron.getUserSettings(),
+                                        window.electron.getAssistantsConfig(),
+                                      ]);
+                                      const migration = maybeSwitchDefaultAssistantToOpenAI(assistantsConfig, {
+                                        hasClaudeAuth: !!settings.anthropicAuthToken?.trim(),
+                                      });
+                                      if (migration.changed) {
+                                        await window.electron.saveAssistantsConfig(migration.config);
+                                      }
+                                      await loadOpenAIStatus();
+                                      setOpenaiDefaultAssistantReady(defaultAssistantUsesProvider(migration.config, "openai"));
+                                    } else {
+                                      setOpenaiError(result.error || "重新登录失败");
+                                    }
+                                  } catch (err) {
+                                    setOpenaiError("重新登录出错: " + (err instanceof Error ? err.message : String(err)));
+                                  } finally {
+                                    setOpenaiLoggingIn(false);
+                                  }
+                                }}
+                                disabled={openaiLoggingIn}
+                                className="w-full rounded-xl px-4 py-3 text-[14px] font-medium text-white shadow-soft transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                                style={{ background: '#10a37f' }}
+                              >
+                                {openaiLoggingIn ? (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <svg aria-hidden="true" className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+                                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                    </svg>
+                                    正在打开登录窗口...
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
+                                      <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
+                                    </svg>
+                                    重新登录 ChatGPT
+                                  </span>
+                                )}
+                              </button>
+                            </>
+                          ) : openaiLoggedIn ? (
                             <>
                               <div className="rounded-xl border border-success/20 bg-success/5 p-4">
                                 <div className="flex items-center gap-3">
@@ -757,6 +848,9 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                                 onClick={async () => {
                                   await window.electron.openaiLogout();
                                   setOpenaiLoggedIn(false);
+                                  setOpenaiNeedsReauth(false);
+                                  setOpenaiMissingScopes([]);
+                                  setOpenaiStatusError(null);
                                   setOpenaiEmail(undefined);
                                   setOpenaiExpiresAt(undefined);
                                 }}

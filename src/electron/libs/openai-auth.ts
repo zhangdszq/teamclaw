@@ -18,7 +18,19 @@ const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
-const SCOPE = "openid profile email offline_access";
+export const REQUIRED_OPENAI_API_SCOPES = [
+  "model.request",
+  "api.model.read",
+  "api.responses.write",
+] as const;
+
+export const OPENAI_OAUTH_SCOPE = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  ...REQUIRED_OPENAI_API_SCOPES,
+].join(" ");
 
 export interface OpenAIAuthTokens {
   accessToken: string;
@@ -31,6 +43,9 @@ export interface OpenAIAuthStatus {
   loggedIn: boolean;
   email?: string;
   expiresAt?: number;
+  needsReauth?: boolean;
+  missingScopes?: string[];
+  error?: string;
 }
 
 // ─── PKCE Helpers ────────────────────────────────────────────
@@ -54,6 +69,7 @@ interface JWTPayload {
   name?: string;
   sub?: string;
   exp?: number;
+  scp?: string[] | string;
   "https://api.openai.com/auth"?: {
     chatgpt_account_id?: string;
   };
@@ -72,6 +88,26 @@ function decodeJWT(token: string): JWTPayload | null {
   }
 }
 
+function normalizeScopes(value: string[] | string | undefined): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+export function getMissingOpenAIScopes(accessToken?: string | null): string[] {
+  if (!accessToken) return [...REQUIRED_OPENAI_API_SCOPES];
+  const granted = new Set(normalizeScopes(decodeJWT(accessToken)?.scp));
+  return REQUIRED_OPENAI_API_SCOPES.filter((scope) => !granted.has(scope));
+}
+
+function buildMissingScopesMessage(missingScopes: string[]): string {
+  return `OpenAI OAuth 授权缺少必要权限（${missingScopes.join(", ")}），请重新登录 ChatGPT。`;
+}
+
 // ─── Auth Status ─────────────────────────────────────────────
 
 export function getOpenAIAuthStatus(): OpenAIAuthStatus {
@@ -83,6 +119,17 @@ export function getOpenAIAuthStatus(): OpenAIAuthStatus {
   }
 
   const decoded = decodeJWT(tokens.accessToken);
+  const missingScopes = getMissingOpenAIScopes(tokens.accessToken);
+  if (missingScopes.length > 0) {
+    return {
+      loggedIn: false,
+      email: decoded?.email ?? undefined,
+      expiresAt: tokens.expiresAt,
+      needsReauth: true,
+      missingScopes,
+      error: buildMissingScopesMessage(missingScopes),
+    };
+  }
   return {
     loggedIn: true,
     email: decoded?.email ?? undefined,
@@ -187,6 +234,12 @@ export function openAILogin(_parentWindow?: unknown): Promise<{ success: boolean
           return;
         }
 
+        const missingScopes = getMissingOpenAIScopes(tokens.accessToken);
+        if (missingScopes.length > 0) {
+          finish({ success: false, error: buildMissingScopesMessage(missingScopes) });
+          return;
+        }
+
         const settings = loadUserSettings();
         settings.openaiTokens = {
           accessToken: tokens.accessToken,
@@ -211,7 +264,7 @@ export function openAILogin(_parentWindow?: unknown): Promise<{ success: boolean
       authUrl.searchParams.set("response_type", "code");
       authUrl.searchParams.set("client_id", CLIENT_ID);
       authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
-      authUrl.searchParams.set("scope", SCOPE);
+      authUrl.searchParams.set("scope", OPENAI_OAUTH_SCOPE);
       authUrl.searchParams.set("code_challenge", codeChallenge);
       authUrl.searchParams.set("code_challenge_method", "S256");
       authUrl.searchParams.set("state", state);
@@ -319,6 +372,12 @@ export async function refreshOpenAIToken(): Promise<boolean> {
       return false;
     }
 
+    const missingScopes = getMissingOpenAIScopes(json.access_token);
+    if (missingScopes.length > 0) {
+      console.error("[openai-auth] Refresh token missing required scopes:", missingScopes.join(", "));
+      return false;
+    }
+
     const newTokens: OpenAIAuthTokens = {
       accessToken: json.access_token,
       refreshToken: json.refresh_token,
@@ -352,6 +411,10 @@ export async function getValidOpenAIToken(): Promise<string | null> {
     return null;
   }
 
+  if (getMissingOpenAIScopes(tokens.accessToken).length > 0) {
+    return null;
+  }
+
   // If token expires within 5 minutes, refresh it
   const REFRESH_BUFFER = 5 * 60 * 1000;
   if (tokens.expiresAt && tokens.expiresAt - Date.now() < REFRESH_BUFFER) {
@@ -361,7 +424,11 @@ export async function getValidOpenAIToken(): Promise<string | null> {
     }
     // Reload settings after refresh
     const updatedSettings = loadUserSettings();
-    return updatedSettings.openaiTokens?.accessToken ?? null;
+    const refreshedToken = updatedSettings.openaiTokens?.accessToken ?? null;
+    if (getMissingOpenAIScopes(refreshedToken).length > 0) {
+      return null;
+    }
+    return refreshedToken;
   }
 
   return tokens.accessToken;

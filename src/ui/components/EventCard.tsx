@@ -5,7 +5,7 @@ import type {
   SDKUserMessage
 } from "@anthropic-ai/claude-agent-sdk";
 import type { StreamMessage } from "../types";
-import MDContent from "../render/markdown";
+import MDContent, { ImagePreviewOverlay, normalizeImageSrc } from "../render/markdown";
 
 type MessageContent = SDKAssistantMessage["message"]["content"][number];
 type ToolResultContent = SDKUserMessage["message"]["content"][number];
@@ -554,6 +554,7 @@ type ParsedAttachment = {
 
 const UserImageAttachmentCard = ({ attachment }: { attachment: ParsedAttachment }) => {
   const [preview, setPreview] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -565,9 +566,14 @@ const UserImageAttachmentCard = ({ attachment }: { attachment: ParsedAttachment 
     return () => { cancelled = true; };
   }, [attachment.path]);
 
+  const fullSrc = normalizeImageSrc(attachment.path);
+
   return (
     <div className="group relative flex-shrink-0">
-      <div className="h-[72px] w-[72px] overflow-hidden rounded-2xl border border-ink-900/10 bg-surface-secondary shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+      <div
+        className="h-[72px] w-[72px] cursor-zoom-in overflow-hidden rounded-2xl border border-ink-900/10 bg-surface-secondary shadow-[0_8px_24px_rgba(15,23,42,0.06)]"
+        onClick={() => fullSrc && setPreviewOpen(true)}
+      >
         {preview ? (
           <img
             src={preview}
@@ -586,6 +592,9 @@ const UserImageAttachmentCard = ({ attachment }: { attachment: ParsedAttachment 
       <div className="pointer-events-none absolute inset-x-1.5 bottom-1.5 rounded-lg bg-black/48 px-2 py-1 text-[10px] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
         <div className="truncate">{attachment.name}</div>
       </div>
+      {previewOpen && fullSrc && (
+        <ImagePreviewOverlay src={fullSrc} alt={attachment.name} onClose={() => setPreviewOpen(false)} />
+      )}
     </div>
   );
 };

@@ -29,9 +29,8 @@ import { buildConversationDigest, extractExperienceViaAI } from './libs/experien
 import { appendDailyMemory, ScopedMemory } from './libs/memory-store.js';
 import {
   applyAssistantContextToPrompt,
-  loadSkillContent,
   normalizeSkillNames,
-  resolveSkillCommand,
+  resolveSkillPromptContext,
 } from './libs/skill-context.js';
 import {
   buildContinuePrompt,
@@ -490,18 +489,15 @@ export async function handleClientEvent(event: ClientEvent) {
     if (event.payload.assistantSkillNames?.length) {
       console.log('[IPC] session.start with skills:', event.payload.assistantSkillNames);
     }
-    const startSkillContext = resolveSkillCommand(event.payload.prompt, event.payload.assistantSkillNames);
-    let activatedSkillContent = startSkillContext?.skillContent;
-    if (!activatedSkillContent && event.payload.assistantSkillNames?.length) {
-      const firstSkill = event.payload.assistantSkillNames[0];
-      activatedSkillContent = loadSkillContent(firstSkill) ?? undefined;
-    }
+    const startSkillContext = resolveSkillPromptContext(event.payload.prompt, event.payload.assistantSkillNames, {
+      autoActivate: !event.payload.background,
+    });
     const resolvedStartPrompt = startSkillContext?.userText ?? event.payload.prompt;
     const effectivePrompt = applyAssistantContextToPrompt(resolvedStartPrompt, {
       skillNames: event.payload.assistantSkillNames,
       persona: event.payload.assistantPersona,
       assistantId: event.payload.assistantId,
-      activatedSkillContent,
+      activatedSkillContent: startSkillContext?.skillContent,
     });
     const session = sessions.createSession({
       cwd: event.payload.cwd,
@@ -516,6 +512,8 @@ export async function handleClientEvent(event: ClientEvent) {
       workflowSopId: event.payload.workflowSopId,
       scheduledTaskId: event.payload.scheduledTaskId,
     });
+    session.activatedSkillName = startSkillContext?.skillName;
+    session.activatedSkillContent = startSkillContext?.skillContent;
 
     sessions.updateSession(session.id, {
       lastPrompt: event.payload.prompt,
@@ -550,7 +548,7 @@ export async function handleClientEvent(event: ClientEvent) {
             assistantId: session.assistantId,
             assistantSkillNames: session.assistantSkillNames,
             assistantPersona: event.payload.assistantPersona,
-            assistantActivatedSkillContent: activatedSkillContent,
+            assistantActivatedSkillContent: startSkillContext?.skillContent,
           },
           (apiEvent) => {
             // Map API session ID to local session ID
@@ -637,6 +635,8 @@ export async function handleClientEvent(event: ClientEvent) {
         resumeReady: false,
       });
       session.assistantSkillNames = nextSkillNames;
+      session.activatedSkillName = undefined;
+      session.activatedSkillContent = undefined;
       session.resumeReady = false;
     }
 
@@ -661,12 +661,11 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     const sessionProvider = session.provider ?? 'claude';
-    const continueSkillContext = resolveSkillCommand(event.payload.prompt, session.assistantSkillNames);
-    let continueActivatedContent = continueSkillContext?.skillContent;
-    if (!continueActivatedContent && session.assistantSkillNames?.length) {
-      const firstSkill = session.assistantSkillNames[0];
-      continueActivatedContent = loadSkillContent(firstSkill) ?? undefined;
-    }
+    const continueSkillContext = resolveSkillPromptContext(event.payload.prompt, session.assistantSkillNames, {
+      autoActivate: !session.background,
+      preferredSkillName: session.activatedSkillName,
+    });
+    const continueActivatedContent = continueSkillContext?.skillContent ?? session.activatedSkillContent;
     const resolvedContinuePrompt = continueSkillContext?.userText ?? event.payload.prompt;
     const continuedPrompt = buildContinuePrompt(resolvedContinuePrompt, session.assistantSkillNames);
     const effectiveContinuedPrompt = applyAssistantContextToPrompt(continuedPrompt, {
@@ -674,13 +673,15 @@ export async function handleClientEvent(event: ClientEvent) {
       assistantId: session.assistantId,
       activatedSkillContent: continueActivatedContent,
     });
+    session.activatedSkillName = continueSkillContext?.skillName ?? session.activatedSkillName;
+    session.activatedSkillContent = continueActivatedContent;
     const canResumeRemotely = Boolean(session.claudeSessionId && session.resumeReady);
 
     if (!canResumeRemotely || shouldSwitchSkills) {
       await continueWithLocalHistoryFallback(
         session,
         resolvedContinuePrompt,
-        continueSkillContext?.skillContent,
+        continueActivatedContent,
       );
       return;
     }
@@ -719,7 +720,7 @@ export async function handleClientEvent(event: ClientEvent) {
             model: session.model,
             assistantId: session.assistantId,
             assistantSkillNames: session.assistantSkillNames,
-            assistantActivatedSkillContent: continueSkillContext?.skillContent,
+            assistantActivatedSkillContent: continueActivatedContent,
           }
         );
         if (shouldFallback) {
@@ -727,7 +728,7 @@ export async function handleClientEvent(event: ClientEvent) {
           await continueWithLocalHistoryFallback(
             session,
             resolvedContinuePrompt,
-            continueSkillContext?.skillContent,
+            continueActivatedContent,
           );
         }
       } catch (error) {
@@ -736,7 +737,7 @@ export async function handleClientEvent(event: ClientEvent) {
           await continueWithLocalHistoryFallback(
             session,
             resolvedContinuePrompt,
-            continueSkillContext?.skillContent,
+            continueActivatedContent,
           );
           return;
         }
@@ -786,7 +787,7 @@ export async function handleClientEvent(event: ClientEvent) {
             await continueWithLocalHistoryFallback(
               session,
               resolvedContinuePrompt,
-              continueSkillContext?.skillContent,
+              continueActivatedContent,
             );
           },
         })

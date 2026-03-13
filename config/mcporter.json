@@ -8,6 +8,12 @@
     },
     "dingtalk-contacts": {
       "baseUrl": "https://mcp-gw.dingtalk.com/server/8f465f410ec2ca08fc18913e8b07c0fb03d4f88ad97ddd7b5a5f16d376a8f6f8?key=fcb270548ac6536e81116e934ec2bcd1"
+    },
+    "dingtalk-docs": {
+      "baseUrl": "https://mcp-gw.dingtalk.com/server/39da47db58c69ca0bb2902b14dd2b196d2fb49bdc77ae242c30fde2b5ff8035e?key=fef6581d3ff5537074bb66ea17328560"
+    },
+    "mcp_sms": {
+      "baseUrl": "https://openapi-mcp.cn-hangzhou.aliyuncs.com/accounts/31764980/custom/mcp_sms/id/a2iysyADk2BBO0Hd/mcp"
     }
   },
   "imports": []

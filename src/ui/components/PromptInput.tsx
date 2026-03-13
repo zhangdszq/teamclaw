@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientEvent } from "../types";
 import { useAppStore } from "../store/useAppStore";
+import { findBestSkillMatch } from "../../shared/skill-matcher";
 
 const DEFAULT_ALLOWED_TOOLS = "Read,Edit,Bash";
 const MAX_ROWS = 12;
@@ -145,34 +146,6 @@ interface PromptInputProps {
   rightPanelWidth?: number;
   contentWidth?: number;
   onHeightChange?: (height: number) => void;
-}
-
-/**
- * 从助理配置的技能列表中找到最匹配当前 prompt 的技能。
- * - 只有 1 个技能：直接返回
- * - 多个技能：按 prompt 与技能名/描述关键词的匹配度打分，返回最高分
- */
-function findBestSkill(prompt: string, availableSkills: SkillInfo[]): SkillInfo | null {
-  if (availableSkills.length === 0) return null;
-  if (availableSkills.length === 1) return availableSkills[0];
-
-  const lower = prompt.toLowerCase();
-  let bestScore = -1;
-  let best = availableSkills[0];
-
-  for (const skill of availableSkills) {
-    let score = 0;
-    if (lower.includes(skill.name.toLowerCase())) score += 3;
-    const keywords = (skill.description || "")
-      .toLowerCase()
-      .split(/[\s,，。.!?！？、]+/)
-      .filter((w) => w.length > 1);
-    for (const kw of keywords) {
-      if (lower.includes(kw)) score += 1;
-    }
-    if (score > bestScore) { bestScore = score; best = skill; }
-  }
-  return best;
 }
 
 export interface UsePromptActionsOptions {
@@ -384,7 +357,7 @@ export function usePromptActions(
         const assistantSkills = (optionSkills ?? []).filter((s) =>
           selectedAssistantSkillNames.includes(s.name)
         );
-        const best = findBestSkill(finalPrompt, assistantSkills);
+        const best = findBestSkillMatch(finalPrompt, assistantSkills);
         if (best) {
           resolvedSkillNames = [best.name];
         } else {

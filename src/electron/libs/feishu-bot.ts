@@ -44,7 +44,7 @@ import {
 import { loadAssistantsConfig, patchAssistantBotOwnerIds } from "./assistants-config.js";
 import {
   buildActivatedSkillSection,
-  resolveSkillCommand,
+  resolveSkillPromptContext,
 } from "./skill-context.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -788,7 +788,7 @@ class FeishuConnection {
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
     forwardMentions?: Array<{ id: Record<string, string>; name?: string }>,
   ): Promise<void> {
-    const skillContext = resolveSkillCommand(userText, this.opts.skillNames);
+    const skillContext = resolveSkillPromptContext(userText, this.opts.skillNames);
     const effectiveUserText = skillContext?.userText ?? userText;
     const history = getHistory(sessionKey);
     const provider = this.opts.provider ?? "claude";

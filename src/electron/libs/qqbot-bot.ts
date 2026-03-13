@@ -40,7 +40,7 @@ import {
 } from "./bot-base.js";
 import {
   buildActivatedSkillSection,
-  resolveSkillCommand,
+  resolveSkillPromptContext,
 } from "./skill-context.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -844,7 +844,7 @@ class QQBotConnection {
     groupOpenId?: string,
     msgId?: string,
   ): Promise<void> {
-    const skillContext = resolveSkillCommand(userText, this.opts.skillNames);
+    const skillContext = resolveSkillPromptContext(userText, this.opts.skillNames);
     const effectiveUserText = skillContext?.userText ?? userText;
     const historyKey = `${this.opts.assistantId}:${chatKey}`;
     const history = getHistory(historyKey);

@@ -10,7 +10,7 @@ import { runClaude, stopSession, type ServerEvent } from '../services/runner.js'
 import type { AgentProvider } from '../types.js';
 import {
   applyAssistantContextToPrompt,
-  resolveSkillCommand,
+  resolveSkillPromptContext,
 } from '../../libs/skill-context.js';
 
 const agent = new Hono();
@@ -137,10 +137,11 @@ agent.post('/start', async (c) => {
   const provider: AgentProvider = body.provider ?? 'claude';
   const startSkillContext = body.assistantActivatedSkillContent
     ? {
+        skillName: "",
         userText: body.prompt,
         skillContent: body.assistantActivatedSkillContent,
       }
-    : resolveSkillCommand(body.prompt, body.assistantSkillNames);
+    : resolveSkillPromptContext(body.prompt, body.assistantSkillNames);
   const effectiveUserPrompt = startSkillContext?.userText ?? body.prompt;
   const effectivePrompt = applyAssistantContextToPrompt(effectiveUserPrompt, {
     skillNames: body.assistantSkillNames,
@@ -284,10 +285,11 @@ agent.post('/continue', async (c) => {
   const continueProvider: AgentProvider = body.provider ?? 'claude';
   const continueSkillContext = body.assistantActivatedSkillContent
     ? {
+        skillName: "",
         userText: body.prompt,
         skillContent: body.assistantActivatedSkillContent,
       }
-    : resolveSkillCommand(body.prompt, body.assistantSkillNames);
+    : resolveSkillPromptContext(body.prompt, body.assistantSkillNames);
   const effectiveContinuePrompt = applyAssistantContextToPrompt(
     continueSkillContext?.userText ?? body.prompt,
     {

@@ -49,7 +49,7 @@ import {
 import {
   buildActivatedSkillSection,
   loadInstalledSkills,
-  resolveSkillCommand,
+  resolveSkillPromptContext,
 } from "./skill-context.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1152,7 +1152,7 @@ class TelegramConnection {
   // ── Skill command resolution ────────────────────────────────────────────────
 
   private resolveSkillCommand(text: string): { skillContent: string; userText: string } | null {
-    const resolved = resolveSkillCommand(text, this.opts.skillNames);
+    const resolved = resolveSkillPromptContext(text, this.opts.skillNames);
     if (!resolved) return null;
     console.log(
       `[Telegram] Skill command activated: ${resolved.skillName} (${resolved.skillContent.length} chars)`,

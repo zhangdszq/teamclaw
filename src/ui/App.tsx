@@ -334,6 +334,8 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrolledUpRef = useRef(false);
+  const isProgrammaticScrollRef = useRef(false);
+  const lastScrollTopRef = useRef(0);
   
   // Splash screen state — null = loading, true = show, false = skip
   // Persisted in user-settings.json so it only shows on the very first install
@@ -552,7 +554,6 @@ function App() {
         partialMessagesRef.current.set(sessionId, "");
         if (!isThinking) {
           updatePartialMessage(sessionId, "", true, true);
-          isUserScrolledUpRef.current = false;
         }
       }
       if (message.event.type === "content_block_delta") {
@@ -596,7 +597,6 @@ function App() {
         typewriterPosRef.current = 0;
         setAnimatingMsgUuid(msgUuid);
         updatePartialMessage(sessionId, "", true);
-        isUserScrolledUpRef.current = false;
 
         // 每帧展示若干字符，约 60fps × 4字符 = ~240字/秒
         const CHARS_PER_TICK = 4;
@@ -1018,14 +1018,18 @@ function App() {
     return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
   }, []);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+  const scrollToBottom = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-    if (behavior === "auto") {
-      container.scrollTop = container.scrollHeight;
-      return;
+    isProgrammaticScrollRef.current = true;
+    container.scrollTop = container.scrollHeight;
+  }, []);
+
+  const clearPendingAutoScroll = useCallback(() => {
+    if (scrollTimeoutRef.current !== null) {
+      window.clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = null;
     }
-    messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
   const pendingAssistantJumpToBottomRef = useRef(false);
@@ -1045,22 +1049,62 @@ function App() {
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
+    lastScrollTopRef.current = container.scrollTop;
 
     const handleScroll = () => {
-      isUserScrolledUpRef.current = !isNearBottom();
+      if (isProgrammaticScrollRef.current) {
+        isProgrammaticScrollRef.current = false;
+        lastScrollTopRef.current = container.scrollTop;
+        return;
+      }
+
+      const currentScrollTop = container.scrollTop;
+      if (currentScrollTop < lastScrollTopRef.current - 2) {
+        isUserScrolledUpRef.current = true;
+        clearPendingAutoScroll();
+      }
+
+      lastScrollTopRef.current = currentScrollTop;
     };
 
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) {
+        isUserScrolledUpRef.current = true;
+        clearPendingAutoScroll();
+      } else if (event.deltaY > 0 && isNearBottom()) {
+        isUserScrolledUpRef.current = false;
+      }
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: true });
     container.addEventListener("scroll", handleScroll, { passive: true });
-    return () => container.removeEventListener("scroll", handleScroll);
-  }, [isNearBottom]);
+    return () => {
+      container.removeEventListener("wheel", handleWheel);
+      container.removeEventListener("scroll", handleScroll);
+    };
+  }, [clearPendingAutoScroll, isNearBottom]);
 
   useEffect(() => {
     if (!pendingAssistantJumpToBottomRef.current || isLoadingHistory) return;
     if (messages.length > 0) {
-      scrollToBottom("auto");
+      scrollToBottom();
     }
     pendingAssistantJumpToBottomRef.current = false;
   }, [messages.length, isLoadingHistory, scrollToBottom]);
+
+  // 用户发送新消息时，重置滚动锁并跳到底部
+  const prevMessageCountRef = useRef(0);
+  useEffect(() => {
+    const count = messages.length;
+    if (count > prevMessageCountRef.current && count > 0) {
+      const lastMsg = messages[count - 1];
+      if ((lastMsg as any)?.type === "user_prompt") {
+        isUserScrolledUpRef.current = false;
+        scrollToBottom();
+      }
+    }
+    prevMessageCountRef.current = count;
+  }, [messages, scrollToBottom]);
 
   // 节流滚动，避免流式输出时频繁触发
   // 只有在用户没有手动滚动离开底部时才自动滚动
@@ -1069,24 +1113,23 @@ function App() {
     // 如果用户手动滚动到上方，不要自动滚动
     if (isUserScrolledUpRef.current || pendingAssistantJumpToBottomRef.current) return;
 
-    if (scrollTimeoutRef.current) {
-      window.clearTimeout(scrollTimeoutRef.current);
-    }
+    clearPendingAutoScroll();
     scrollTimeoutRef.current = window.setTimeout(() => {
-      scrollToBottom("smooth");
+      if (!isUserScrolledUpRef.current && !pendingAssistantJumpToBottomRef.current) {
+        scrollToBottom();
+      }
+      scrollTimeoutRef.current = null;
     }, 50); // 50ms 节流
     
     return () => {
-      if (scrollTimeoutRef.current) {
-        window.clearTimeout(scrollTimeoutRef.current);
-      }
+      clearPendingAutoScroll();
     };
-  }, [messages, partialMessage, scrollToBottom]);
+  }, [messages, partialMessage, clearPendingAutoScroll, scrollToBottom]);
 
   // When input area grows, scroll to keep last message above it
   useEffect(() => {
     if (!isUserScrolledUpRef.current) {
-      scrollToBottom("smooth");
+      scrollToBottom();
     }
   }, [inputAreaHeight, scrollToBottom]);
 

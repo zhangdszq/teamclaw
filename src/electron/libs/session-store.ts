@@ -21,6 +21,8 @@ export type Session = {
   model?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  activatedSkillName?: string;
+  activatedSkillContent?: string;
   background?: boolean;
   hidden?: boolean;
   workflowSopId?: string;    // in-memory: set when session is part of a SOP workflow

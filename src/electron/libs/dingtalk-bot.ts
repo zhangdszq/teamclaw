@@ -47,7 +47,7 @@ import {
 import { savePendingTask, removePendingTask, loadPendingTasks } from "./pending-tasks.js";
 import {
   buildActivatedSkillSection,
-  resolveSkillCommand,
+  resolveSkillPromptContext,
 } from "./skill-context.js";
 
 function getLocalIp(): string {
@@ -1911,7 +1911,7 @@ class DingtalkConnection {
     hasFiles: boolean,
     preCreatedCard: AICardInstance | null,
   ): Promise<void> {
-    const skillContext = resolveSkillCommand(userText, this.opts.skillNames);
+    const skillContext = resolveSkillPromptContext(userText, this.opts.skillNames);
     const effectiveUserText = skillContext?.userText ?? userText;
     const history = getHistory(this.opts.assistantId);
     const provider = this.opts.provider ?? "claude";

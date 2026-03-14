@@ -36,6 +36,80 @@ const CATEGORY_LABELS: Record<string, string> = {
   "design": "设计创意", "research": "研究调查", "other": "其他",
 };
 
+type ToolbarSkillScope = "assistant" | "global";
+
+function toSkillCommandName(skillName: string): string {
+  return skillName.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 32);
+}
+
+
+function getSkillEmptyStateMessage(options: {
+  totalSkills: number;
+  scopedSkillsCount: number;
+  scope: ToolbarSkillScope;
+  hasFilter: boolean;
+}): string {
+  const { totalSkills, scopedSkillsCount, scope, hasFilter } = options;
+  if (totalSkills === 0) return "暂无可用技能";
+  if (scope === "assistant" && scopedSkillsCount === 0 && !hasFilter) {
+    return "当前小助理还没有分配专用技能";
+  }
+  return "没有匹配的技能";
+}
+
+function buildSlashSkillSections(
+  skills: SkillInfo[],
+  assistantScopedSkills: SkillInfo[],
+  filter: string,
+): Array<{ key: string; label: string; skills: SkillInfo[] }> {
+  const filteredAll = skills.filter((skill) => matchesSkillFilter(skill, filter));
+  const filteredAssistant = assistantScopedSkills.filter((skill) => matchesSkillFilter(skill, filter));
+  const assistantSkillNames = new Set(filteredAssistant.map((skill) => skill.name));
+  const remainingSkills = filteredAll.filter((skill) => !assistantSkillNames.has(skill.name));
+  const sections: Array<{ key: string; label: string; skills: SkillInfo[] }> = [];
+
+  if (filteredAssistant.length > 0) {
+    sections.push({ key: "assistant", label: "专享", skills: filteredAssistant });
+  }
+  if (remainingSkills.length > 0 || sections.length === 0) {
+    sections.push({
+      key: "all",
+      label: "全部",
+      skills: sections.length > 0 ? remainingSkills : filteredAll,
+    });
+  }
+
+  return sections.filter((section) => section.skills.length > 0);
+}
+
+function matchesSkillFilter(skill: SkillInfo, filter: string): boolean {
+  const normalizedFilter = filter.toLowerCase().replace(/^\//, "");
+  return skill.name.toLowerCase().includes(normalizedFilter) ||
+    (skill.label || "").toLowerCase().includes(normalizedFilter) ||
+    (skill.description || "").toLowerCase().includes(normalizedFilter);
+}
+
+function parseExplicitSlashSkill(
+  prompt: string,
+  skills: SkillInfo[],
+): { skillName: string; userText: string } | null {
+  const match = prompt.trimStart().match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+  if (!match) return null;
+
+  const [, rawCommand, rawArgs] = match;
+  const normalizedCommand = rawCommand.toLowerCase().replace(/@\S+$/, "");
+  const matchedSkill = skills.find((skill) =>
+    skill.name.toLowerCase() === normalizedCommand ||
+    toSkillCommandName(skill.name) === normalizedCommand
+  );
+  if (!matchedSkill) return null;
+
+  return {
+    skillName: matchedSkill.name,
+    userText: rawArgs?.trim() || `请执行技能 ${matchedSkill.name}`,
+  };
+}
+
 function getSkillCategory(skill: SkillInfo): string {
   if (skill.category && skill.category in SKILL_CATEGORY_CONFIG) return skill.category;
   const text = (skill.name + " " + (skill.description || "")).toLowerCase();
@@ -150,13 +224,15 @@ interface PromptInputProps {
 export interface UsePromptActionsOptions {
   /** 用户当前主动选中的技能名（null = 未手动选择） */
   activeSkillName?: string | null;
+  /** 当前已安装技能列表，用于解析显式的 /skill 命令 */
+  allSkills?: SkillInfo[];
 }
 
 export function usePromptActions(
   sendEvent: (event: ClientEvent) => void,
   options: UsePromptActionsOptions = {},
 ) {
-  const { activeSkillName } = options;
+  const { activeSkillName, allSkills = [] } = options;
 
   const prompt = useAppStore((state) => state.prompt);
   const cwd = useAppStore((state) => state.cwd);
@@ -312,11 +388,15 @@ export function usePromptActions(
   const handleSend = useCallback(async () => {
     if (!prompt.trim() && attachments.length === 0) return;
 
-    let finalPrompt = prompt.trim();
-
-    if (activeSkillName && finalPrompt) {
-      finalPrompt = `/${activeSkillName} ${finalPrompt}`;
-    }
+    const trimmedPrompt = prompt.trim();
+    const hasExplicitSlashAttempt = trimmedPrompt.startsWith("/");
+    const explicitSlashSkill = parseExplicitSlashSkill(trimmedPrompt, allSkills);
+    const resolvedSkillName = explicitSlashSkill
+      ? explicitSlashSkill.skillName
+      : hasExplicitSlashAttempt
+      ? null
+      : activeSkillName ?? null;
+    let finalPrompt = explicitSlashSkill?.userText ?? trimmedPrompt;
 
     const hasAttachments = attachments.length > 0;
 
@@ -336,6 +416,10 @@ export function usePromptActions(
       setAttachments([]);
     }
 
+    if (resolvedSkillName && finalPrompt) {
+      finalPrompt = `/${resolvedSkillName} ${finalPrompt}`;
+    }
+
     // Determine if we need a new session:
     // 1. No active session
     // 2. Active session's provider differs from selected provider
@@ -346,15 +430,11 @@ export function usePromptActions(
     const needNewSession = !activeSessionId || (activeProvider !== provider) || assistantChanged;
 
     if (needNewSession) {
-      let resolvedSkillNames: string[] | undefined;
-      if (activeSkillName) {
-        // 用户手动选择了技能，只用这一个
-        resolvedSkillNames = [activeSkillName];
-      } else {
-        resolvedSkillNames = selectedAssistantSkillNames.length > 0
+      const resolvedSkillNames = resolvedSkillName
+        ? [resolvedSkillName]
+        : selectedAssistantSkillNames.length > 0
           ? selectedAssistantSkillNames
           : undefined;
-      }
 
       let title = "";
       try {
@@ -385,17 +465,22 @@ export function usePromptActions(
         setGlobalError("Session is still running. Please wait for it to finish.");
         return;
       }
+      const continueSkillNames = resolvedSkillName
+        ? [resolvedSkillName]
+        : selectedAssistantSkillNames.length > 0
+          ? selectedAssistantSkillNames
+          : undefined;
       sendEvent({
         type: "session.continue",
         payload: {
           sessionId: activeSessionId,
           prompt: finalPrompt,
-          ...(activeSkillName ? { assistantSkillNames: [activeSkillName] } : {}),
+          ...(continueSkillNames ? { assistantSkillNames: continueSkillNames } : {}),
         },
       });
     }
     setPrompt("");
-  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName]);
+  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, allSkills]);
 
   const revertSessionToBeforeLastPrompt = useAppStore((state) => state.revertSessionToBeforeLastPrompt);
 
@@ -518,6 +603,9 @@ export function PromptInput({
   // Toolbar skill button state
   const [activeToolbarSkill, setActiveToolbarSkill] = useState<SkillInfo | null>(null);
   const [showToolbarSkillPicker, setShowToolbarSkillPicker] = useState(false);
+  const [toolbarSkillScope, setToolbarSkillScope] = useState<ToolbarSkillScope>(
+    selectedAssistantSkillNames.length > 0 ? "assistant" : "global",
+  );
   const [toolbarSkillFilter, setToolbarSkillFilter] = useState("");
   const [toolbarSkillSelectedIndex, setToolbarSkillSelectedIndex] = useState(0);
   const toolbarSkillListRef = useRef<HTMLDivElement | null>(null);
@@ -531,6 +619,7 @@ export function PromptInput({
     if (key !== prevAssistantSkillKeyRef.current) {
       prevAssistantSkillKeyRef.current = key;
       setActiveToolbarSkill(null);
+      setToolbarSkillScope(selectedAssistantSkillNames.length > 0 ? "assistant" : "global");
     }
   }, [selectedAssistantSkillNames]);
 
@@ -538,6 +627,13 @@ export function PromptInput({
   // Use state-based ref so useEffect re-runs when the div remounts (e.g. hasMessages toggle)
   const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
   const inputCardRef = useCallback((el: HTMLDivElement | null) => { setCardEl(el); }, []);
+
+  const assistantScopedSkills = skills.filter((skill) => selectedAssistantSkillNames.includes(skill.name));
+  const slashSkillSections = buildSlashSkillSections(skills, assistantScopedSkills, skillFilter);
+  const slashFlatSkills = slashSkillSections.flatMap((section) => section.skills);
+  const toolbarScopeSkills = toolbarSkillScope === "assistant" ? assistantScopedSkills : skills;
+  const toolbarFilteredSkills = toolbarScopeSkills.filter((skill) => matchesSkillFilter(skill, toolbarSkillFilter));
+  const showToolbarSkillScopeSwitch = selectedAssistantSkillNames.length > 0;
 
   const { 
     prompt, 
@@ -552,6 +648,7 @@ export function PromptInput({
     handleDrop,
   } = usePromptActions(sendEvent, {
     activeSkillName: activeToolbarSkill?.name ?? null,
+    allSkills: skills,
   });
 
   // Keep the composer docked when loading an existing session, otherwise the welcome
@@ -619,29 +716,6 @@ export function PromptInput({
     }).catch(console.error);
   }, []);
 
-  // Filter skills based on input — only show skills the current assistant owns
-  const filteredSkills = skills.filter(skill => {
-    // If assistant has configured skills, only show those
-    if (selectedAssistantSkillNames.length > 0) {
-      if (!selectedAssistantSkillNames.includes(skill.name)) return false;
-    }
-    const filter = skillFilter.toLowerCase().replace(/^\//, "");
-    return skill.name.toLowerCase().includes(filter) ||
-      (skill.label || "").toLowerCase().includes(filter) ||
-      (skill.description || "").toLowerCase().includes(filter);
-  });
-
-  // Filter skills for toolbar picker
-  const toolbarFilteredSkills = skills.filter(skill => {
-    if (selectedAssistantSkillNames.length > 0) {
-      if (!selectedAssistantSkillNames.includes(skill.name)) return false;
-    }
-    const filter = toolbarSkillFilter.toLowerCase();
-    return skill.name.toLowerCase().includes(filter) ||
-      (skill.label || "").toLowerCase().includes(filter) ||
-      (skill.description || "").toLowerCase().includes(filter);
-  });
-
   // Close toolbar skill picker when clicking outside (exclude the toggle button itself)
   useEffect(() => {
     if (!showToolbarSkillPicker) return;
@@ -664,10 +738,11 @@ export function PromptInput({
     setPrompt("");
     setActiveToolbarSkill(null);
     setShowToolbarSkillPicker(false);
+    setToolbarSkillScope(selectedAssistantSkillNames.length > 0 ? "assistant" : "global");
     setToolbarSkillFilter("");
     setShowSkills(false);
     setSkillFilter("");
-  }, [activeSessionId, setPrompt]);
+  }, [activeSessionId, setPrompt, selectedAssistantSkillNames]);
 
   // Check if we should show skills selector, and sync toolbar skill state with prompt
   useEffect(() => {
@@ -689,7 +764,7 @@ export function PromptInput({
   // Scroll selected item into view
   useEffect(() => {
     if (showSkills && skillListRef.current) {
-      const selectedElement = skillListRef.current.children[selectedIndex] as HTMLElement;
+      const selectedElement = skillListRef.current.querySelector<HTMLElement>(`[data-skill-index="${selectedIndex}"]`);
       if (selectedElement) {
         selectedElement.scrollIntoView({ block: "nearest" });
       }
@@ -710,20 +785,20 @@ export function PromptInput({
     if (e.nativeEvent.isComposing) return;
 
     // Handle skill selection navigation
-    if (showSkills && filteredSkills.length > 0) {
+    if (showSkills && slashFlatSkills.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelectedIndex(prev => (prev + 1) % filteredSkills.length);
+        setSelectedIndex(prev => (prev + 1) % slashFlatSkills.length);
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setSelectedIndex(prev => (prev - 1 + filteredSkills.length) % filteredSkills.length);
+        setSelectedIndex(prev => (prev - 1 + slashFlatSkills.length) % slashFlatSkills.length);
         return;
       }
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
-        handleSelectSkill(filteredSkills[selectedIndex]);
+        handleSelectSkill(slashFlatSkills[selectedIndex]);
         return;
       }
       if (e.key === "Escape") {
@@ -767,7 +842,7 @@ export function PromptInput({
 
   const skillsDropdown = showSkills ? (
     <div className="absolute bottom-full left-0 right-0 mb-2 rounded-2xl border border-ink-900/[0.06] bg-surface/95 backdrop-blur-xl shadow-[0_8px_40px_-12px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.03)] overflow-hidden z-50">
-      {filteredSkills.length === 0 ? (
+      {slashFlatSkills.length === 0 ? (
         <div className="px-5 py-10 text-center">
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-ink-900/[0.04] mb-3">
             <svg viewBox="0 0 24 24" className="h-5 w-5 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -782,56 +857,67 @@ export function PromptInput({
       ) : (
         <div ref={skillListRef} className="max-h-[320px] overflow-y-auto overflow-x-hidden py-1.5 px-1.5">
           {(() => {
-            const groups = groupSkillsByCategory(filteredSkills);
             let flatIdx = 0;
-            return groups.map((group) => {
-              const startIdx = flatIdx;
-              const items = group.skills.map((skill) => {
-                const idx = flatIdx++;
-                const category = getSkillCategory(skill);
-                const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
-                const isActive = idx === selectedIndex;
-                return (
-                  <button
-                    key={skill.name}
-                    className={`group w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-xl transition-all duration-150 ${
-                      isActive
-                        ? "bg-accent/[0.08] ring-1 ring-accent/20"
-                        : "hover:bg-ink-900/[0.04]"
-                    }`}
-                    onClick={() => handleSelectSkill(skill)}
-                    onMouseEnter={() => setSelectedIndex(idx)}
-                  >
-                    <div className={`flex h-8 w-8 items-center justify-center rounded-[10px] flex-shrink-0 transition-colors ${
-                      isActive ? config.color.replace(/\/10/, "/15") : config.color
-                    }`}>
-                      <SkillIcon type={config.icon} className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-[13px] font-medium leading-tight truncate transition-colors ${
-                        isActive ? "text-accent" : "text-ink-800"
-                      }`}>
-                        {skill.label || skill.name}
+            return slashSkillSections.map((section) => (
+              <div key={section.key}>
+                {slashSkillSections.length > 1 && (
+                  <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted/70">
+                    {section.label}
+                  </div>
+                )}
+                {(() => {
+                  const groups = groupSkillsByCategory(section.skills);
+                  return groups.map((group) => {
+                    const items = group.skills.map((skill) => {
+                      const idx = flatIdx++;
+                      const category = getSkillCategory(skill);
+                      const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
+                      const isActive = idx === selectedIndex;
+                      return (
+                        <button
+                          key={`${section.key}:${skill.name}`}
+                          data-skill-index={idx}
+                          className={`group w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-xl transition-all duration-150 ${
+                            isActive
+                              ? "bg-accent/[0.08] ring-1 ring-accent/20"
+                              : "hover:bg-ink-900/[0.04]"
+                          }`}
+                          onClick={() => handleSelectSkill(skill)}
+                          onMouseEnter={() => setSelectedIndex(idx)}
+                        >
+                          <div className={`flex h-8 w-8 items-center justify-center rounded-[10px] flex-shrink-0 transition-colors ${
+                            isActive ? config.color.replace(/\/10/, "/15") : config.color
+                          }`}>
+                            <SkillIcon type={config.icon} className="h-4 w-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className={`text-[13px] font-medium leading-tight truncate transition-colors ${
+                              isActive ? "text-accent" : "text-ink-800"
+                            }`}>
+                              {skill.label || skill.name}
+                            </div>
+                            {skill.description && (
+                              <div className="text-[11px] text-muted mt-0.5 truncate">{skill.description}</div>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    });
+
+                    return (
+                      <div key={`${section.key}:${group.category}`}>
+                        {groups.length > 1 && (
+                          <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+                            {group.label}
+                          </div>
+                        )}
+                        {items}
                       </div>
-                      {skill.description && (
-                        <div className="text-[11px] text-muted mt-0.5 truncate">{skill.description}</div>
-                      )}
-                    </div>
-                  </button>
-                );
-              });
-              void startIdx;
-              return (
-                <div key={group.category}>
-                  {groups.length > 1 && (
-                    <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
-                      {group.label}
-                    </div>
-                  )}
-                  {items}
-                </div>
-              );
-            });
+                    );
+                  });
+                })()}
+              </div>
+            ));
           })()}
         </div>
       )}
@@ -839,53 +925,92 @@ export function PromptInput({
         <span className="flex items-center gap-1"><kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-ink-900/[0.05] px-1 font-mono text-[10px] leading-none">↑↓</kbd>选择</span>
         <span className="flex items-center gap-1"><kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-ink-900/[0.05] px-1 font-mono text-[10px] leading-none">Tab</kbd>确认</span>
         <span className="flex items-center gap-1"><kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-ink-900/[0.05] px-1 font-mono text-[10px] leading-none">Esc</kbd>取消</span>
-        <span className="ml-auto text-muted/50">{filteredSkills.length} 项</span>
+        <span className="ml-auto text-muted/50">{slashFlatSkills.length} 项</span>
       </div>
     </div>
   ) : null;
 
   const toolbarSkillPickerDropdown = showToolbarSkillPicker ? (
-    <div ref={toolbarSkillPickerRef} className="absolute bottom-full left-0 mb-2 w-72 rounded-2xl border border-ink-900/[0.06] bg-surface/95 backdrop-blur-xl shadow-[0_8px_40px_-12px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.03)] overflow-hidden z-50">
+    <div ref={toolbarSkillPickerRef} className="absolute bottom-full left-0 mb-2 w-80 rounded-2xl border border-ink-900/[0.06] bg-surface/95 backdrop-blur-xl shadow-[0_8px_40px_-12px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.03)] overflow-hidden z-50">
       <div className="px-2.5 pt-2.5 pb-2">
-        <div className="flex items-center gap-2 rounded-xl bg-ink-900/[0.04] px-2.5 py-2">
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted/60 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            autoFocus
-            type="text"
-            placeholder="搜索技能..."
-            value={toolbarSkillFilter}
-            onChange={e => {
-              setToolbarSkillFilter(e.target.value);
-              setToolbarSkillSelectedIndex(0);
-            }}
-            onKeyDown={e => {
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setToolbarSkillSelectedIndex(prev => (prev + 1) % Math.max(1, toolbarFilteredSkills.length));
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setToolbarSkillSelectedIndex(prev => (prev - 1 + Math.max(1, toolbarFilteredSkills.length)) % Math.max(1, toolbarFilteredSkills.length));
-              } else if (e.key === "Enter" && toolbarFilteredSkills[toolbarSkillSelectedIndex]) {
-                e.preventDefault();
-                const skill = toolbarFilteredSkills[toolbarSkillSelectedIndex];
-                handleSelectSkill(skill);
-                setActiveToolbarSkill(skill);
-                setShowToolbarSkillPicker(false);
-                setToolbarSkillFilter("");
-              } else if (e.key === "Escape") {
-                setShowToolbarSkillPicker(false);
-                setToolbarSkillFilter("");
-              }
-            }}
-            className="flex-1 bg-transparent text-[13px] text-ink-800 placeholder:text-muted/50 focus:outline-none"
-          />
+        <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl bg-ink-900/[0.04] px-2.5 py-2">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted/60 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              autoFocus
+              type="text"
+              placeholder="搜索技能..."
+              value={toolbarSkillFilter}
+              onChange={e => {
+                setToolbarSkillFilter(e.target.value);
+                setToolbarSkillSelectedIndex(0);
+              }}
+              onKeyDown={e => {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setToolbarSkillSelectedIndex(prev => (prev + 1) % Math.max(1, toolbarFilteredSkills.length));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setToolbarSkillSelectedIndex(prev => (prev - 1 + Math.max(1, toolbarFilteredSkills.length)) % Math.max(1, toolbarFilteredSkills.length));
+                } else if (e.key === "Enter" && toolbarFilteredSkills[toolbarSkillSelectedIndex]) {
+                  e.preventDefault();
+                  const skill = toolbarFilteredSkills[toolbarSkillSelectedIndex];
+                  handleSelectSkill(skill);
+                  setActiveToolbarSkill(skill);
+                  setShowToolbarSkillPicker(false);
+                  setToolbarSkillFilter("");
+                } else if (e.key === "Escape") {
+                  setShowToolbarSkillPicker(false);
+                  setToolbarSkillFilter("");
+                }
+              }}
+              className="flex-1 bg-transparent text-[13px] text-ink-800 placeholder:text-muted/50 focus:outline-none min-w-0"
+            />
+          </div>
+          {showToolbarSkillScopeSwitch && (
+            <div className="flex shrink-0 items-center gap-1 rounded-xl bg-ink-900/[0.04] p-1">
+              <button
+                onClick={() => {
+                  setToolbarSkillScope("assistant");
+                  setToolbarSkillSelectedIndex(0);
+                }}
+                className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                  toolbarSkillScope === "assistant"
+                    ? "bg-accent text-white shadow-sm"
+                    : "text-ink-600 hover:bg-ink-900/[0.05] hover:text-ink-800"
+                }`}
+              >
+                专用 {assistantScopedSkills.length}
+              </button>
+              <button
+                onClick={() => {
+                  setToolbarSkillScope("global");
+                  setToolbarSkillSelectedIndex(0);
+                }}
+                className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                  toolbarSkillScope === "global"
+                    ? "bg-accent text-white shadow-sm"
+                    : "text-ink-600 hover:bg-ink-900/[0.05] hover:text-ink-800"
+                }`}
+              >
+                全局 {skills.length}
+              </button>
+            </div>
+          )}
         </div>
       </div>
       {toolbarFilteredSkills.length === 0 ? (
         <div className="px-4 py-8 text-center">
-          <p className="text-[13px] text-muted">{skills.length === 0 ? "暂无可用技能" : "没有匹配的技能"}</p>
+          <p className="text-[13px] text-muted">
+            {getSkillEmptyStateMessage({
+              totalSkills: skills.length,
+              scopedSkillsCount: assistantScopedSkills.length,
+              scope: toolbarSkillScope,
+              hasFilter: Boolean(toolbarSkillFilter.trim()),
+            })}
+          </p>
         </div>
       ) : (
         <div ref={toolbarSkillListRef} className="max-h-56 overflow-y-auto py-1 px-1.5">
@@ -1090,6 +1215,9 @@ export function PromptInput({
                 setShowToolbarSkillPicker(prev => !prev);
                 setToolbarSkillFilter("");
                 setToolbarSkillSelectedIndex(0);
+                if (!showToolbarSkillPicker) {
+                  setToolbarSkillScope(selectedAssistantSkillNames.length > 0 ? "assistant" : "global");
+                }
               }}
               className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
                 showToolbarSkillPicker

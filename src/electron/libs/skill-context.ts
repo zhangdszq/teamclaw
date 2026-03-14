@@ -29,6 +29,7 @@ export interface ResolvedSkillCommand {
 export interface ResolveSkillPromptOptions {
   autoActivate?: boolean;
   preferredSkillName?: string;
+  prioritizedSkillNames?: string[];
   installedSkills?: Map<string, SkillInfo>;
   contentLoader?: (skillName: string) => string | null;
 }
@@ -433,6 +434,28 @@ export function partitionInstalledSkillNames(
   return { availableSkillNames, missingSkillNames };
 }
 
+/**
+ * Compute the discovery pool for an assistant:
+ *   own dedicated skills + global skills (installed but not exclusively assigned to other assistants)
+ *
+ * A skill is "exclusively other" if it appears in at least one other assistant's
+ * skillNames but NOT in the current assistant's skillNames.
+ */
+export function computeDiscoveryPool(
+  assistantSkillNames: string[] | undefined,
+  allAssistants: { skillNames?: string[] }[],
+  installedSkillNames: string[],
+): string[] {
+  const own = new Set(normalizeSkillNames(assistantSkillNames));
+  const otherExclusive = new Set<string>();
+  for (const assistant of allAssistants) {
+    for (const name of normalizeSkillNames(assistant.skillNames)) {
+      if (!own.has(name)) otherExclusive.add(name);
+    }
+  }
+  return installedSkillNames.filter((name) => !otherExclusive.has(name));
+}
+
 export function loadSkillContent(skillName: string): string | null {
   const filePath = resolveInstalledSkillPath(skillName);
   if (!filePath) return null;
@@ -528,6 +551,25 @@ export function resolveSkillPromptContext(
   }
 
   const installedSkills = options?.installedSkills ?? loadInstalledSkills();
+  const prioritizedSkillNames = normalizeSkillNames(options?.prioritizedSkillNames)
+    .filter((name) => normalizedSkills.includes(name));
+  if (prioritizedSkillNames.length > 0) {
+    const prioritizedMatch = findBestSkillMatch(
+      text,
+      getConfiguredSkillInfos(prioritizedSkillNames, installedSkills),
+    );
+    if (prioritizedMatch) {
+      const skillContent = contentLoader(prioritizedMatch.name);
+      if (skillContent) {
+        return {
+          skillName: prioritizedMatch.name,
+          skillContent,
+          userText: text,
+        };
+      }
+    }
+  }
+
   const matchedSkill = findBestSkillMatch(text, getConfiguredSkillInfos(normalizedSkills, installedSkills));
   if (!matchedSkill) return null;
 
@@ -555,7 +597,8 @@ export function buildActivatedSkillSection(
     "请严格按照以下技能说明执行用户请求：",
     "",
     "重要规则：",
-    "- 技能内容已完整注入到本上下文中，不要调用 Skill 工具重新加载。",
+    "- 技能内容已完整注入到本上下文中，无需再调用 Skill 工具重新加载同一技能。",
+    "- 如果你判断此技能与用户意图不符，可以忽略以下内容，并通过 Skill 工具加载更合适的技能。",
     "- 不要执行 pwd、env、ls 等环境探测命令，直接按技能说明中给出的路径和参数执行。",
     "",
     skillContent,

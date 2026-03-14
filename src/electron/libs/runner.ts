@@ -98,6 +98,7 @@ function buildEnhancedEnv(assistantConfig?: AssistantConfig): Record<string, str
     ...claudeCodeEnv,
     ...userOverrides,  // assistant-level (or user-level) settings take highest priority
     PATH: newPath,
+    NODE_COMPILE_CACHE: join(home, ".vk-cowork", ".compile-cache"),
   };
 }
 
@@ -128,14 +129,19 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
   const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === session.assistantId);
   const enhancedEnv = buildEnhancedEnv(assistantConfig);
   const providerOverrides = buildOpenAIOverrides(assistantConfig, session.model);
+  const isNonInteractiveBackgroundSession =
+    session.background === true
+    && (session.title?.startsWith("[心跳]") || session.title?.startsWith("[记忆压缩]"));
 
+  const t0 = Date.now();
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
     try {
+      const t1 = Date.now();
       const memoryCtx = await buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + "\n\n" + prompt;
-        console.log("[Runner/fallback] Memory context injected, length:", memoryCtx.length);
+        console.log(`[Runner/fallback] Memory context injected, length: ${memoryCtx.length} (+${Date.now() - t1}ms)`);
       }
     } catch (err) {
       console.warn("[Runner/fallback] Failed to load memory context:", err);
@@ -175,6 +181,8 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
 
   (async () => {
     try {
+      const tAgent = Date.now();
+      console.log(`[Runner/timing] pre-agent setup: ${tAgent - t0}ms`);
       const q = await runAgent(effectivePrompt, {
         cwd: session.cwd ?? DEFAULT_CWD,
         resume: resumeSessionId,
@@ -185,6 +193,12 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
         mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }), ...loadMcporterServers() },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
           if (toolName === "AskUserQuestion") {
+            if (isNonInteractiveBackgroundSession) {
+              return {
+                behavior: "deny",
+                message: "后台心跳/记忆任务禁止向用户提问，请直接完成任务或明确失败原因。",
+              };
+            }
             const toolUseId = toolUseID;
             sendPermissionRequest(toolUseId, toolName, input);
             return new Promise<PermissionResult>((resolve) => {
@@ -203,17 +217,36 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
               });
             });
           }
+          if (toolName === "Skill") {
+            const pool = session.assistantDiscoverySkillNames;
+            if (pool && pool.length > 0) {
+              const skillInput = input as { name?: string } | undefined;
+              const requestedSkill = skillInput?.name;
+              if (requestedSkill && !pool.includes(requestedSkill)) {
+                console.log(`[Runner] Skill tool denied: "${requestedSkill}" not in discovery pool`);
+                return { behavior: "deny", message: `技能 "${requestedSkill}" 未分配给当前助理，请使用已分配的技能。` };
+              }
+            }
+          }
           return { behavior: "allow", updatedInput: input as Record<string, unknown> };
         },
       });
 
+      let tFirstToken: number | null = null;
+      let tSystemInit: number | null = null;
       for await (const message of q) {
         if (message.type === "system" && "subtype" in message && message.subtype === "init") {
+          tSystemInit = Date.now();
+          console.log(`[Runner/timing] subprocess cold-start: ${tSystemInit - tAgent}ms`);
           const sdkSessionId = (message as any).session_id;
           if (sdkSessionId) {
             session.claudeSessionId = sdkSessionId;
             onSessionUpdate?.({ claudeSessionId: sdkSessionId });
           }
+        }
+        if (tFirstToken === null && message.type === "assistant") {
+          tFirstToken = Date.now();
+          console.log(`[Runner/timing] TTFT (system-init→first-assistant): ${tFirstToken - (tSystemInit ?? tAgent)}ms | total-from-start: ${tFirstToken - t0}ms`);
         }
 
         if (
@@ -230,6 +263,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
         if (message.type === "result") {
           const resultMessage = message as unknown as { subtype?: string; result?: unknown };
           const status = resultMessage.subtype === "success" ? "completed" : "error";
+          console.log(`[Runner/timing] total e2e: ${Date.now() - t0}ms (status=${status})`);
           onEvent({ type: "session.status", payload: { sessionId: session.id, status, title: session.title } });
         }
       }

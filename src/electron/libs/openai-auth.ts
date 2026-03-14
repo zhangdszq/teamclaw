@@ -19,9 +19,8 @@ const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
 export const REQUIRED_OPENAI_API_SCOPES = [
-  "model.request",
-  "api.model.read",
-  "api.responses.write",
+  "api.connectors.read",
+  "api.connectors.invoke",
 ] as const;
 
 export const OPENAI_OAUTH_SCOPE = [

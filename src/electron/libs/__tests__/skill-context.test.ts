@@ -133,6 +133,34 @@ describe("skill-context helpers", () => {
     expect(result?.userText).toBe("帮我看一下 adjust 渠道归因数据");
   });
 
+  it("prefers assistant skills before falling back to global discovery candidates", () => {
+    const installedSkills = new Map([
+      ["find-skills", {
+        name: "find-skills",
+        label: "技能发现助手",
+        description: "帮助用户发现和安装技能，适合用户询问如何完成某件事或寻找特定功能时使用。",
+      }],
+      ["agent-reach", {
+        name: "agent-reach",
+        label: "Agent Reach",
+        description: "Use the internet to search Bilibili、小红书、抖音、YouTube、Twitter/X and the wider web. Triggers: \"B站\", \"bilibili\", \"搜一下\", \"帮我查\", \"全网搜索\".",
+      }],
+    ]);
+
+    const result = resolveSkillPromptContext(
+      "帮我搜索 B 站海外投放视频",
+      ["find-skills", "agent-reach"],
+      {
+        prioritizedSkillNames: ["find-skills"],
+        installedSkills,
+        contentLoader: (skillName) => `# ${skillName}`,
+      },
+    );
+
+    expect(result?.skillName).toBe("agent-reach");
+    expect(result?.skillContent).toContain("agent-reach");
+  });
+
   it("parses YAML multiline descriptions from skill markdown", () => {
     const literal = parseSkillMarkdownMetadata(`---
 name: adjust-report

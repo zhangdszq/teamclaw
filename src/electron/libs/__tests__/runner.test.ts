@@ -140,4 +140,36 @@ describe("runClaude continue fallback", () => {
       },
     });
   });
+
+  it("denies AskUserQuestion for background heartbeat sessions", async () => {
+    mockState.runAgent.mockResolvedValue((async function* () {})());
+
+    const onEvent = vi.fn();
+    await runClaude({
+      prompt: "执行心跳",
+      session: {
+        ...createSession(),
+        title: "[心跳] 小助理",
+        background: true,
+      } as any,
+      onEvent,
+    });
+
+    const opts = mockState.runAgent.mock.calls[0]?.[1];
+    expect(opts).toBeTruthy();
+
+    const result = await opts.canUseTool(
+      "AskUserQuestion",
+      { question: "需要用户确认吗？" },
+      { signal: new AbortController().signal, toolUseID: "tool-use-1" },
+    );
+
+    expect(result).toEqual({
+      behavior: "deny",
+      message: "后台心跳/记忆任务禁止向用户提问，请直接完成任务或明确失败原因。",
+    });
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "permission.request" }),
+    );
+  });
 });

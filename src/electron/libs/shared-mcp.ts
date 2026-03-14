@@ -48,6 +48,7 @@ import { loadUserSettings } from "./user-settings.js";
 import { resolveAppAsset } from "../pathResolver.js";
 import { ensurePyPackages, ensurePythonEnv, getManagedPythonInfo, getPythonEnvDir } from "./python-env.js";
 import { delegateToCursor } from "./acp-bridge.js";
+import { prepareVisibleArtifact } from "./bot-base.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,23 @@ function stripHtml(html: string): string {
     .replace(/&#39;/g, "'")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+function resolveVisibleArtifactOptions(sessionCwd?: string, assistantId?: string) {
+  const assistant = assistantId
+    ? loadAssistantsConfig().assistants.find((item) => item.id === assistantId)
+    : undefined;
+  return {
+    defaultCwd: sessionCwd,
+    assistantName: assistant?.name ?? assistantId,
+    assistantId,
+  };
+}
+
+function archiveVisibleArtifact(filePath: string, sessionCwd?: string, assistantId?: string): { filePath: string; archived: boolean } {
+  const prepared = prepareVisibleArtifact(filePath, resolveVisibleArtifactOptions(sessionCwd, assistantId));
+  if (prepared.error) return { filePath, archived: false };
+  return { filePath: prepared.filePath, archived: Boolean(prepared.archivedPath) };
 }
 
 const WEB_FETCH_SCRIPT = String.raw`import json
@@ -870,41 +888,47 @@ const readDocumentTool = tool(
   },
 );
 
-const takeScreenshotTool = tool(
-  "take_screenshot",
-  "截取当前桌面屏幕截图。返回截图的临时文件路径，之后可用 send_file 发送给用户。",
-  {},
-  async () => {
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execAsync = promisify(exec);
-    const os = await import("os");
-    const path = await import("path");
-    const fs = await import("fs");
+function createTakeScreenshotTool(sessionCwd?: string, assistantId?: string) {
+  return tool(
+    "take_screenshot",
+    "截取当前桌面屏幕截图。返回截图文件路径，之后可用 send_file 发送给用户。若已配置工作区，最终文件会自动归档到助理的 outputs 目录。",
+    {},
+    async () => {
+      const { exec } = await import("child_process");
+      const { promisify } = await import("util");
+      const execAsync = promisify(exec);
+      const os = await import("os");
+      const path = await import("path");
+      const fs = await import("fs");
 
-    const filePath = path.join(os.tmpdir(), `vk-shot-${Date.now()}.png`);
+      const filePath = path.join(os.tmpdir(), `vk-shot-${Date.now()}.png`);
 
-    const platform = process.platform;
-    if (platform === "darwin") {
-      await execAsync(`screencapture -x "${filePath}"`);
-    } else if (platform === "win32") {
-      await execAsync(
-        `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
-          `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
-          `$g=[System.Drawing.Graphics]::FromImage($b); ` +
-          `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
-          `$b.Save('${filePath}')"`,
-      );
-    } else {
-      await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
-    }
+      const platform = process.platform;
+      if (platform === "darwin") {
+        await execAsync(`screencapture -x "${filePath}"`);
+      } else if (platform === "win32") {
+        await execAsync(
+          `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
+            `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
+            `$g=[System.Drawing.Graphics]::FromImage($b); ` +
+            `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
+            `$b.Save('${filePath}')"`,
+        );
+      } else {
+        await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
+      }
 
-    if (!fs.existsSync(filePath)) {
-      return { content: [{ type: "text" as const, text: "截图文件未生成" }], isError: true };
-    }
-    return ok(filePath);
-  },
-);
+      if (!fs.existsSync(filePath)) {
+        return { content: [{ type: "text" as const, text: "截图文件未生成" }], isError: true };
+      }
+      const finalized = archiveVisibleArtifact(filePath, sessionCwd, assistantId);
+      if (finalized.archived) {
+        try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      }
+      return ok(finalized.filePath);
+    },
+  );
+}
 
 // ── Experience Tool (writes to knowledge/experience/) ─
 
@@ -1494,110 +1518,116 @@ async function desktopControlLinux(
   return "无效操作，请检查参数。Linux 需要安装 xdotool: sudo apt install xdotool";
 }
 
-const screenAnalyzeTool = tool(
-  "screen_analyze",
-  "截取桌面屏幕截图并返回文件路径和基本信息。\n" +
-    "比 take_screenshot 更强大：支持指定区域截图、自动记录截图时的活动窗口信息。\n" +
-    "截图保存为临时文件，可用于后续分析或发送给用户。",
-  {
-    region: z.object({
-      x: z.number(),
-      y: z.number(),
-      width: z.number(),
-      height: z.number(),
-    }).optional().describe("截取区域（可选，不填则截全屏）"),
-    description: z.string().optional().describe("截图目的描述（用于记录）"),
-  },
-  async (input) => {
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execAsync = promisify(exec);
-    const os = await import("os");
-    const path = await import("path");
-    const fs = await import("fs");
+function createScreenAnalyzeTool(sessionCwd?: string, assistantId?: string) {
+  return tool(
+    "screen_analyze",
+    "截取桌面屏幕截图并返回文件路径和基本信息。\n" +
+      "比 take_screenshot 更强大：支持指定区域截图、自动记录截图时的活动窗口信息。\n" +
+      "截图会先写入临时目录，再自动归档到助理的 outputs 目录（若已配置工作区）。",
+    {
+      region: z.object({
+        x: z.number(),
+        y: z.number(),
+        width: z.number(),
+        height: z.number(),
+      }).optional().describe("截取区域（可选，不填则截全屏）"),
+      description: z.string().optional().describe("截图目的描述（用于记录）"),
+    },
+    async (input) => {
+      const { exec } = await import("child_process");
+      const { promisify } = await import("util");
+      const execAsync = promisify(exec);
+      const os = await import("os");
+      const path = await import("path");
+      const fs = await import("fs");
 
-    const filePath = path.join(os.tmpdir(), `vk-screen-${Date.now()}.png`);
-    const platform = process.platform;
+      const filePath = path.join(os.tmpdir(), `vk-screen-${Date.now()}.png`);
+      const platform = process.platform;
 
-    try {
-      let activeWindow = "unknown";
+      try {
+        let activeWindow = "unknown";
 
-      if (platform === "darwin") {
-        try {
-          const { stdout } = await execAsync(`osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'`);
-          activeWindow = stdout.trim();
-        } catch { /* ignore */ }
+        if (platform === "darwin") {
+          try {
+            const { stdout } = await execAsync(`osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'`);
+            activeWindow = stdout.trim();
+          } catch { /* ignore */ }
 
-        if (input.region) {
-          const r = input.region;
-          await execAsync(`screencapture -R${r.x},${r.y},${r.width},${r.height} -x "${filePath}"`);
+          if (input.region) {
+            const r = input.region;
+            await execAsync(`screencapture -R${r.x},${r.y},${r.width},${r.height} -x "${filePath}"`);
+          } else {
+            await execAsync(`screencapture -x "${filePath}"`);
+          }
+        } else if (platform === "win32") {
+          try {
+            const { stdout } = await execAsync(
+              `powershell -Command "(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Sort-Object CPU -Descending | Select-Object -First 1).MainWindowTitle"`,
+            );
+            activeWindow = stdout.trim();
+          } catch { /* ignore */ }
+
+          if (input.region) {
+            const r = input.region;
+            await execAsync(
+              `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; ` +
+                `$b=New-Object System.Drawing.Bitmap(${r.width},${r.height}); ` +
+                `$g=[System.Drawing.Graphics]::FromImage($b); ` +
+                `$g.CopyFromScreen(${r.x},${r.y},0,0,[System.Drawing.Size]::new(${r.width},${r.height})); ` +
+                `$b.Save('${filePath}')"`,
+            );
+          } else {
+            await execAsync(
+              `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; ` +
+                `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
+                `$g=[System.Drawing.Graphics]::FromImage($b); ` +
+                `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
+                `$b.Save('${filePath}')"`,
+            );
+          }
         } else {
-          await execAsync(`screencapture -x "${filePath}"`);
-        }
-      } else if (platform === "win32") {
-        try {
-          const { stdout } = await execAsync(
-            `powershell -Command "(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Sort-Object CPU -Descending | Select-Object -First 1).MainWindowTitle"`,
-          );
-          activeWindow = stdout.trim();
-        } catch { /* ignore */ }
+          try {
+            const { stdout } = await execAsync(`xdotool getactivewindow getwindowname`);
+            activeWindow = stdout.trim();
+          } catch { /* ignore */ }
 
+          if (input.region) {
+            const r = input.region;
+            await execAsync(`gnome-screenshot -a -f "${filePath}" 2>/dev/null || scrot -a ${r.x},${r.y},${r.width},${r.height} "${filePath}"`);
+          } else {
+            await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
+          }
+        }
+
+        if (!fs.existsSync(filePath)) {
+          return { content: [{ type: "text" as const, text: "截图文件未生成" }], isError: true };
+        }
+
+        const finalized = archiveVisibleArtifact(filePath, sessionCwd, assistantId);
+        if (finalized.archived) {
+          try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+        }
+        const stat = fs.statSync(finalized.filePath);
+        const info: string[] = [
+          `截图已保存: ${finalized.filePath}`,
+          `文件大小: ${(stat.size / 1024).toFixed(1)}KB`,
+          `活动窗口: ${activeWindow}`,
+          `时间: ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+        ];
         if (input.region) {
-          const r = input.region;
-          await execAsync(
-            `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; ` +
-              `$b=New-Object System.Drawing.Bitmap(${r.width},${r.height}); ` +
-              `$g=[System.Drawing.Graphics]::FromImage($b); ` +
-              `$g.CopyFromScreen(${r.x},${r.y},0,0,[System.Drawing.Size]::new(${r.width},${r.height})); ` +
-              `$b.Save('${filePath}')"`,
-          );
-        } else {
-          await execAsync(
-            `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; ` +
-              `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
-              `$g=[System.Drawing.Graphics]::FromImage($b); ` +
-              `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
-              `$b.Save('${filePath}')"`,
-          );
+          info.push(`区域: (${input.region.x},${input.region.y}) ${input.region.width}x${input.region.height}`);
         }
-      } else {
-        try {
-          const { stdout } = await execAsync(`xdotool getactivewindow getwindowname`);
-          activeWindow = stdout.trim();
-        } catch { /* ignore */ }
-
-        if (input.region) {
-          const r = input.region;
-          await execAsync(`gnome-screenshot -a -f "${filePath}" 2>/dev/null || scrot -a ${r.x},${r.y},${r.width},${r.height} "${filePath}"`);
-        } else {
-          await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
+        if (input.description) {
+          info.push(`用途: ${input.description}`);
         }
-      }
 
-      if (!fs.existsSync(filePath)) {
-        return { content: [{ type: "text" as const, text: "截图文件未生成" }], isError: true };
+        return ok(info.join("\n"));
+      } catch (err) {
+        return ok(`截图失败: ${err instanceof Error ? err.message : String(err)}`);
       }
-
-      const stat = fs.statSync(filePath);
-      const info: string[] = [
-        `截图已保存: ${filePath}`,
-        `文件大小: ${(stat.size / 1024).toFixed(1)}KB`,
-        `活动窗口: ${activeWindow}`,
-        `时间: ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
-      ];
-      if (input.region) {
-        info.push(`区域: (${input.region.x},${input.region.y}) ${input.region.width}x${input.region.height}`);
-      }
-      if (input.description) {
-        info.push(`用途: ${input.description}`);
-      }
-
-      return ok(info.join("\n"));
-    } catch (err) {
-      return ok(`截图失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
+    },
+  );
+}
 
 const processControlTool = tool(
   "process_control",
@@ -2350,8 +2380,8 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionId?:
       webFetchTool,
       readDocumentTool,
       // Screen & Desktop
-      takeScreenshotTool,
-      screenAnalyzeTool,
+      createTakeScreenshotTool(sessionCwd, assistantId),
+      createScreenAnalyzeTool(sessionCwd, assistantId),
       desktopControlTool,
       // Experience documentation (shared across all assistants)
       createSaveExperienceTool(sessionId, assistantId),

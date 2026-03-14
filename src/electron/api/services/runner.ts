@@ -13,7 +13,7 @@ import { existsSync } from 'fs';
 
 // Server event types
 export type ServerEvent =
-  | { type: 'session.status'; payload: { sessionId: string; status: string; title?: string; cwd?: string; error?: string } }
+  | { type: 'session.status'; payload: { sessionId: string; status: string; title?: string; cwd?: string; error?: string; background?: boolean } }
   | { type: 'stream.message'; payload: { sessionId: string; message: SDKMessage } }
   | { type: 'stream.user_prompt'; payload: { sessionId: string; prompt: string } }
   | { type: 'permission.request'; payload: { sessionId: string; toolUseId: string; toolName: string; input: unknown } }
@@ -204,6 +204,9 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   const claudeCodePath = getClaudeCodePath();
   const enhancedEnv = getEnhancedEnv(session.assistantId);
   const openaiOverrides = buildOpenAIOverrides(session.assistantId, model || session.model);
+  const isNonInteractiveBackgroundSession =
+    session.background === true
+    && (session.title?.startsWith("[心跳]") || session.title?.startsWith("[记忆压缩]"));
   // Per-assistant model override: if the assistant has an explicit model configured,
   // use it instead of the global ANTHROPIC_MODEL environment variable.
   if (model) {
@@ -239,6 +242,12 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
       mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd }), ...loadMcporterServers() },
       canUseTool: async (toolName, input, { signal, toolUseID }) => {
         if (toolName === 'AskUserQuestion') {
+          if (isNonInteractiveBackgroundSession) {
+            return {
+              behavior: 'deny',
+              message: '后台心跳/记忆任务禁止向用户提问，请直接完成任务或明确失败原因。',
+            };
+          }
           const toolUseId = toolUseID;
           console.log('[Runner] AskUserQuestion requested, toolUseId:', toolUseId);
           permissionRequestQueue.push({
@@ -259,6 +268,17 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
               resolve({ behavior: 'deny', message: 'Session aborted' });
             });
           });
+        }
+        if (toolName === 'Skill') {
+          const pool = session.assistantDiscoverySkillNames;
+          if (pool && pool.length > 0) {
+            const skillInput = input as { name?: string } | undefined;
+            const requestedSkill = skillInput?.name;
+            if (requestedSkill && !pool.includes(requestedSkill)) {
+              console.log(`[Runner] Skill tool denied: "${requestedSkill}" not in discovery pool`);
+              return { behavior: 'deny', message: `技能 "${requestedSkill}" 未分配给当前助理，请使用已分配的技能。` };
+            }
+          }
         }
         return { behavior: 'allow', updatedInput: input as Record<string, unknown> };
       },

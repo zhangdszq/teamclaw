@@ -1189,6 +1189,7 @@ function App() {
 
   // SOP page state
   const [showSopPage, setShowSopPage] = useState(false);
+  const [openWorkflowStoreByDefault, setOpenWorkflowStoreByDefault] = useState(false);
   const [showPlanTable, setShowPlanTable] = useState(false);
   const [planTableTarget, setPlanTableTarget] = useState<PlanTableNavigationTarget | null>(null);
   const [showKnowledgePage, setShowKnowledgePage] = useState(false);
@@ -1214,6 +1215,16 @@ function App() {
   const handleOpenSkill = useCallback(() => {
     setMcpSkillInitialTab("skill");
     setMcpSkillModalOpen(true);
+  }, []);
+
+  const handleOpenSop = useCallback((showStore = false) => {
+    setOpenWorkflowStoreByDefault(showStore);
+    setShowSopPage(true);
+  }, []);
+
+  const handleCloseSop = useCallback(() => {
+    setShowSopPage(false);
+    setOpenWorkflowStoreByDefault(false);
   }, []);
 
   const handlePermissionResult = useCallback((toolUseId: string, result: PermissionResult) => {
@@ -1294,7 +1305,8 @@ function App() {
         taskPanelVisible={taskPanelVisible}
         onToggleTaskPanel={handleToggleTaskPanel}
         onShowSplash={() => setShowSplash(true)}
-        onOpenSop={() => setShowSopPage(true)}
+        onOpenSop={() => handleOpenSop(false)}
+        onOpenWorkflowStore={() => handleOpenSop(true)}
         onOpenPlanTable={() => {
           setPlanTableTarget(null);
           setShowPlanTable(true);
@@ -1599,14 +1611,16 @@ function App() {
 
       {showSopPage && (
         <SopPage
-          onClose={() => setShowSopPage(false)}
+          onClose={handleCloseSop}
+          initialShowStore={openWorkflowStoreByDefault}
           onOpenPlanTable={(target) => {
+            setOpenWorkflowStoreByDefault(false);
             setPlanTableTarget(target ?? null);
             setShowSopPage(false);
             setShowPlanTable(true);
           }}
           onNavigateToSession={(sessionId) => {
-            setShowSopPage(false);
+            handleCloseSop();
             useAppStore.getState().setActiveSessionId(sessionId);
           }}
           titleBarHeight={titleBarH}

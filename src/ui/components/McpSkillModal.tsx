@@ -601,10 +601,10 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
               <div className="flex items-center justify-between px-6 py-4 border-b border-ink-900/8 flex-shrink-0">
                 <div className="min-w-0">
                   <Dialog.Title className="text-[16px] font-semibold text-ink-900 tracking-tight">
-                    技能市场
+                    技能商店
                   </Dialog.Title>
                   <p className="mt-0.5 text-[12px] text-ink-400">
-                    浏览、安装并分配技能，界面风格与设置页保持一致。
+                    浏览、安装并分配技能，支持从商店一键安装。
                   </p>
                 </div>
                 <div className="flex items-center gap-2.5">
@@ -1078,7 +1078,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                 </svg>
-                Skills
+                技能商店
               </span>
             </button>
           </div>

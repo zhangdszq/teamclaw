@@ -21,7 +21,7 @@ import { EventEmitter } from "events";
 import { networkInterfaces, homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
-import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { buildSmartMemoryContext } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import { promptOnce, runAgent } from "./agent-client.js";
@@ -34,6 +34,7 @@ import {
   type BaseBotOptions,
   FILE_PATH_RE,
   buildOpenAIOverrides,
+  prepareVisibleArtifact,
   buildQueryEnv,
   buildStructuredPersona,
   buildHistoryContext,
@@ -43,6 +44,7 @@ import {
   extractPartialText,
   bufferPersistedBotMessage,
   flushBufferedBotAssistantMessage,
+  scheduleBotPostResponseTasks,
 } from "./bot-base.js";
 import { savePendingTask, removePendingTask, loadPendingTasks } from "./pending-tasks.js";
 import {
@@ -1984,16 +1986,25 @@ class DingtalkConnection {
 
       history.push({ role: "assistant", content: inflightTask.accumulatedContent });
       const logUserText = effectiveUserText.replace(/\n\n文件路径:[\s\S]*$/, "").trim();
-      recordConversation(
-        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${logUserText}\n**${this.opts.assistantName}**: ${inflightTask.accumulatedContent}\n`,
-        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },
-      );
-      updateBotSessionTitle(sessionId, history, `[钉钉]`).catch((e) => console.warn("[DingTalk] Failed to update session title:", e));
+      const finalReplyText = inflightTask.accumulatedContent;
+      const historySnapshot = history.slice();
 
       // Deliver via fallback chain unless card already self-delivered
       if (!cardDelivered) {
-        await this.deliverWithFallback(inflightTask.accumulatedContent, msg, preCreatedCard);
+        await this.deliverWithFallback(finalReplyText, msg, preCreatedCard);
       }
+      scheduleBotPostResponseTasks({
+        logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${logUserText}\n**${this.opts.assistantName}**: ${finalReplyText}\n`,
+        recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },
+        updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, `[钉钉]`),
+        onError: (phase, error) => {
+          if (phase === "updateTitle") {
+            console.warn("[DingTalk] Failed to update session title:", error);
+            return;
+          }
+          console.warn("[DingTalk] Failed to persist conversation:", error);
+        },
+      });
     } finally {
       this.inflightTasks.delete(inflightKey);
     }
@@ -2067,7 +2078,8 @@ class DingtalkConnection {
       "send_file",
       "通过钉钉将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档、视频等。" +
         "file_path 必须是本机可读取的完整路径。" +
-        "超出大小限制时会自动处理：图片自动压缩（macOS sips），其他文件自动 zip 压缩。",
+        "超出大小限制时会自动处理：图片自动压缩（macOS sips），其他文件自动 zip 压缩。" +
+        "发送前系统会自动将最终成品归档到助理的 outputs 目录。",
       { file_path: z.string().describe("要发送的文件的完整本地路径") },
       async (input) => {
         const result = await self.doSendFile(String(input.file_path ?? ""), msg);
@@ -2272,10 +2284,15 @@ class DingtalkConnection {
     const execAsync = promisify(exec);
     const path = await import("path");
     const fs = await import("fs");
+    const prepared = prepareVisibleArtifact(filePath, {
+      defaultCwd: this.opts.defaultCwd,
+      assistantName: this.opts.assistantName,
+      assistantId: this.opts.assistantId,
+    });
+    if (prepared.error) return prepared.error;
 
-    if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
-
-    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const sourcePath = prepared.filePath;
+    const ext = sourcePath.split(".").pop()?.toLowerCase() ?? "";
     const mediaType: "image" | "voice" | "video" | "file" =
       ["jpg", "jpeg", "png", "gif", "bmp"].includes(ext) ? "image" :
       ["mp3", "amr", "wav"].includes(ext) ? "voice" :
@@ -2290,14 +2307,13 @@ class DingtalkConnection {
 
     const tempFiles: string[] = [];
     const cleanup = () => {
-      const toDelete = filePath.includes("vk-shot-") ? [filePath, ...tempFiles] : tempFiles;
-      for (const f of toDelete) {
+      for (const f of tempFiles) {
         try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
       }
     };
 
-    let sendPath = filePath;
-    const stat = fs.statSync(filePath);
+    let sendPath = sourcePath;
+    const stat = fs.statSync(sourcePath);
     const limit = SIZE_LIMITS[mediaType];
 
     if (stat.size > limit) {
@@ -2331,11 +2347,11 @@ class DingtalkConnection {
       } else {
         const zipPath = path.join(
           (await import("os")).tmpdir(),
-          `vk-${path.basename(filePath)}-${Date.now()}.zip`,
+          `vk-${path.basename(sourcePath)}-${Date.now()}.zip`,
         );
         tempFiles.push(zipPath);
         try {
-          await execAsync(`cd "${path.dirname(filePath)}" && zip "${zipPath}" "${path.basename(filePath)}"`);
+          await execAsync(`cd "${path.dirname(sourcePath)}" && zip "${zipPath}" "${path.basename(sourcePath)}"`);
           const zipStat = fs.statSync(zipPath);
           if (zipStat.size <= SIZE_LIMITS.file) {
             console.log(`[DingTalk] File zipped: ${sizeMB}MB → ${(zipStat.size / 1024 / 1024).toFixed(1)}MB`);
@@ -2374,7 +2390,7 @@ class DingtalkConnection {
       ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
       : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
 
-    const fileName = path.basename(filePath);
+    const fileName = path.basename(sourcePath);
     const fileExt = ext || "bin";
     let msgKey: string;
     let msgParam: string;

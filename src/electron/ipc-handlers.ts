@@ -19,7 +19,7 @@ import { existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { loadScheduledTasks, runHookTasks } from './libs/scheduler/index.js';
 import { loadAssistantsConfig } from './libs/assistants-config.js';
-import { onHeartbeatResult, onCompactionResult } from './libs/heartbeat.js';
+import { onHeartbeatResult, onCompactionResult, parseHeartbeatResultText } from './libs/heartbeat.js';
 import {
   createKnowledgeCandidate,
   findKnowledgeCandidateBySession,
@@ -29,6 +29,7 @@ import { buildConversationDigest, extractExperienceViaAI } from './libs/experien
 import { appendDailyMemory, ScopedMemory } from './libs/memory-store.js';
 import {
   applyAssistantContextToPrompt,
+  computeDiscoveryPool,
   loadInstalledSkills,
   normalizeSkillNames,
   partitionInstalledSkillNames,
@@ -40,6 +41,7 @@ import {
   isResumeReadyMessage,
   shouldFallbackFromContinueError,
 } from './libs/session-resume.js';
+import { recordHeartbeatMetric } from './libs/heartbeat-metrics.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -102,21 +104,68 @@ const runnerHandles = new Map<string, RunnerHandle>();
 // Track active sessions
 const activeSessions = new Set<string>();
 
-function parseHeartbeatResult(text: string): { noAction: boolean; source: "json" | "legacy" } {
-  const marker = "HEARTBEAT_RESULT:";
-  const idx = text.lastIndexOf(marker);
-  if (idx >= 0) {
-    const jsonText = text.slice(idx + marker.length).trim();
-    try {
-      const parsed = JSON.parse(jsonText) as { noAction?: unknown };
-      if (typeof parsed.noAction === "boolean") {
-        return { noAction: parsed.noAction, source: "json" };
+function extractTextParts(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part): part is { type: string; text?: unknown } => Boolean(part) && typeof part === "object")
+    .filter((part) => part.type === "text")
+    .map((part) => String(part.text ?? ""))
+    .join("\n");
+}
+
+function inspectHeartbeatNotifications(messages: unknown[]): { attempts: number; successes: number } {
+  const notificationToolUseIds = new Set<string>();
+  let attempts = 0;
+  let successes = 0;
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const msg = message as Record<string, unknown>;
+    if (msg.type === "assistant") {
+      const parts = Array.isArray((msg.message as { content?: unknown } | undefined)?.content)
+        ? ((msg.message as { content: unknown[] }).content)
+        : [];
+      for (const part of parts) {
+        if (!part || typeof part !== "object") continue;
+        const toolUse = part as { type?: unknown; name?: unknown; id?: unknown };
+        if (toolUse.type === "tool_use" && toolUse.name === "send_notification" && typeof toolUse.id === "string") {
+          notificationToolUseIds.add(toolUse.id);
+          attempts += 1;
+        }
       }
-    } catch {
-      // fall through to legacy marker
+      continue;
+    }
+
+    if (msg.type !== "user") continue;
+    const parts = Array.isArray((msg.message as { content?: unknown } | undefined)?.content)
+      ? ((msg.message as { content: unknown[] }).content)
+      : [];
+    for (const part of parts) {
+      if (!part || typeof part !== "object") continue;
+      const toolResult = part as {
+        type?: unknown;
+        tool_use_id?: unknown;
+        is_error?: unknown;
+        content?: unknown;
+      };
+      if (
+        toolResult.type !== "tool_result" ||
+        typeof toolResult.tool_use_id !== "string" ||
+        !notificationToolUseIds.has(toolResult.tool_use_id)
+      ) {
+        continue;
+      }
+      if (toolResult.is_error === true) continue;
+      const text = Array.isArray(toolResult.content)
+        ? toolResult.content.map((item: any) => item?.text || "").join("\n")
+        : String(toolResult.content ?? "");
+      if (text.includes("通知已通过")) {
+        successes += 1;
+      }
     }
   }
-  return { noAction: text.includes("<no-action>"), source: "legacy" };
+
+  return { attempts, successes };
 }
 
 function broadcast(event: ServerEvent) {
@@ -139,8 +188,10 @@ function emit(event: ServerEvent) {
       sessions.updateSession(sessionId, { status: validStatus });
     }
 
+    const isTerminalStatus = status === 'completed' || status === 'idle' || status === 'error';
+
     // When a session finishes, flush queued messages to DB before reading history
-    if (status === 'idle' || status === 'error') {
+    if (isTerminalStatus) {
       sessions.flushQueuedMessages();
       const session = sessions.getSession(sessionId);
 
@@ -154,30 +205,75 @@ function emit(event: ServerEvent) {
       if (session?.title?.startsWith('[心跳]') && (session as any).suppressIfShort !== false) {
         try {
           const history = sessions.getSessionHistory(sessionId);
+          const historyMessages = history?.messages ?? [];
           const assistantMessages = (history?.messages ?? []).filter(
             (m: any) => m.type === 'assistant'
           );
           const lastAssistant = assistantMessages[assistantMessages.length - 1] as any;
-          const text: string = lastAssistant?.message?.content
-            ?.filter((c: any) => c.type === 'text')
-            ?.map((c: any) => String(c.text))
-            ?.join('') ?? '';
+          const text = extractTextParts(lastAssistant?.message?.content);
+          const parsed = parseHeartbeatResultText(text);
+          const notificationSummary = inspectHeartbeatNotifications(historyMessages);
+          const isNoAction = notificationSummary.successes > 0 ? false : parsed.noAction;
+          const missingStructuredReceipt = parsed.source === "missing";
+          const heartbeatResultStatus =
+            status === "error" || (missingStructuredReceipt && notificationSummary.successes === 0)
+              ? "error"
+              : "completed";
+          const assistantName = session.title.replace(/^\[心跳\]\s*/, "");
+          const summaryText =
+            parsed.reason
+            ?? (notificationSummary.successes > 0
+              ? "已发送主动通知"
+              : isNoAction
+              ? "暂无需要额外汇报的新事项"
+              : parsed.source === "missing"
+              ? "未检测到结构化心跳回执"
+              : "已完成心跳巡检");
 
-          const parsed = parseHeartbeatResult(text);
-          const isNoAction = parsed.noAction;
+          if (notificationSummary.successes > 0) {
+            recordHeartbeatMetric("notification_sent", {
+              assistantId: session.assistantId,
+              count: notificationSummary.successes,
+            });
+          } else if (notificationSummary.attempts > 0) {
+            recordHeartbeatMetric("notification_skipped", {
+              assistantId: session.assistantId,
+              count: notificationSummary.attempts,
+            });
+          }
+          if (parsed.noAction && notificationSummary.successes > 0) {
+            console.warn(`[IPC] Heartbeat result contradicted notification send, overriding to action: ${sessionId}`);
+          }
           // Update adaptive interval streak counter
           if (session?.assistantId) {
-            onHeartbeatResult(session.assistantId, isNoAction, status === "error" ? "error" : "completed");
+            onHeartbeatResult(session.assistantId, isNoAction, heartbeatResultStatus, {
+              reason: summaryText,
+              source: parsed.source,
+            });
           }
+          broadcast({
+            type: 'heartbeat.report',
+            payload: {
+              assistantId: session.assistantId ?? "",
+              assistantName,
+              text: summaryText,
+              ts: Date.now(),
+              status: heartbeatResultStatus === "error" ? "heartbeat_failed" : "healthy",
+              noAction: isNoAction,
+              source: parsed.source,
+              notificationAttempts: notificationSummary.attempts,
+              notificationSuccesses: notificationSummary.successes,
+            },
+          });
 
-          if (status !== "error" && isNoAction) {
+          if (heartbeatResultStatus !== "error" && isNoAction) {
             sessions.updateSession(sessionId, { hidden: true });
             // Notify frontend to remove this session from its list
             broadcast({ type: 'session.deleted', payload: { sessionId } });
             return; // Skip the normal broadcast of session.status
           }
-          if (parsed.source === "legacy") {
-            console.warn(`[IPC] Heartbeat result fell back to legacy <no-action> parser: ${sessionId}`);
+          if (parsed.source !== "json") {
+            console.warn(`[IPC] Heartbeat result used ${parsed.source} parser: ${sessionId}`);
           }
         } catch (e) {
           console.warn('[IPC] Heartbeat suppression check failed:', e);
@@ -377,6 +473,7 @@ async function continueWithLocalHistoryFallback(
           model: session.model,
           assistantId: session.assistantId,
           assistantSkillNames: session.assistantSkillNames,
+          assistantDiscoverySkillNames: session.assistantDiscoverySkillNames,
           assistantActivatedSkillContent: activatedSkillContent,
         },
         (apiEvent) => {
@@ -500,11 +597,27 @@ export async function handleClientEvent(event: ClientEvent) {
       console.warn('[IPC] Ignoring missing assistant skills on start:', missingSkillNames);
     }
     const effectiveSkillNames = availableSkillNames.length > 0 ? availableSkillNames : undefined;
-    const startSkillContext = resolveSkillPromptContext(event.payload.prompt, effectiveSkillNames, {
+    const allAssistants = loadAssistantsConfig().assistants;
+    const discoveryPool = computeDiscoveryPool(
+      effectiveSkillNames,
+      allAssistants,
+      [...installedSkills.keys()],
+    );
+    const effectiveDiscoverySkillNames = discoveryPool.length > 0 ? discoveryPool : undefined;
+    const startSkillContext = resolveSkillPromptContext(event.payload.prompt, effectiveDiscoverySkillNames, {
       autoActivate: !event.payload.background,
       installedSkills,
+      prioritizedSkillNames: effectiveSkillNames,
     });
     const resolvedStartPrompt = startSkillContext?.userText ?? event.payload.prompt;
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[IPC] session.start skill debug:', {
+        assistantSkillNames: effectiveSkillNames ?? [],
+        discoveryPool: effectiveDiscoverySkillNames ?? [],
+        resolvedSkillName: startSkillContext?.skillName ?? null,
+        activatedSkillContentLength: startSkillContext?.skillContent?.length ?? 0,
+      });
+    }
     const effectivePrompt = applyAssistantContextToPrompt(resolvedStartPrompt, {
       skillNames: effectiveSkillNames,
       persona: event.payload.assistantPersona,
@@ -520,6 +633,7 @@ export async function handleClientEvent(event: ClientEvent) {
       model: event.payload.model,
       assistantId: event.payload.assistantId,
       assistantSkillNames: effectiveSkillNames,
+      assistantDiscoverySkillNames: effectiveDiscoverySkillNames,
       background: event.payload.background,
       workflowSopId: event.payload.workflowSopId,
       scheduledTaskId: event.payload.scheduledTaskId,
@@ -559,8 +673,10 @@ export async function handleClientEvent(event: ClientEvent) {
             model: event.payload.model,
             assistantId: session.assistantId,
             assistantSkillNames: effectiveSkillNames,
+            assistantDiscoverySkillNames: effectiveDiscoverySkillNames,
             assistantPersona: event.payload.assistantPersona,
             assistantActivatedSkillContent: startSkillContext?.skillContent,
+            background: session.background,
           },
           (apiEvent) => {
             // Map API session ID to local session ID
@@ -646,17 +762,30 @@ export async function handleClientEvent(event: ClientEvent) {
     if (missingSkillNames.length > 0) {
       console.warn('[IPC] Ignoring missing assistant skills on continue:', missingSkillNames);
     }
-    const shouldSwitchSkills = nextSkillNames.length > 0 && !areSkillNamesEqual(session.assistantSkillNames, nextSkillNames);
-    if (shouldSwitchSkills) {
+    const allAssistants = loadAssistantsConfig().assistants;
+    const nextDiscoveryPool = computeDiscoveryPool(
+      nextSkillNames.length > 0 ? nextSkillNames : session.assistantSkillNames,
+      allAssistants,
+      [...installedSkills.keys()],
+    );
+    const shouldSwitchConfiguredSkills = event.payload.assistantSkillNames !== undefined
+      && !areSkillNamesEqual(session.assistantSkillNames, nextSkillNames);
+    if (shouldSwitchConfiguredSkills) {
       sessions.updateSession(session.id, {
         assistantSkillNames: nextSkillNames,
-        // Force local-history fallback so the refreshed skill context is injected.
+        assistantDiscoverySkillNames: nextDiscoveryPool,
         resumeReady: false,
       });
       session.assistantSkillNames = nextSkillNames;
+      session.assistantDiscoverySkillNames = nextDiscoveryPool;
       session.activatedSkillName = undefined;
       session.activatedSkillContent = undefined;
       session.resumeReady = false;
+    } else if (!areSkillNamesEqual(session.assistantDiscoverySkillNames, nextDiscoveryPool)) {
+      sessions.updateSession(session.id, {
+        assistantDiscoverySkillNames: nextDiscoveryPool,
+      });
+      session.assistantDiscoverySkillNames = nextDiscoveryPool;
     }
 
     sessions.updateSession(session.id, {
@@ -680,13 +809,29 @@ export async function handleClientEvent(event: ClientEvent) {
     });
 
     const sessionProvider = session.provider ?? 'claude';
-    const continueSkillContext = resolveSkillPromptContext(event.payload.prompt, session.assistantSkillNames, {
-      autoActivate: !session.background,
-      preferredSkillName: session.activatedSkillName,
-      installedSkills,
-    });
+    const previousActivatedSkillName = session.activatedSkillName ?? null;
+    const continueSkillContext = resolveSkillPromptContext(
+      event.payload.prompt,
+      session.assistantDiscoverySkillNames,
+      {
+        autoActivate: !session.background,
+        preferredSkillName: session.activatedSkillName,
+        installedSkills,
+        prioritizedSkillNames: session.assistantSkillNames,
+      },
+    );
     const continueActivatedContent = continueSkillContext?.skillContent ?? session.activatedSkillContent;
     const resolvedContinuePrompt = continueSkillContext?.userText ?? event.payload.prompt;
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[IPC] session.continue skill debug:', {
+        sessionId: session.id,
+        assistantSkillNames: session.assistantSkillNames ?? [],
+        discoveryPool: session.assistantDiscoverySkillNames ?? [],
+        previousActivatedSkillName,
+        resolvedSkillName: continueSkillContext?.skillName ?? null,
+        activatedSkillContentLength: continueActivatedContent?.length ?? 0,
+      });
+    }
     const continuedPrompt = buildContinuePrompt(resolvedContinuePrompt, session.assistantSkillNames);
     const effectiveContinuedPrompt = applyAssistantContextToPrompt(continuedPrompt, {
       skillNames: session.assistantSkillNames,
@@ -697,7 +842,7 @@ export async function handleClientEvent(event: ClientEvent) {
     session.activatedSkillContent = continueActivatedContent;
     const canResumeRemotely = Boolean(session.claudeSessionId && session.resumeReady);
 
-    if (!canResumeRemotely || shouldSwitchSkills) {
+    if (!canResumeRemotely || shouldSwitchConfiguredSkills) {
       await continueWithLocalHistoryFallback(
         session,
         resolvedContinuePrompt,
@@ -740,6 +885,7 @@ export async function handleClientEvent(event: ClientEvent) {
             model: session.model,
             assistantId: session.assistantId,
             assistantSkillNames: session.assistantSkillNames,
+            assistantDiscoverySkillNames: session.assistantDiscoverySkillNames,
             assistantActivatedSkillContent: continueActivatedContent,
           }
         );
@@ -910,6 +1056,7 @@ export async function handleClientEvent(event: ClientEvent) {
     }
     return;
   }
+
 }
 
 export { sessions };

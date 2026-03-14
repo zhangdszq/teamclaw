@@ -31,6 +31,64 @@ const CATEGORY_LABELS: Record<string, string> = {
   "design": "设计创意", "research": "研究调查", "other": "其他",
 };
 
+function toSkillCommandName(skillName: string): string {
+  return skillName.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 32);
+}
+
+
+function matchesSkillFilter(skill: SkillInfo, filter: string): boolean {
+  const normalizedFilter = filter.toLowerCase().replace(/^\//, "");
+  return skill.name.toLowerCase().includes(normalizedFilter) ||
+    (skill.label || "").toLowerCase().includes(normalizedFilter) ||
+    (skill.description || "").toLowerCase().includes(normalizedFilter);
+}
+
+function parseExplicitSlashSkill(
+  prompt: string,
+  skills: SkillInfo[],
+): { skillName: string; userText: string } | null {
+  const match = prompt.trimStart().match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+  if (!match) return null;
+
+  const [, rawCommand, rawArgs] = match;
+  const normalizedCommand = rawCommand.toLowerCase().replace(/@\S+$/, "");
+  const matchedSkill = skills.find((skill) =>
+    skill.name.toLowerCase() === normalizedCommand ||
+    toSkillCommandName(skill.name) === normalizedCommand
+  );
+  if (!matchedSkill) return null;
+
+  return {
+    skillName: matchedSkill.name,
+    userText: rawArgs?.trim() || `请执行技能 ${matchedSkill.name}`,
+  };
+}
+
+function buildSlashSkillSections(
+  skills: SkillInfo[],
+  assistantScopedSkills: SkillInfo[],
+  filter: string,
+): Array<{ key: string; label: string; skills: SkillInfo[] }> {
+  const filteredAll = skills.filter((skill) => matchesSkillFilter(skill, filter));
+  const filteredAssistant = assistantScopedSkills.filter((skill) => matchesSkillFilter(skill, filter));
+  const assistantSkillNames = new Set(filteredAssistant.map((skill) => skill.name));
+  const remainingSkills = filteredAll.filter((skill) => !assistantSkillNames.has(skill.name));
+  const sections: Array<{ key: string; label: string; skills: SkillInfo[] }> = [];
+
+  if (filteredAssistant.length > 0) {
+    sections.push({ key: "assistant", label: "专享", skills: filteredAssistant });
+  }
+  if (remainingSkills.length > 0 || sections.length === 0) {
+    sections.push({
+      key: "all",
+      label: "全部",
+      skills: sections.length > 0 ? remainingSkills : filteredAll,
+    });
+  }
+
+  return sections.filter((section) => section.skills.length > 0);
+}
+
 function getSkillCategory(skill: SkillInfo): string {
   if (skill.category && skill.category in SKILL_CATEGORY_CONFIG) return skill.category;
   const text = (skill.name + " " + (skill.description || "")).toLowerCase();
@@ -99,13 +157,9 @@ export function QuickWindow() {
   const selectedAssistant = assistants.find((a) => a.id === selectedAssistantId);
 
   const assistantSkillNames = selectedAssistant?.skillNames ?? [];
-  const availableSkills = allSkills.filter(
-    (s) => assistantSkillNames.length === 0 || assistantSkillNames.includes(s.name)
-  );
-  const filteredSkills = availableSkills.filter((s) => {
-    const f = skillFilter.toLowerCase();
-    return s.name.toLowerCase().includes(f) || (s.label || "").toLowerCase().includes(f) || (s.description || "").toLowerCase().includes(f);
-  });
+  const assistantScopedSkills = allSkills.filter((skill) => assistantSkillNames.includes(skill.name));
+  const slashSkillSections = buildSlashSkillSections(allSkills, assistantScopedSkills, skillFilter);
+  const filteredSkills = slashSkillSections.flatMap((section) => section.skills);
 
   useEffect(() => {
     window.electron.getAssistantsConfig().then((c) => {
@@ -230,14 +284,24 @@ export function QuickWindow() {
 
     setSending(true);
     const assistant = assistants.find((a) => a.id === selectedAssistantId);
+    const hasExplicitSlashAttempt = text.startsWith("/");
+    const explicitSlashSkill = parseExplicitSlashSkill(text, allSkills);
+    const resolvedSkillName = explicitSlashSkill
+      ? explicitSlashSkill.skillName
+      : hasExplicitSlashAttempt
+      ? null
+      : activeSkill?.name ?? null;
+    const finalPrompt = resolvedSkillName
+      ? `/${resolvedSkillName} ${explicitSlashSkill?.userText ?? text}`.trim()
+      : explicitSlashSkill?.userText ?? text;
 
-    let title = text.slice(0, 50).trim() || "Quick Chat";
+    let title = finalPrompt.slice(0, 50).trim() || "Quick Chat";
     try {
-      title = await window.electron.generateSessionTitle(text);
+      title = await window.electron.generateSessionTitle(finalPrompt);
     } catch { /* fallback */ }
 
-    const skillNames = activeSkill
-      ? [activeSkill.name]
+    const skillNames = resolvedSkillName
+      ? [resolvedSkillName]
       : assistant?.skillNames?.length
         ? assistant.skillNames
         : undefined;
@@ -246,7 +310,7 @@ export function QuickWindow() {
       type: "session.start",
       payload: {
         title,
-        prompt: text,
+        prompt: finalPrompt,
         cwd: assistant?.defaultCwd || undefined,
         allowedTools: "Read,Edit,Bash",
         provider: assistant?.provider || "claude",
@@ -261,7 +325,7 @@ export function QuickWindow() {
     setSending(false);
     setActiveSkill(null);
     window.electron.showMainWindow();
-  }, [prompt, sending, sendEvent, assistants, selectedAssistantId, activeSkill]);
+  }, [prompt, sending, sendEvent, assistants, selectedAssistantId, activeSkill, allSkills]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -435,7 +499,7 @@ export function QuickWindow() {
                   <svg viewBox="0 0 24 24" className="h-2 w-2"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/></svg>
                 </button>
               </div>
-            ) : availableSkills.length > 0 ? (
+            ) : allSkills.length > 0 ? (
               <button
                 ref={skillBtnRef}
                 onClick={() => { showSkillPicker ? closeSkillPicker() : openSkillPicker(); }}
@@ -472,33 +536,35 @@ export function QuickWindow() {
       {showSkillPicker && (
         <div ref={skillPickerRef} className="flex-1 flex flex-col min-h-0 border-t border-ink-900/[0.04]" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
           <div className="px-3 pt-2.5 pb-1.5">
-            <div className="flex items-center gap-2 rounded-xl bg-ink-900/[0.04] px-2.5 py-2">
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted/60 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-              <input
-                ref={skillFilterRef}
-                type="text"
-                placeholder="搜索技能..."
-                value={skillFilter}
-                onChange={(e) => { setSkillFilter(e.target.value); setSkillSelectedIndex(0); }}
-                onKeyDown={(e) => {
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setSkillSelectedIndex((i) => (i + 1) % Math.max(1, filteredSkills.length));
-                  } else if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSkillSelectedIndex((i) => (i - 1 + Math.max(1, filteredSkills.length)) % Math.max(1, filteredSkills.length));
-                  } else if (e.key === "Enter" && filteredSkills[skillSelectedIndex]) {
-                    e.preventDefault();
-                    handleSelectSkill(filteredSkills[skillSelectedIndex]);
-                  } else if (e.key === "Escape") {
-                    closeSkillPicker();
-                    inputRef.current?.focus();
-                  }
-                }}
-                className="flex-1 bg-transparent text-[13px] text-ink-800 placeholder:text-muted/50 focus:outline-none"
-              />
+            <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl bg-ink-900/[0.04] px-2.5 py-2">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted/60 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                <input
+                  ref={skillFilterRef}
+                  type="text"
+                  placeholder="搜索技能..."
+                  value={skillFilter}
+                  onChange={(e) => { setSkillFilter(e.target.value); setSkillSelectedIndex(0); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setSkillSelectedIndex((i) => (i + 1) % Math.max(1, filteredSkills.length));
+                    } else if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setSkillSelectedIndex((i) => (i - 1 + Math.max(1, filteredSkills.length)) % Math.max(1, filteredSkills.length));
+                    } else if (e.key === "Enter" && filteredSkills[skillSelectedIndex]) {
+                      e.preventDefault();
+                      handleSelectSkill(filteredSkills[skillSelectedIndex]);
+                    } else if (e.key === "Escape") {
+                      closeSkillPicker();
+                      inputRef.current?.focus();
+                    }
+                  }}
+                  className="flex-1 bg-transparent text-[13px] text-ink-800 placeholder:text-muted/50 focus:outline-none min-w-0"
+                />
+              </div>
             </div>
           </div>
 
@@ -509,50 +575,62 @@ export function QuickWindow() {
           ) : (
             <div className="flex-1 overflow-y-auto py-1 px-1.5">
               {(() => {
-                const groups = groupSkillsByCategory(filteredSkills);
                 let flatIdx = 0;
-                return groups.map((group) => {
-                  const items = group.skills.map((skill) => {
-                    const idx = flatIdx++;
-                    const cat = getSkillCategory(skill);
-                    const config = SKILL_CATEGORY_CONFIG[cat] || SKILL_CATEGORY_CONFIG.other;
-                    const isActive = idx === skillSelectedIndex;
-                    return (
-                      <button
-                        key={skill.name}
-                        className={`w-full px-2.5 py-2 text-left flex items-center gap-2.5 rounded-xl transition-all duration-150 ${
-                          isActive
-                            ? "bg-accent/[0.08] ring-1 ring-accent/20"
-                            : "hover:bg-ink-900/[0.04]"
-                        }`}
-                        onClick={() => handleSelectSkill(skill)}
-                        onMouseEnter={() => setSkillSelectedIndex(idx)}
-                      >
-                        <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
-                          <QWSkillIcon type={config.icon} className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
-                            {skill.label || skill.name}
+                return slashSkillSections.map((section) => (
+                  <div key={section.key}>
+                    {slashSkillSections.length > 1 && (
+                      <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted/70">
+                        {section.label}
+                      </div>
+                    )}
+                    {(() => {
+                      const groups = groupSkillsByCategory(section.skills);
+                      return groups.map((group) => {
+                        const items = group.skills.map((skill) => {
+                          const idx = flatIdx++;
+                          const cat = getSkillCategory(skill);
+                          const config = SKILL_CATEGORY_CONFIG[cat] || SKILL_CATEGORY_CONFIG.other;
+                          const isActive = idx === skillSelectedIndex;
+                          return (
+                            <button
+                              key={`${section.key}:${skill.name}`}
+                              className={`w-full px-2.5 py-2 text-left flex items-center gap-2.5 rounded-xl transition-all duration-150 ${
+                                isActive
+                                  ? "bg-accent/[0.08] ring-1 ring-accent/20"
+                                  : "hover:bg-ink-900/[0.04]"
+                              }`}
+                              onClick={() => handleSelectSkill(skill)}
+                              onMouseEnter={() => setSkillSelectedIndex(idx)}
+                            >
+                              <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
+                                <QWSkillIcon type={config.icon} className="h-3.5 w-3.5" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
+                                  {skill.label || skill.name}
+                                </div>
+                                {skill.description && (
+                                  <div className="text-[10px] text-muted truncate leading-tight mt-0.5">{skill.description}</div>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        });
+
+                        return (
+                          <div key={`${section.key}:${group.category}`}>
+                            {groups.length > 1 && (
+                              <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+                                {group.label}
+                              </div>
+                            )}
+                            {items}
                           </div>
-                          {skill.description && (
-                            <div className="text-[10px] text-muted truncate leading-tight mt-0.5">{skill.description}</div>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  });
-                  return (
-                    <div key={group.category}>
-                      {groups.length > 1 && (
-                        <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
-                          {group.label}
-                        </div>
-                      )}
-                      {items}
-                    </div>
-                  );
-                });
+                        );
+                      });
+                    })()}
+                  </div>
+                ));
               })()}
             </div>
           )}

@@ -54,12 +54,25 @@ export type ServerEvent =
   | { type: "session.deleted"; payload: { sessionId: string } }
   | { type: "permission.request"; payload: { sessionId: string; toolUseId: string; toolName: string; input: unknown } }
   | { type: "runner.error"; payload: { sessionId?: string; message: string } }
-  | { type: "heartbeat.report"; payload: { assistantId: string; assistantName: string; text: string; ts: number } };
+  | {
+      type: "heartbeat.report";
+      payload: {
+        assistantId: string;
+        assistantName: string;
+        text: string;
+        ts: number;
+        status?: "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown";
+        noAction?: boolean;
+        source?: "json" | "legacy" | "missing";
+        notificationAttempts?: number;
+        notificationSuccesses?: number;
+      };
+    };
 
 // Client -> Server events
 export type ClientEvent =
-  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantPersona?: string; background?: boolean; workflowSopId?: string; scheduledTaskId?: string } }
-  | { type: "session.continue"; payload: { sessionId: string; prompt: string; assistantSkillNames?: string[] } }
+  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantDiscoverySkillNames?: string[]; assistantPersona?: string; background?: boolean; workflowSopId?: string; scheduledTaskId?: string } }
+  | { type: "session.continue"; payload: { sessionId: string; prompt: string; assistantSkillNames?: string[]; assistantDiscoverySkillNames?: string[] } }
   | { type: "session.stop"; payload: { sessionId: string } }
   | { type: "session.delete"; payload: { sessionId: string } }
   | { type: "session.list" }

@@ -10,10 +10,12 @@ import { runClaude, stopSession, type ServerEvent } from '../services/runner.js'
 import type { AgentProvider } from '../types.js';
 import {
   applyAssistantContextToPrompt,
+  computeDiscoveryPool,
   loadInstalledSkills,
   partitionInstalledSkillNames,
   resolveSkillPromptContext,
 } from '../../libs/skill-context.js';
+import { loadAssistantsConfig } from '../../libs/assistants-config.js';
 
 const agent = new Hono();
 
@@ -79,6 +81,7 @@ agent.post('/start', async (c) => {
     assistantSkillNames?: string[];
     assistantPersona?: string;
     assistantActivatedSkillContent?: string;
+    background?: boolean;
   }>();
 
   if (!body.prompt) {
@@ -89,35 +92,30 @@ agent.post('/start', async (c) => {
     return c.json({ error: 'title is required' }, 400);
   }
 
-  // Validate optional field: cwd (must be a non-empty string if provided)
   if (body.cwd !== undefined) {
     if (typeof body.cwd !== 'string' || body.cwd.trim() === '') {
       return c.json({ error: 'cwd must be a non-empty string' }, 400);
     }
   }
 
-  // Validate optional field: allowedTools (must be a non-empty string if provided)
   if (body.allowedTools !== undefined) {
     if (typeof body.allowedTools !== 'string' || body.allowedTools.trim() === '') {
       return c.json({ error: 'allowedTools must be a non-empty string' }, 400);
     }
   }
 
-  // Validate optional field: model (must be a non-empty string if provided)
   if (body.model !== undefined) {
     if (typeof body.model !== 'string' || body.model.trim() === '') {
       return c.json({ error: 'model must be a non-empty string' }, 400);
     }
   }
 
-  // Validate optional field: assistantId (must be a non-empty string if provided)
   if (body.assistantId !== undefined) {
     if (typeof body.assistantId !== 'string' || body.assistantId.trim() === '') {
       return c.json({ error: 'assistantId must be a non-empty string' }, 400);
     }
   }
 
-  // Validate optional field: assistantSkillNames (must be an array if provided)
   if (body.assistantSkillNames !== undefined) {
     if (!Array.isArray(body.assistantSkillNames)) {
       return c.json({ error: 'assistantSkillNames must be an array' }, 400);
@@ -136,6 +134,10 @@ agent.post('/start', async (c) => {
     return c.json({ error: 'assistantActivatedSkillContent must be a string' }, 400);
   }
 
+  if (body.background !== undefined && typeof body.background !== 'boolean') {
+    return c.json({ error: 'background must be a boolean' }, 400);
+  }
+
   const provider: AgentProvider = body.provider ?? 'claude';
   const installedSkills = loadInstalledSkills();
   const { availableSkillNames, missingSkillNames } = partitionInstalledSkillNames(
@@ -148,13 +150,23 @@ agent.post('/start', async (c) => {
     );
   }
   const effectiveSkillNames = availableSkillNames.length > 0 ? availableSkillNames : undefined;
+  const allAssistants = loadAssistantsConfig().assistants;
+  const discoveryPool = computeDiscoveryPool(
+    effectiveSkillNames,
+    allAssistants,
+    [...installedSkills.keys()],
+  );
+  const effectiveDiscoverySkillNames = discoveryPool.length > 0 ? discoveryPool : undefined;
   const startSkillContext = body.assistantActivatedSkillContent
     ? {
         skillName: "",
         userText: body.prompt,
         skillContent: body.assistantActivatedSkillContent,
       }
-    : resolveSkillPromptContext(body.prompt, effectiveSkillNames, { installedSkills });
+    : resolveSkillPromptContext(body.prompt, effectiveDiscoverySkillNames, {
+        installedSkills,
+        prioritizedSkillNames: effectiveSkillNames,
+      });
   const effectiveUserPrompt = startSkillContext?.userText ?? body.prompt;
   const effectivePrompt = applyAssistantContextToPrompt(effectiveUserPrompt, {
     skillNames: effectiveSkillNames,
@@ -172,6 +184,8 @@ agent.post('/start', async (c) => {
     externalId: body.externalSessionId,
     assistantId: body.assistantId,
     assistantSkillNames: effectiveSkillNames,
+    assistantDiscoverySkillNames: effectiveDiscoverySkillNames,
+    background: body.background,
   });
   session.provider = provider;
   session.model = body.model;
@@ -192,6 +206,7 @@ agent.post('/start', async (c) => {
         status: 'running',
         title: session.title,
         cwd: session.cwd,
+        background: session.background,
       },
     };
 
@@ -250,21 +265,18 @@ agent.post('/continue', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
 
-  // Validate optional field: cwd (must be a non-empty string if provided)
   if (body.cwd !== undefined) {
     if (typeof body.cwd !== 'string' || body.cwd.trim() === '') {
       return c.json({ error: 'cwd must be a non-empty string' }, 400);
     }
   }
 
-  // Validate optional field: title (must be a non-empty string if provided)
   if (body.title !== undefined) {
     if (typeof body.title !== 'string' || body.title.trim() === '') {
       return c.json({ error: 'title must be a non-empty string' }, 400);
     }
   }
 
-  // Validate optional field: model (must be a non-empty string if provided)
   if (body.model !== undefined) {
     if (typeof body.model !== 'string' || body.model.trim() === '') {
       return c.json({ error: 'model must be a non-empty string' }, 400);
@@ -307,13 +319,23 @@ agent.post('/continue', async (c) => {
     );
   }
   const effectiveSkillNames = availableSkillNames.length > 0 ? availableSkillNames : undefined;
+  const allAssistants = loadAssistantsConfig().assistants;
+  const continueDiscoveryPool = computeDiscoveryPool(
+    effectiveSkillNames,
+    allAssistants,
+    [...installedSkills.keys()],
+  );
+  const effectiveDiscoverySkillNames = continueDiscoveryPool.length > 0 ? continueDiscoveryPool : effectiveSkillNames;
   const continueSkillContext = body.assistantActivatedSkillContent
     ? {
         skillName: "",
         userText: body.prompt,
         skillContent: body.assistantActivatedSkillContent,
       }
-    : resolveSkillPromptContext(body.prompt, effectiveSkillNames, { installedSkills });
+    : resolveSkillPromptContext(body.prompt, effectiveDiscoverySkillNames, {
+        installedSkills,
+        prioritizedSkillNames: effectiveSkillNames,
+      });
   const effectiveContinuePrompt = applyAssistantContextToPrompt(
     continueSkillContext?.userText ?? body.prompt,
     {
@@ -331,6 +353,7 @@ agent.post('/continue', async (c) => {
     externalId: body.externalSessionId,
     assistantId: body.assistantId,
     assistantSkillNames: effectiveSkillNames,
+    assistantDiscoverySkillNames: effectiveDiscoverySkillNames,
   });
   tempSession.provider = continueProvider;
   tempSession.model = body.model;

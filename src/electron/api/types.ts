@@ -27,6 +27,7 @@ export type Session = {
   model?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  assistantDiscoverySkillNames?: string[];
   background?: boolean;
   pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;

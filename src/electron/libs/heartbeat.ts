@@ -7,6 +7,22 @@ import { readRecentNotified } from "./notification-log.js";
 import { recordHeartbeatMetric } from "./heartbeat-metrics.js";
 
 type SessionRunner = (event: ClientEvent) => Promise<void>;
+export type HeartbeatResultSource = "json" | "legacy" | "missing";
+export type HeartbeatSnapshotStatus = "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown";
+type HeartbeatOutcome = "no_action" | "action" | "error" | "start_error";
+
+export type HeartbeatSnapshot = {
+  assistantId: string;
+  assistantName: string;
+  status: HeartbeatSnapshotStatus;
+  ts: number;
+  reason?: string;
+  source?: HeartbeatResultSource;
+  noAction?: boolean;
+  outcome?: HeartbeatOutcome;
+  noActionStreak: number;
+  errorStreak: number;
+};
 
 const lastHeartbeatRun = new Map<string, number>();
 let heartbeatTimer: NodeJS.Timeout | null = null;
@@ -39,6 +55,9 @@ const errorStreak = new Map<string, number>();
 // ── Optimization C: incremental memory offset (per assistant) ────────────────
 const lastMemoryOffset = new Map<string, number>();
 const lastAssistantMemoryOffset = new Map<string, number>();
+const pendingMemoryOffset = new Map<string, number>();
+const pendingAssistantMemoryOffset = new Map<string, number>();
+const heartbeatSnapshots = new Map<string, HeartbeatSnapshot>();
 
 // ── Compaction persistence ────────────────────────────────────────────────────
 const MEMORY_ROOT = join(homedir(), ".vk-cowork", "memory");
@@ -63,6 +82,11 @@ function getTodayMemoryPath(): string {
 
 function getAssistantDailyPath(assistantId: string, date?: string): string {
   return join(MEMORY_ROOT, "assistants", assistantId, "daily", `${date ?? localDateStr()}.md`);
+}
+
+function resolveAssistantName(assistantId: string): string {
+  const assistant = loadAssistantsConfig().assistants.find((item) => item.id === assistantId);
+  return assistant?.name ?? assistantId;
 }
 
 // ── ISO week helpers ──────────────────────────────────────────────────────────
@@ -163,7 +187,75 @@ function readAssistantMemoryDelta(assistantId: string): { delta: string; newOffs
 
 // ── Heartbeat prompt builder ──────────────────────────────────────────────────
 
-function buildHeartbeatPrompt(assistant: AssistantConfig): string {
+export function parseHeartbeatResultText(text: string): { noAction: boolean; source: HeartbeatResultSource; reason?: string } {
+  const marker = "HEARTBEAT_RESULT:";
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    const idx = line.indexOf(marker);
+    if (idx < 0) continue;
+    const raw = line.slice(idx + marker.length).trim();
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    const jsonText = start >= 0 && end >= start ? raw.slice(start, end + 1) : raw;
+    try {
+      const parsed = JSON.parse(jsonText) as { noAction?: unknown; reason?: unknown };
+      if (typeof parsed.noAction === "boolean") {
+        const reason = typeof parsed.reason === "string" && parsed.reason.trim()
+          ? parsed.reason.trim()
+          : undefined;
+        return { noAction: parsed.noAction, source: "json", reason };
+      }
+    } catch {
+      // fall through to legacy parser
+    }
+    break;
+  }
+  if (text.includes("<no-action>")) {
+    return { noAction: true, source: "legacy" };
+  }
+  return { noAction: false, source: "missing" };
+}
+
+function commitPendingOffsets(assistantId: string): void {
+  const sharedOffset = pendingMemoryOffset.get(assistantId);
+  if (typeof sharedOffset === "number") {
+    lastMemoryOffset.set(assistantId, sharedOffset);
+  }
+  const assistantOffset = pendingAssistantMemoryOffset.get(assistantId);
+  if (typeof assistantOffset === "number") {
+    lastAssistantMemoryOffset.set(assistantId, assistantOffset);
+  }
+  pendingMemoryOffset.delete(assistantId);
+  pendingAssistantMemoryOffset.delete(assistantId);
+}
+
+function clearPendingOffsets(assistantId: string): void {
+  pendingMemoryOffset.delete(assistantId);
+  pendingAssistantMemoryOffset.delete(assistantId);
+}
+
+function setHeartbeatSnapshot(
+  assistantId: string,
+  status: HeartbeatSnapshotStatus,
+  details: Partial<Omit<HeartbeatSnapshot, "assistantId" | "assistantName" | "status" | "ts" | "noActionStreak" | "errorStreak">> = {},
+): void {
+  heartbeatSnapshots.set(assistantId, {
+    assistantId,
+    assistantName: resolveAssistantName(assistantId),
+    status,
+    ts: Date.now(),
+    noActionStreak: noActionStreak.get(assistantId) ?? 0,
+    errorStreak: errorStreak.get(assistantId) ?? 0,
+    ...details,
+  });
+}
+
+export function getHeartbeatSnapshots(): HeartbeatSnapshot[] {
+  return [...heartbeatSnapshots.values()];
+}
+
+export function buildHeartbeatPrompt(assistant: AssistantConfig): string {
   const sections: string[] = [];
 
   if (assistant.heartbeatRules?.trim()) {
@@ -179,7 +271,9 @@ function buildHeartbeatPrompt(assistant: AssistantConfig): string {
       ? `## 今日共享记忆新增内容（${today}，自上次心跳后）`
       : `## 今日共享记忆（${today}，最新部分）`;
     sections.push(`${label}\n${sharedResult.delta}`);
-    lastMemoryOffset.set(assistant.id, sharedResult.newOffset);
+    pendingMemoryOffset.set(assistant.id, sharedResult.newOffset);
+  } else {
+    pendingMemoryOffset.delete(assistant.id);
   }
 
   // Assistant-private daily delta (BUG 2 fix)
@@ -189,7 +283,9 @@ function buildHeartbeatPrompt(assistant: AssistantConfig): string {
       ? `## 今日对话日志新增内容（${today}，自上次心跳后）`
       : `## 今日对话日志（${today}，最新部分）`;
     sections.push(`${label}\n${assistantResult.delta}`);
-    lastAssistantMemoryOffset.set(assistant.id, assistantResult.newOffset);
+    pendingAssistantMemoryOffset.set(assistant.id, assistantResult.newOffset);
+  } else {
+    pendingAssistantMemoryOffset.delete(assistant.id);
   }
 
   // Recent notification history to avoid repeating
@@ -222,6 +318,7 @@ export function onHeartbeatResult(
   assistantId: string,
   wasNoAction: boolean,
   status: "completed" | "error" = "completed",
+  meta?: { reason?: string; source?: HeartbeatResultSource },
 ): void {
   const prev = noActionStreak.get(assistantId) ?? 0;
   const startedAt = runningByAssistant.get(assistantId);
@@ -230,6 +327,7 @@ export function onHeartbeatResult(
   lastCompletionAt.set(assistantId, Date.now());
 
   if (status === "error") {
+    clearPendingOffsets(assistantId);
     noActionStreak.set(assistantId, 0);
     const prevError = errorStreak.get(assistantId) ?? 0;
     errorStreak.set(assistantId, prevError + 1);
@@ -240,10 +338,17 @@ export function onHeartbeatResult(
       durationMs,
       streak: prevError + 1,
     });
+    setHeartbeatSnapshot(assistantId, "heartbeat_failed", {
+      reason: meta?.reason ?? "心跳执行失败",
+      source: meta?.source ?? "missing",
+      noAction: false,
+      outcome: "error",
+    });
     console.log(`[Heartbeat] ${assistantId} error streak: ${prevError + 1}, next retry in ${Math.round(retryAfterErrorMs(prevError + 1) / 60_000)}min`);
     return;
   }
 
+  commitPendingOffsets(assistantId);
   errorStreak.set(assistantId, 0);
   noActionStreak.set(assistantId, wasNoAction ? prev + 1 : 0);
   lastCompletionOutcome.set(assistantId, wasNoAction ? "no_action" : "action");
@@ -257,6 +362,64 @@ export function onHeartbeatResult(
     durationMs,
     streak: noActionStreak.get(assistantId) ?? 0,
   });
+  setHeartbeatSnapshot(assistantId, "healthy", {
+    reason: meta?.reason ?? (wasNoAction ? "暂无需要额外汇报的新事项" : "已完成心跳巡检"),
+    source: meta?.source ?? "missing",
+    noAction: wasNoAction,
+    outcome: wasNoAction ? "no_action" : "action",
+  });
+}
+
+export function onHeartbeatStartError(assistantId: string, error: unknown): void {
+  runningByAssistant.delete(assistantId);
+  clearPendingOffsets(assistantId);
+  noActionStreak.set(assistantId, 0);
+  const prevError = errorStreak.get(assistantId) ?? 0;
+  errorStreak.set(assistantId, prevError + 1);
+  lastCompletionAt.set(assistantId, Date.now());
+  lastCompletionOutcome.set(assistantId, "error");
+  recordHeartbeatMetric("completed", {
+    assistantId,
+    outcome: "start_error",
+    streak: prevError + 1,
+  });
+  setHeartbeatSnapshot(assistantId, "heartbeat_failed", {
+    reason: error instanceof Error ? error.message : String(error),
+    source: "missing",
+    noAction: false,
+    outcome: "start_error",
+  });
+}
+
+function onHeartbeatTimeout(assistantId: string, runningMs: number): void {
+  clearPendingOffsets(assistantId);
+  noActionStreak.set(assistantId, 0);
+  const prevError = errorStreak.get(assistantId) ?? 0;
+  errorStreak.set(assistantId, prevError + 1);
+  lastCompletionAt.set(assistantId, Date.now());
+  lastCompletionOutcome.set(assistantId, "error");
+  setHeartbeatSnapshot(assistantId, "heartbeat_failed", {
+    reason: `心跳执行超时（${Math.round(runningMs / 1000)}s）`,
+    source: "missing",
+    noAction: false,
+    outcome: "error",
+  });
+}
+
+export function resetHeartbeatStateForTests(): void {
+  lastHeartbeatRun.clear();
+  runningByAssistant.clear();
+  lastCompletionAt.clear();
+  lastCompletionOutcome.clear();
+  lastMemoryMtime.clear();
+  lastAssistantMemoryMtime.clear();
+  noActionStreak.clear();
+  errorStreak.clear();
+  lastMemoryOffset.clear();
+  lastAssistantMemoryOffset.clear();
+  pendingMemoryOffset.clear();
+  pendingAssistantMemoryOffset.clear();
+  heartbeatSnapshots.clear();
 }
 
 /**
@@ -303,6 +466,7 @@ export function startHeartbeatLoop(runner: SessionRunner): void {
         }
         console.warn(`[Heartbeat] Cleared stale running lock for ${a.name} after ${Math.round(runningMs / 1000)}s`);
         runningByAssistant.delete(a.id);
+        onHeartbeatTimeout(a.id, runningMs);
       }
 
       // Optimization A: skip if neither shared daily nor assistant daily has changed
@@ -379,6 +543,9 @@ function runAssistantHeartbeat(assistant: AssistantConfig, runner: SessionRunner
   const streak = noActionStreak.get(assistant.id) ?? 0;
   console.log(`[Heartbeat] Running heartbeat for assistant: ${assistant.name} (streak=${streak})`);
   runningByAssistant.set(assistant.id, Date.now());
+  setHeartbeatSnapshot(assistant.id, "heartbeat_running", {
+    reason: "心跳巡检执行中",
+  });
 
   runner({
     type: "session.start",
@@ -393,13 +560,7 @@ function runAssistantHeartbeat(assistant: AssistantConfig, runner: SessionRunner
       background: true,
     },
   }).catch((e) => {
-    runningByAssistant.delete(assistant.id);
-    lastCompletionAt.set(assistant.id, Date.now());
-    lastCompletionOutcome.set(assistant.id, "error");
-    recordHeartbeatMetric("completed", {
-      assistantId: assistant.id,
-      outcome: "start_error",
-    });
+    onHeartbeatStartError(assistant.id, e);
     console.error(`[Heartbeat] Failed for "${assistant.name}":`, e);
   });
 }

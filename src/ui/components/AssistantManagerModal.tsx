@@ -8,8 +8,10 @@ interface AssistantManagerModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAssistantsChanged?: () => void;
-  onOpenSkill?: () => void;
   onOpenMcp?: () => void;
+  onOpenKnowledge?: () => void;
+  onOpenSop?: () => void;
+  onOpenPlanTable?: () => void;
 }
 
 type EditingAssistant = {
@@ -29,6 +31,13 @@ type EditingAssistant = {
   operatingGuidelines: string;
   heartbeatInterval: number;
   heartbeatRules: string;
+};
+
+type HeartbeatSnapshot = {
+  assistantId: string;
+  status: "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown";
+  ts: number;
+  reason?: string;
 };
 
 function emptyAssistant(defaults?: AssistantDefaults): EditingAssistant {
@@ -53,7 +62,6 @@ function emptyAssistant(defaults?: AssistantDefaults): EditingAssistant {
 }
 
 const CARDS_PER_PAGE = 6;
-type TeamManagerTab = "dashboard" | "members";
 
 const AVATAR_COLORS = [
   "bg-violet-100 text-violet-600",
@@ -76,8 +84,10 @@ export function AssistantManagerModal({
   open,
   onOpenChange,
   onAssistantsChanged,
-  onOpenSkill,
   onOpenMcp,
+  onOpenKnowledge,
+  onOpenSop,
+  onOpenPlanTable,
 }: AssistantManagerModalProps) {
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
   const availableSkills = useAppStore((s) => s.skills);
@@ -91,17 +101,19 @@ export function AssistantManagerModal({
   const [newTagInput, setNewTagInput] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [assistantDefaults, setAssistantDefaults] = useState<AssistantDefaults | undefined>(undefined);
-  const [managerTab, setManagerTab] = useState<TeamManagerTab>("dashboard");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [heartbeatSnapshots, setHeartbeatSnapshots] = useState<HeartbeatSnapshot[]>([]);
 
   const [globalUserContext, setGlobalUserContext] = useState<string | undefined>(undefined);
   const sessions = useAppStore((s) => s.sessions);
+  const heartbeatReports = useAppStore((s) => s.heartbeatReports);
 
   const loadData = useCallback(async () => {
     try {
       const config = await window.electron.getAssistantsConfig();
       setAssistants(config.assistants ?? []);
       setGlobalUserContext(config.userContext);
+      setHeartbeatSnapshots(Array.isArray((config as any).heartbeatSnapshots) ? (config as any).heartbeatSnapshots : []);
       if (config.defaults) setAssistantDefaults(config.defaults);
       refreshSkills();
     } catch (err) {
@@ -269,16 +281,32 @@ export function AssistantManagerModal({
 
   const dashboardRows = useMemo(() => {
     const allSessions = Object.values(sessions);
+    const latestReportByAssistant = new Map<string, typeof heartbeatReports[number]>();
+    for (const report of heartbeatReports) {
+      const prev = latestReportByAssistant.get(report.assistantId);
+      if (!prev || report.ts > prev.ts) {
+        latestReportByAssistant.set(report.assistantId, report);
+      }
+    }
+    const latestSnapshotByAssistant = new Map<string, HeartbeatSnapshot>();
+    for (const snapshot of heartbeatSnapshots) {
+      const prev = latestSnapshotByAssistant.get(snapshot.assistantId);
+      if (!prev || snapshot.ts > prev.ts) {
+        latestSnapshotByAssistant.set(snapshot.assistantId, snapshot);
+      }
+    }
     return assistants.map((assistant) => {
       const own = allSessions.filter((s) => s.assistantId === assistant.id);
       const heartbeatSessions = own
         .filter((s) => s.title?.startsWith("[心跳]"))
         .sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0));
       const latestHeartbeat = heartbeatSessions[0];
+      const latestReport = latestReportByAssistant.get(assistant.id);
+      const latestSnapshot = latestSnapshotByAssistant.get(assistant.id);
       const running = own.filter((s) => s.status === "running" && !s.title?.startsWith("[心跳]")).length;
       const failed = own.filter((s) => s.status === "error").length;
       const completed = own.filter((s) => s.status === "completed").length;
-      const status: "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown" =
+      const sessionStatus: "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown" =
         !latestHeartbeat
           ? "heartbeat_unknown"
           : latestHeartbeat.status === "error"
@@ -286,6 +314,19 @@ export function AssistantManagerModal({
           : latestHeartbeat.status === "running"
           ? "heartbeat_running"
           : "healthy";
+      const sessionTs = latestHeartbeat ? (latestHeartbeat.updatedAt ?? latestHeartbeat.createdAt ?? 0) : 0;
+      const reportTs = latestReport?.ts ?? 0;
+      const snapshotTs = latestSnapshot?.ts ?? 0;
+      const status: "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown" =
+        sessionStatus === "heartbeat_running"
+          ? "heartbeat_running"
+          : reportTs >= snapshotTs && latestReport?.status
+          ? latestReport.status
+          : latestSnapshot?.status
+          ? latestSnapshot.status
+          : sessionTs > 0
+          ? sessionStatus
+          : "heartbeat_unknown";
       return {
         assistant,
         running,
@@ -294,7 +335,15 @@ export function AssistantManagerModal({
         status,
       };
     });
-  }, [assistants, sessions]);
+  }, [assistants, sessions, heartbeatReports, heartbeatSnapshots]);
+
+  const dashboardRowMap = useMemo(() => {
+    return new Map(dashboardRows.map((row) => [row.assistant.id, row]));
+  }, [dashboardRows]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, Math.max(0, totalPages - 1)));
+  }, [totalPages]);
 
   return (
     <>
@@ -323,18 +372,6 @@ export function AssistantManagerModal({
             <div className="flex items-center gap-1.5">
               {!editing && (
                 <>
-                  {onOpenSkill && (
-                    <button
-                      onClick={() => { onOpenChange(false); onOpenSkill(); }}
-                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
-                      title="Skills"
-                    >
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                      </svg>
-                      Skills
-                    </button>
-                  )}
                   {onOpenMcp && (
                     <button
                       onClick={() => { onOpenChange(false); onOpenMcp(); }}
@@ -348,7 +385,7 @@ export function AssistantManagerModal({
                       MCP
                     </button>
                   )}
-                  <div className="h-4 w-px bg-ink-900/10" />
+                  {onOpenMcp && <div className="h-4 w-px bg-ink-900/10" />}
                   <button
                     onClick={startNew}
                     className="flex items-center gap-1 rounded-lg border border-ink-900/10 bg-surface-secondary px-2.5 py-1 text-xs font-medium text-ink-700 hover:bg-surface-tertiary hover:border-ink-900/20 transition-colors"
@@ -793,89 +830,72 @@ export function AssistantManagerModal({
             </div>
           ) : (
             <div className="mt-4 flex flex-1 flex-col min-h-0">
-              <div className="mb-3 flex items-center gap-1 rounded-xl bg-ink-900/5 p-1 w-fit">
-                <button
-                  onClick={() => setManagerTab("dashboard")}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    managerTab === "dashboard" ? "bg-surface text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
-                  }`}
-                >
-                  团队看板
-                </button>
-                <button
-                  onClick={() => setManagerTab("members")}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    managerTab === "members" ? "bg-surface text-ink-800 shadow-soft" : "text-muted hover:text-ink-700"
-                  }`}
-                >
-                  成员管理
-                </button>
-              </div>
+              {(onOpenKnowledge || onOpenSop || onOpenPlanTable) && (
+                <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                  {onOpenKnowledge && (
+                    <button
+                      onClick={() => { onOpenChange(false); onOpenKnowledge(); }}
+                      className="flex items-start gap-3 rounded-2xl border border-ink-900/8 bg-surface px-4 py-3 text-left transition-colors hover:border-accent/25 hover:bg-accent/5"
+                    >
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M3 5.5A2.5 2.5 0 0 1 5.5 3H11v18H5.5A2.5 2.5 0 0 0 3 23z" />
+                          <path d="M21 5.5A2.5 2.5 0 0 0 18.5 3H13v18h5.5A2.5 2.5 0 0 1 21 23z" />
+                        </svg>
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-ink-800">经验/知识库</span>
+                        <span className="mt-1 block text-[11px] leading-relaxed text-muted">沉淀经验、整理知识条目与会话素材。</span>
+                      </span>
+                    </button>
+                  )}
 
-              {managerTab === "dashboard" ? (
-                <div className="flex-1 overflow-y-auto min-h-0">
-                  <div className="grid grid-cols-2 gap-3">
-                    {dashboardRows.map((row) => (
-                      <div key={row.assistant.id} className="rounded-2xl border border-ink-900/8 bg-surface p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            {row.assistant.avatar ? (
-                              <img src={row.assistant.avatar} alt="" className="h-8 w-8 rounded-full object-cover" />
-                            ) : (
-                              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${getAvatarColor(row.assistant.name)}`}>
-                                {row.assistant.name.slice(0, 1).toUpperCase()}
-                              </div>
-                            )}
-                            <span className="text-sm font-semibold text-ink-800">{row.assistant.name}</span>
-                          </div>
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                              row.status === "healthy"
-                                ? "bg-emerald-50 text-emerald-600"
-                                : row.status === "heartbeat_running"
-                                ? "bg-info/10 text-info"
-                                : row.status === "heartbeat_failed"
-                                ? "bg-error/10 text-error"
-                                : "bg-ink-900/8 text-muted"
-                            }`}
-                            title={
-                              row.status === "heartbeat_failed"
-                                ? "最近一次心跳巡检失败"
-                                : row.status === "heartbeat_running"
-                                ? "最近一次心跳仍在执行中"
-                                : row.status === "healthy"
-                                ? "最近一次心跳巡检成功"
-                                : "暂无可用的心跳巡检记录"
-                            }
-                          >
-                            {row.status === "healthy"
-                              ? "正常"
-                              : row.status === "heartbeat_running"
-                              ? "心跳中"
-                              : row.status === "heartbeat_failed"
-                              ? "心跳失败"
-                              : "未巡检"}
-                          </span>
-                        </div>
-                        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                          <div className="rounded-lg bg-surface-secondary p-2">
-                            <p className="text-[10px] text-muted">运行中</p>
-                            <p className="text-sm font-semibold text-info">{row.running}</p>
-                          </div>
-                          <div className="rounded-lg bg-surface-secondary p-2">
-                            <p className="text-[10px] text-muted">已完成</p>
-                            <p className="text-sm font-semibold text-success">{row.completed}</p>
-                          </div>
-                          <div className="rounded-lg bg-surface-secondary p-2">
-                            <p className="text-[10px] text-muted">失败</p>
-                            <p className="text-sm font-semibold text-error">{row.failed}</p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  {onOpenSop && (
+                    <button
+                      onClick={() => { onOpenChange(false); onOpenSop(); }}
+                      className="flex items-start gap-3 rounded-2xl border border-ink-900/8 bg-surface px-4 py-3 text-left transition-colors hover:border-accent/25 hover:bg-accent/5"
+                    >
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M7 7h10" />
+                          <path d="M7 12h10" />
+                          <path d="M7 17h6" />
+                          <rect x="3" y="4" width="18" height="16" rx="2.5" />
+                        </svg>
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-ink-800">工作流程</span>
+                        <span className="mt-1 block text-[11px] leading-relaxed text-muted">查看 SOP、流程编排与执行状态。</span>
+                      </span>
+                    </button>
+                  )}
+
+                  {onOpenPlanTable && (
+                    <button
+                      onClick={() => { onOpenChange(false); onOpenPlanTable(); }}
+                      className="flex items-start gap-3 rounded-2xl border border-ink-900/8 bg-surface px-4 py-3 text-left transition-colors hover:border-accent/25 hover:bg-accent/5"
+                    >
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <rect x="3" y="4" width="18" height="17" rx="2.5" />
+                          <path d="M3 9h18" />
+                          <path d="M8 3v3" />
+                          <path d="M16 3v3" />
+                          <path d="M8 13h3" />
+                          <path d="M13 13h3" />
+                          <path d="M8 17h3" />
+                        </svg>
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-ink-800">计划中心</span>
+                        <span className="mt-1 block text-[11px] leading-relaxed text-muted">集中查看计划排期、执行结果和进度。</span>
+                      </span>
+                    </button>
+                  )}
                 </div>
-              ) : assistants.length === 0 ? (
+              )}
+
+              {assistants.length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-900/10 py-14 text-center">
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-surface-secondary">
                     <svg viewBox="0 0 24 24" className="h-6 w-6 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -890,28 +910,41 @@ export function AssistantManagerModal({
               ) : (
                 <>
                   <div className="flex-1 overflow-y-auto min-h-0">
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     {pagedAssistants.map((assistant) => {
                       const avatarColor = getAvatarColor(assistant.name);
                       const initial = assistant.name.trim().slice(0, 1).toUpperCase();
                       const skillCount = assistant.skillNames?.length ?? 0;
+                      const botCount = Object.values(assistant.bots ?? {}).filter((b: any) => b?.connected).length;
+                      const dashboardRow = dashboardRowMap.get(assistant.id);
+                      const status = dashboardRow?.status ?? "heartbeat_unknown";
+                      const running = dashboardRow?.running ?? 0;
+                      const completed = dashboardRow?.completed ?? 0;
+                      const failed = dashboardRow?.failed ?? 0;
                       return (
                         <div
                           key={assistant.id}
                           className="group relative flex flex-col rounded-2xl border border-ink-900/8 bg-surface p-4 transition-all hover:shadow-soft hover:border-ink-900/12"
                         >
-                          <div className="flex items-start justify-between">
-                            {assistant.avatar ? (
-                              <img
-                                src={assistant.avatar}
-                                alt={assistant.name}
-                                className="h-11 w-11 rounded-full object-cover shrink-0"
-                              />
-                            ) : (
-                              <div className={`flex h-11 w-11 items-center justify-center rounded-full text-lg font-bold ${avatarColor}`}>
-                                {initial}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-3">
+                              {assistant.avatar ? (
+                                <img
+                                  src={assistant.avatar}
+                                  alt={assistant.name}
+                                  className="h-11 w-11 rounded-full object-cover shrink-0"
+                                />
+                              ) : (
+                                <div className={`flex h-11 w-11 items-center justify-center rounded-full text-lg font-bold ${avatarColor}`}>
+                                  {initial}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold leading-tight text-ink-800">
+                                  {assistant.name}
+                                </div>
                               </div>
-                            )}
+                            </div>
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 onClick={() => setBotTargetAssistant(assistant)}
@@ -966,28 +999,29 @@ export function AssistantManagerModal({
                             </div>
                           </div>
 
-                          <div className="mt-3">
-                            <div className="text-sm font-semibold text-ink-800 leading-tight truncate">
-                              {assistant.name}
-                            </div>
-                            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
-                              <span className="rounded-md bg-surface-secondary px-1.5 py-0.5 font-medium uppercase tracking-wide">
-                                {assistant.provider}
-                              </span>
-                              {assistant.model && (
-                                <span className="truncate">{assistant.model}</span>
-                              )}
-                            </div>
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-secondary px-2.5 py-1 text-[10px] text-muted">
+                              <span>运行中</span>
+                              <span className="font-semibold text-info">{running}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-secondary px-2.5 py-1 text-[10px] text-muted">
+                              <span>已完成</span>
+                              <span className="font-semibold text-success">{completed}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-secondary px-2.5 py-1 text-[10px] text-muted">
+                              <span>失败</span>
+                              <span className="font-semibold text-error">{failed}</span>
+                            </span>
                           </div>
 
                           {assistant.persona && (
-                            <p className="mt-2 text-[11px] text-muted line-clamp-2 leading-relaxed">
+                            <p className="mt-3 text-[11px] text-muted line-clamp-2 leading-relaxed">
                               {assistant.persona}
                             </p>
                           )}
 
                           <div className="mt-auto pt-3">
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-end justify-between gap-3">
                               <div className="flex items-center gap-1.5">
                                 <svg viewBox="0 0 24 24" className="h-3 w-3 text-muted" fill="none" stroke="currentColor" strokeWidth="2">
                                   <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
@@ -996,15 +1030,53 @@ export function AssistantManagerModal({
                                   {skillCount > 0 ? `${skillCount} 个技能` : "无技能"}
                                 </span>
                               </div>
-                              {(() => {
-                                const botCount = Object.values(assistant.bots ?? {}).filter((b: any) => b?.connected).length;
-                                return botCount > 0 ? (
-                                  <div className="flex items-center gap-1">
-                                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                    <span className="text-[11px] text-emerald-600">{botCount} 消息通道</span>
-                                  </div>
-                                ) : null;
-                              })()}
+                              <div className="flex max-w-[70%] shrink-0 flex-wrap justify-end gap-1.5">
+                                <span className="inline-flex items-center rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+                                  {assistant.provider}
+                                </span>
+                                {assistant.model && (
+                                  <span
+                                    className="inline-flex max-w-[140px] items-center rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-medium text-muted"
+                                    title={assistant.model}
+                                  >
+                                    <span className="truncate">{assistant.model}</span>
+                                  </span>
+                                )}
+                                {botCount > 0 && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-600">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                    {botCount} 消息通道
+                                  </span>
+                                )}
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                    status === "healthy"
+                                      ? "bg-emerald-50 text-emerald-600"
+                                      : status === "heartbeat_running"
+                                      ? "bg-info/10 text-info"
+                                      : status === "heartbeat_failed"
+                                      ? "bg-error/10 text-error"
+                                      : "bg-ink-900/8 text-muted"
+                                  }`}
+                                  title={
+                                    status === "heartbeat_failed"
+                                      ? "最近一次心跳巡检失败"
+                                      : status === "heartbeat_running"
+                                      ? "最近一次心跳仍在执行中"
+                                      : status === "healthy"
+                                      ? "最近一次心跳巡检成功"
+                                      : "暂无可用的心跳巡检记录"
+                                  }
+                                >
+                                  {status === "healthy"
+                                    ? "正常"
+                                    : status === "heartbeat_running"
+                                    ? "心跳中"
+                                    : status === "heartbeat_failed"
+                                    ? "心跳失败"
+                                    : "未巡检"}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </div>

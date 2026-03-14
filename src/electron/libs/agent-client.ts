@@ -8,12 +8,14 @@
  *   Anthropic Messages API → OpenAI Responses API using OAuth token
  */
 import { query, unstable_v2_prompt } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKMessage, PermissionResult, SDKResultMessage, McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKMessage, PermissionResult, SDKResultMessage, McpServerConfig, SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import { getClaudeCodePath, getEnhancedEnv } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import { startProxy, getProxyBaseUrl, registerProxyRoute, unregisterProxyRoute, type OpenAIProxyOverrides } from "./openai-proxy.js";
 import { recordUsage } from "./usage-tracker.js";
+import { spawnOrAcquire, schedulePreWarm } from "./subprocess-pool.js";
 import { homedir } from "os";
+import { join } from "path";
 
 export type AgentProvider = "claude" | "openai";
 export type { SDKMessage, PermissionResult, SDKResultMessage };
@@ -55,6 +57,17 @@ export interface RunAgentOpts {
   includePartialMessages?: boolean;
   provider?: AgentProvider;
   openaiOverrides?: OpenAIProxyOverrides;
+  settingSources?: ("user" | "project" | "local")[];
+  agent?: string;
+  agents?: Record<string, {
+    description: string;
+    prompt: string;
+    skills?: string[];
+    tools?: string[];
+    disallowedTools?: string[];
+    model?: "sonnet" | "opus" | "haiku" | "inherit";
+    maxTurns?: number;
+  }>;
 }
 
 type ProviderEnvResult = {
@@ -90,6 +103,10 @@ async function getEnvForProvider(
   openaiOverrides?: OpenAIProxyOverrides,
 ): Promise<ProviderEnvResult> {
   const env = { ...(baseEnv ?? getEnhancedEnv()) };
+  // V8 bytecode cache — speeds up CLI subprocess cold start by ~1-2s
+  if (!env.NODE_COMPILE_CACHE) {
+    env.NODE_COMPILE_CACHE = join(homedir(), ".vk-cowork", ".compile-cache");
+  }
   if (provider === "openai") {
     await startProxy();
     const routeId = registerProxyRoute(openaiOverrides);
@@ -136,9 +153,7 @@ export async function promptOnce(prompt: string, opts?: PromptOnceOpts): Promise
 export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise<AsyncIterable<SDKMessage>> {
   const { env, cleanup } = await getEnvForProvider(opts.provider, opts.env, opts.openaiOverrides);
   console.log("[agent-client] runAgent called, provider:", opts.provider ?? "claude", "cwd:", opts.cwd, "resume:", opts.resume ?? "none");
-  const settingSources = opts.provider === "openai"
-    ? ([] as ("user" | "project" | "local")[])
-    : getSettingSources();
+  const settingSources = opts.settingSources ?? getSettingSources();
 
   if (opts.provider === "openai") {
     console.log(
@@ -155,6 +170,7 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
   }
 
   let iterable: AsyncIterable<SDKMessage>;
+  let lastSpawnOpts: SpawnOptions | null = null;
   try {
     iterable = await query({
       prompt,
@@ -172,6 +188,12 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
         mcpServers: opts.mcpServers,
         systemPrompt: opts.systemPrompt,
         canUseTool: opts.canUseTool,
+        agent: opts.agent,
+        agents: opts.agents,
+        spawnClaudeCodeProcess: (spawnOpts) => {
+          lastSpawnOpts = spawnOpts;
+          return spawnOrAcquire(spawnOpts);
+        },
       },
     });
   } catch (err) {
@@ -187,6 +209,7 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
         }
       } finally {
         cleanup?.();
+        if (lastSpawnOpts) schedulePreWarm(lastSpawnOpts);
       }
     }
     return withProxyCleanup();
@@ -230,6 +253,8 @@ export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise
         });
       }
       throw err;
+    } finally {
+      if (lastSpawnOpts) schedulePreWarm(lastSpawnOpts);
     }
   }
 

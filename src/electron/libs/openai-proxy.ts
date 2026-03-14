@@ -571,6 +571,7 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
   const settings = loadUserSettings();
   let token: string | null = null;
   let upstreamBase = "https://api.openai.com";
+  let upstreamPath = "/v1/responses";
 
   const routeApiKey = routeOverrides?.apiKey?.trim();
   const routeBaseUrl = routeOverrides?.baseUrl?.trim();
@@ -589,8 +590,13 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
       upstreamBase = base.replace(/\/+$/, "").replace(/\/v1$/, "");
     }
   } else {
+    // ChatGPT OAuth tokens must use the ChatGPT backend endpoint
+    // (api.openai.com/v1/responses requires api.responses.write scope which OAuth tokens lack)
     if (routeBaseUrl) {
       upstreamBase = routeBaseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
+    } else {
+      upstreamBase = "https://chatgpt.com";
+      upstreamPath = "/backend-api/codex/responses";
     }
     token = await getValidOpenAIToken();
   }
@@ -627,11 +633,12 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
   }
   const mappedModel = openAIPayload.model as string;
   const authMethod = routeApiKey ? "assistant-api-key" : (settings.openaiApiKey ? "global-api-key" : "oauth");
-  console.log(`[openai-proxy] → ${upstreamBase}/v1/responses model=${mappedModel} auth=${authMethod} route=${routeId ?? "default"}`);
+  console.log(`[openai-proxy] → ${upstreamBase}${upstreamPath} model=${mappedModel} auth=${authMethod} route=${routeId ?? "default"}`);
   let finalUsage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
 
   try {
-    const upstream = await fetch(`${upstreamBase}/v1/responses`, {
+    const tFetch = Date.now();
+    const upstream = await fetch(`${upstreamBase}${upstreamPath}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -639,6 +646,8 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
       },
       body: JSON.stringify(openAIPayload),
     });
+    const tHeaders = Date.now();
+    console.log(`[openai-proxy/timing] headers: ${tHeaders - tFetch}ms (status=${upstream.status})`);
 
     if (!upstream.ok) {
       const errText = await upstream.text().catch(() => "");
@@ -661,12 +670,19 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
       Connection: "keep-alive",
     });
 
+    let firstChunk = true;
     for await (const sseEvent of streamResponsesAPI(upstream, mappedModel, (usage) => {
       finalUsage = usage;
     })) {
+      if (firstChunk) {
+        firstChunk = false;
+        console.log(`[openai-proxy/timing] TTFT: ${Date.now() - tFetch}ms | model=${mappedModel}`);
+      }
       res.write(`event: ${sseEvent.event}\ndata: ${JSON.stringify(sseEvent.data)}\n\n`);
     }
     res.end();
+    const totalMs = Date.now() - startedAt;
+    console.log(`[openai-proxy/timing] total: ${totalMs}ms in=${finalUsage.input_tokens} out=${finalUsage.output_tokens}`);
     recordUsage({
       provider: "openai",
       model: mappedModel,
@@ -674,7 +690,7 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
       outputTokens: finalUsage.output_tokens,
       cacheReadTokens: finalUsage.cache_read_tokens,
       cacheCreationTokens: finalUsage.cache_creation_tokens,
-      latencyMs: Date.now() - startedAt,
+      latencyMs: totalMs,
       status: "ok",
     });
   } catch (error) {

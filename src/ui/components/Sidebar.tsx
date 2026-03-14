@@ -89,6 +89,7 @@ interface SidebarProps {
   onToggleTaskPanel: () => void;
   onShowSplash?: () => void;
   onOpenSop?: () => void;
+  onOpenWorkflowStore?: () => void;
   onOpenPlanTable?: () => void;
   onOpenKnowledge?: () => void;
   titleBarHeight?: number;
@@ -107,6 +108,7 @@ export function Sidebar({
   onToggleTaskPanel,
   onShowSplash,
   onOpenSop,
+  onOpenWorkflowStore,
   onOpenPlanTable,
   onOpenKnowledge,
   titleBarHeight = 0,
@@ -303,35 +305,26 @@ export function Sidebar({
               <span className="text-[11px] font-medium">团队管理</span>
             </button>
             <button
-              onClick={() => onOpenKnowledge?.()}
+              onClick={() => onOpenSkill?.()}
               className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
             >
               <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 12l10 5 10-5" />
+                <path d="M2 17l10 5 10-5" />
               </svg>
-              <span className="text-[11px] font-medium">经验/知识库</span>
+              <span className="text-[11px] font-medium">技能商店</span>
             </button>
             <button
-              onClick={() => onOpenSop?.()}
+              onClick={() => onOpenWorkflowStore?.()}
               className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
             >
               <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M9 17H7A5 5 0 017 7h2" />
-                <path d="M15 7h2a5 5 0 010 10h-2" />
-                <line x1="8" y1="12" x2="16" y2="12" />
+                <path d="M3 9l9-7 9 7" />
+                <path d="M5 10v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V10" />
+                <path d="M9 22v-6h6v6" />
               </svg>
-              <span className="text-[11px] font-medium">工作流程</span>
-            </button>
-            <button
-              onClick={() => onOpenPlanTable?.()}
-              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M3 9h18M9 3v18" />
-              </svg>
-              <span className="text-[11px] font-medium">计划中心</span>
+              <span className="text-[11px] font-medium">流程商店</span>
             </button>
             <button
               onClick={() => setShowScheduler(true)}
@@ -481,8 +474,10 @@ export function Sidebar({
         open={showAssistantManager}
         onOpenChange={setShowAssistantManager}
         onAssistantsChanged={loadAssistants}
-        onOpenSkill={onOpenSkill}
         onOpenMcp={onOpenMcp}
+        onOpenKnowledge={onOpenKnowledge}
+        onOpenSop={onOpenSop}
+        onOpenPlanTable={onOpenPlanTable}
       />
 
       <SchedulerModal open={showScheduler} onOpenChange={setShowScheduler} />

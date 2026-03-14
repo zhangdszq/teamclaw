@@ -115,8 +115,10 @@ export async function startSession(
     model?: string;
     assistantId?: string;
     assistantSkillNames?: string[];
+    assistantDiscoverySkillNames?: string[];
     assistantPersona?: string;
     assistantActivatedSkillContent?: string;
+    background?: boolean;
   },
   onEvent: StreamCallback
 ): Promise<void> {
@@ -170,6 +172,7 @@ export async function continueSession(
     model?: string;
     assistantId?: string;
     assistantSkillNames?: string[];
+    assistantDiscoverySkillNames?: string[];
     assistantActivatedSkillContent?: string;
   }
 ): Promise<void> {
@@ -199,6 +202,7 @@ export async function continueSession(
         model: options?.model,
         assistantId: options?.assistantId,
         assistantSkillNames: options?.assistantSkillNames,
+        assistantDiscoverySkillNames: options?.assistantDiscoverySkillNames,
         assistantActivatedSkillContent: options?.assistantActivatedSkillContent,
       }),
       signal: abortController.signal,

@@ -23,7 +23,7 @@ import { z } from "zod";
 import { EventEmitter } from "events";
 import { homedir } from "os";
 import { loadUserSettings } from "./user-settings.js";
-import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { buildSmartMemoryContext } from "./memory-store.js";
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
 import type { StreamMessage } from "../types.js";
@@ -34,12 +34,14 @@ import {
   buildOpenAIOverrides,
   buildQueryEnv,
   buildStructuredPersona,
+  prepareVisibleArtifact,
   buildHistoryContext,
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
   parseReplySegments,
   bufferPersistedBotMessage,
   flushBufferedBotAssistantMessage,
+  scheduleBotPostResponseTasks,
 } from "./bot-base.js";
 import { loadAssistantsConfig, patchAssistantBotOwnerIds } from "./assistants-config.js";
 import {
@@ -849,10 +851,6 @@ class FeishuConnection {
     const persistText = isStreamed ? streamedFinalText : replyText;
 
     history.push({ role: "assistant", content: persistText });
-    recordConversation(
-      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${persistText}\n`,
-      { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
-    );
 
     // Build @-mention prefix for group replies
     const mentionPrefix = forwardMentions?.length
@@ -863,6 +861,14 @@ class FeishuConnection {
     if (!isStreamed) {
       await this.sendReply(messageId, chatId, mentionPrefix + replyText);
     }
+
+    scheduleBotPostResponseTasks({
+      logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${persistText}\n`,
+      recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
+      onError: (_phase, error) => {
+        console.warn("[Feishu] Failed to persist conversation:", error);
+      },
+    });
   }
 
   // ── Typing indicator ──────────────────────────────────────────────────────────
@@ -1032,7 +1038,7 @@ class FeishuConnection {
 
     const sendFileTool = tool(
       "send_file",
-      "通过飞书将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档等。",
+      "通过飞书将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档等。发送前系统会自动将最终成品归档到助理的 outputs 目录。",
       { file_path: z.string().describe("要发送的文件的完整本地路径") },
       async (input) => {
         const result = await self.doSendFile(String(input.file_path ?? ""), messageId, chatId);
@@ -1519,10 +1525,15 @@ class FeishuConnection {
     const path = await import("path");
     const fs = await import("fs");
     const os2 = await import("os");
+    const prepared = prepareVisibleArtifact(filePath, {
+      defaultCwd: this.opts.defaultCwd,
+      assistantName: this.opts.assistantName,
+      assistantId: this.opts.assistantId,
+    });
+    if (prepared.error) return prepared.error;
 
-    if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
-
-    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const sourcePath = prepared.filePath;
+    const ext = sourcePath.split(".").pop()?.toLowerCase() ?? "";
     const isImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext);
     const IMAGE_LIMIT = 20 * 1024 * 1024;
 
@@ -1533,17 +1544,17 @@ class FeishuConnection {
       }
     };
 
-    let sendPath = filePath;
-    const stat = fs.statSync(filePath);
+    let sendPath = sourcePath;
+    const stat = fs.statSync(sourcePath);
 
     if (isImage && stat.size > IMAGE_LIMIT) {
       const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
       tempFiles.push(compressedPath);
       try {
         if (process.platform === "darwin") {
-          await execAsync(`sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`);
+          await execAsync(`sips -s format jpeg -s formatOptions 70 -Z 2000 "${sourcePath}" --out "${compressedPath}"`);
         } else {
-          await execAsync(`convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`);
+          await execAsync(`convert "${sourcePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`);
         }
         const newStat = fs.statSync(compressedPath);
         if (newStat.size <= IMAGE_LIMIT) {

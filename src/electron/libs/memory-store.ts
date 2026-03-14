@@ -270,6 +270,7 @@ export function readLongTermMemory(): string {
 export function writeLongTermMemory(content: string): void {
   ensureDirs();
   atomicWrite(LONG_TERM_FILE, content);
+  _memoryContextCache.clear();
   try { refreshRootAbstract(); } catch { /* non-blocking */ }
 }
 
@@ -284,6 +285,7 @@ export function readSessionState(): string {
 export function writeSessionState(content: string): void {
   ensureDirs();
   atomicWrite(SESSION_STATE_FILE, content);
+  _memoryContextCache.clear();
 }
 
 export function clearSessionState(): void {
@@ -304,6 +306,7 @@ export function appendDailyMemory(content: string, date?: string): void {
   const p = dailyPath(date ?? localDateStr());
   const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
   atomicWrite(p, existing ? existing + "\n" + content : content);
+  _memoryContextCache.clear();
   // Refresh root abstract after each write (non-blocking)
   try { refreshRootAbstract(); } catch { /* ignore */ }
 }
@@ -1243,6 +1246,12 @@ async function queryKnowledgeViaQmd(prompt: string, topK = 3): Promise<QmdHit[]>
  *   - Full SOP content (names+descriptions are in .abstract)
  *   - Insight files
  */
+// ─── Memory Context TTL Cache ────────────────────────────────
+// Per-assistant cache to avoid repeated file reads for parallel/heartbeat sessions.
+// Keyed by `${assistantId}:${sessionCwd}`, TTL 30s.
+const _memoryContextCache = new Map<string, { result: string; ts: number }>();
+const MEMORY_CONTEXT_TTL_MS = 30_000;
+
 export async function buildSmartMemoryContext(
   prompt: string,
   assistantId?: string,
@@ -1250,6 +1259,12 @@ export async function buildSmartMemoryContext(
   opts?: { skipDailyLog?: boolean },
 ): Promise<string> {
   ensureDirs();
+
+  const cacheKey = `${assistantId ?? ""}:${sessionCwd ?? ""}`;
+  const cached = _memoryContextCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < MEMORY_CONTEXT_TTL_MS) {
+    return cached.result;
+  }
 
   const scoped = assistantId ? new ScopedMemory(assistantId) : null;
 
@@ -1364,7 +1379,9 @@ export async function buildSmartMemoryContext(
   parts.push("");
   parts.push(MEMORY_PROTOCOL);
 
-  return parts.join("\n");
+  const result = parts.join("\n");
+  _memoryContextCache.set(cacheKey, { result, ts: Date.now() });
+  return result;
 }
 
 /** Legacy alias — kept for backward compat */

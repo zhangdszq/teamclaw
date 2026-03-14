@@ -12,6 +12,11 @@ export type HeartbeatReport = {
   assistantName: string;
   text: string;
   ts: number;
+  status?: "healthy" | "heartbeat_running" | "heartbeat_failed" | "heartbeat_unknown";
+  noAction?: boolean;
+  source?: "json" | "legacy" | "missing";
+  notificationAttempts?: number;
+  notificationSuccesses?: number;
 };
 
 export type SessionView = {

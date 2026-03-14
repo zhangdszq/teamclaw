@@ -32,6 +32,7 @@ export function createSession(options: {
   externalId?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  assistantDiscoverySkillNames?: string[];
   background?: boolean;
 }): Session {
   const id = crypto.randomUUID();
@@ -47,6 +48,7 @@ export function createSession(options: {
     lastPrompt: options.prompt,
     assistantId: options.assistantId,
     assistantSkillNames: options.assistantSkillNames ?? [],
+    assistantDiscoverySkillNames: options.assistantDiscoverySkillNames ?? options.assistantSkillNames ?? [],
     background: options.background,
     pendingPermissions: new Map(),
     createdAt: now,

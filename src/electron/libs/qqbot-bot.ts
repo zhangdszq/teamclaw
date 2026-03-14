@@ -13,10 +13,11 @@ import WebSocket from "ws";
 import { EventEmitter } from "events";
 import { homedir } from "os";
 import { readFileSync } from "fs";
+import { basename } from "path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { promptOnce, runAgent } from "./agent-client.js";
-import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { buildSmartMemoryContext } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
@@ -30,6 +31,7 @@ import {
   buildOpenAIOverrides,
   buildQueryEnv,
   buildStructuredPersona as buildStructuredPersonaBase,
+  prepareVisibleArtifact,
   buildHistoryContext,
   isDuplicate as isDuplicateMsg,
   markProcessed as markProcessedMsg,
@@ -37,6 +39,7 @@ import {
   extractPartialText,
   bufferPersistedBotMessage,
   flushBufferedBotAssistantMessage,
+  scheduleBotPostResponseTasks,
 } from "./bot-base.js";
 import {
   buildActivatedSkillSection,
@@ -892,14 +895,22 @@ class QQBotConnection {
 
     history.push({ role: "assistant", content: replyText });
     emitSessionUpdate(sessionId, { status: "idle" });
-    recordConversation(
-      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-      { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
-    );
-    updateBotSessionTitle(sessionId, history, "[QQ]").catch(() => {});
+    const historySnapshot = history.slice();
 
     // Deliver response
     await this.deliverReply(replyText, isGroup, c2cOpenId, groupOpenId, msgId);
+    scheduleBotPostResponseTasks({
+      logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+      recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
+      updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[QQ]"),
+      onError: (phase, error) => {
+        if (phase === "updateTitle") {
+          console.warn("[QQBot] Failed to update session title:", error);
+          return;
+        }
+        console.warn("[QQBot] Failed to persist conversation:", error);
+      },
+    });
   }
 
   private async runClaudeQuery(
@@ -928,23 +939,33 @@ class QQBotConnection {
     const self = this;
     const sendFileTool = tool(
       "send_file",
-      "发送文件给用户。支持图片（png/jpg/gif）等。",
+      "发送文件给用户。支持图片（png/jpg/gif）等。发送前系统会自动将最终成品归档到助理的 outputs 目录。",
       { file_path: z.string().describe("本地文件绝对路径") },
       async (input: { file_path: string }) => {
         try {
           const token = await getAccessToken(self.opts.appId, self.opts.clientSecret);
-          const ext = input.file_path.split(".").pop()?.toLowerCase() ?? "";
+          const prepared = prepareVisibleArtifact(String(input.file_path ?? ""), {
+            defaultCwd: self.opts.defaultCwd,
+            assistantName: self.opts.assistantName,
+            assistantId: self.opts.assistantId,
+          });
+          if (prepared.error) {
+            return { content: [{ type: "text" as const, text: prepared.error }] };
+          }
+
+          const sendPath = prepared.filePath;
+          const ext = sendPath.split(".").pop()?.toLowerCase() ?? "";
           const isImage = ["png", "jpg", "jpeg", "gif", "webp", "bmp"].includes(ext);
 
           if (isImage) {
-            const fileBuffer = readFileSync(input.file_path);
+            const fileBuffer = readFileSync(sendPath);
             const base64 = fileBuffer.toString("base64");
             if (isGroup && groupOpenId) {
               await sendGroupImageMessage(token, groupOpenId, base64, msgId);
             } else if (c2cOpenId) {
               await sendC2CImageMessage(token, c2cOpenId, base64, msgId);
             }
-            return { content: [{ type: "text" as const, text: `已发送图片: ${input.file_path}` }] };
+            return { content: [{ type: "text" as const, text: `已发送图片: ${basename(sendPath)}` }] };
           }
 
           return { content: [{ type: "text" as const, text: `QQ Bot 暂不支持发送此类文件: ${ext}` }] };

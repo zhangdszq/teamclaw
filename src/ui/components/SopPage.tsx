@@ -21,6 +21,7 @@ interface SopPageProps {
   onOpenPlanTable?: (target?: { sopName?: string; sopId?: string; historyRunId?: string }) => void;
   onNavigateToSession?: (sessionId: string) => void;
   titleBarHeight?: number;
+  initialShowStore?: boolean;
 }
 
 type WorkflowTab = "lesson_cycle" | "monthly_settlement";
@@ -776,7 +777,13 @@ function SopSchedulePopover({
 
 // ═══ Main Component ═══
 
-export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBarHeight = 0 }: SopPageProps) {
+export function SopPage({
+  onClose,
+  onOpenPlanTable,
+  onNavigateToSession,
+  titleBarHeight = 0,
+  initialShowStore = false,
+}: SopPageProps) {
   const [activeWorkflowTab] = useState<WorkflowTab>("lesson_cycle");
   const [selectedSopId, setSelectedSopId] = useState<string>("");
   const [sopList, setSopList] = useState<SopItem[]>(FALLBACK_SOP_LIST);
@@ -789,7 +796,7 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowRunMap, setWorkflowRunMap] = useState<Record<string, WorkflowRun | null>>({});
   const [showCheckPanel, setShowCheckPanel] = useState(false);
-  const [showStore, setShowStore] = useState(false);
+  const [showStore, setShowStore] = useState(initialShowStore);
   const [creatingId, setCreatingId] = useState<string | null>(null);
   const [planTableOpeningSopId, setPlanTableOpeningSopId] = useState<string | null>(null);
   const [workflowHistoryModal, setWorkflowHistoryModal] = useState<WorkflowHistoryModalState | null>(null);
@@ -803,6 +810,10 @@ export function SopPage({ onClose, onOpenPlanTable, onNavigateToSession, titleBa
   const [schedulePopover, setSchedulePopover] = useState<{ stageId?: string; task: ScheduledTask | null } | null>(null);
   const sopScheduleBtnRef = useRef<HTMLButtonElement | null>(null);
   const [sopSchedules, setSopSchedules] = useState<ScheduledTask[]>([]);
+
+  useEffect(() => {
+    setShowStore(initialShowStore);
+  }, [initialShowStore]);
 
   const loadSopSchedules = useCallback(async () => {
     if (!selectedSopId) return;

@@ -62,11 +62,25 @@ function getBigramOverlapScore(prompt: string, skill: SkillMatchCandidate): numb
   return Math.min(overlap, 5);
 }
 
+function getNameTokenScore(prompt: string, skillName: string): number {
+  const lowerPrompt = prompt.toLowerCase();
+  const tokens = skillName.toLowerCase().split(/[-_]+/).filter((t) => t.length >= 2);
+  let bonus = 0;
+  for (const token of tokens) {
+    if (lowerPrompt.includes(token)) {
+      bonus += /^[a-z0-9]+$/.test(token) && token.length >= 4 ? 2 : 1;
+    }
+  }
+  return bonus;
+}
+
 function scoreSkillMatch(prompt: string, skill: SkillMatchCandidate): number {
   const lowerPrompt = prompt.toLowerCase();
   let score = 0;
 
   if (lowerPrompt.includes(skill.name.toLowerCase())) score += 5;
+
+  score += getNameTokenScore(lowerPrompt, skill.name);
 
   const label = skill.label?.trim();
   if (label && lowerPrompt.includes(label.toLowerCase())) score += 6;
@@ -113,25 +127,22 @@ export function findBestSkillMatch<T extends SkillMatchCandidate>(
 ): T | null {
   if (availableSkills.length === 0) return null;
 
-  const sortedSkills = [...availableSkills].sort((left, right) =>
-    left.name.localeCompare(right.name, "en"),
-  );
+  const scored = availableSkills.map((skill) => ({
+    skill,
+    score: scoreSkillMatch(prompt, skill),
+  }));
 
-  let best: T | null = null;
-  let bestScore = 0;
-  let secondBestScore = 0;
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.skill.name.length !== b.skill.name.length) return a.skill.name.length - b.skill.name.length;
+    return a.skill.name.localeCompare(b.skill.name, "en");
+  });
 
-  for (const skill of sortedSkills) {
-    const score = scoreSkillMatch(prompt, skill);
-    if (score > bestScore) {
-      secondBestScore = bestScore;
-      bestScore = score;
-      best = skill;
-      continue;
-    }
-    if (score > secondBestScore) secondBestScore = score;
-  }
+  const best = scored[0];
+  if (!best || best.score < MIN_MATCH_SCORE) return null;
 
-  if (bestScore === secondBestScore && bestScore < MIN_UNAMBIGUOUS_TIE_SCORE) return null;
-  return bestScore >= MIN_MATCH_SCORE ? best : null;
+  const secondBestScore = scored.length > 1 ? scored[1].score : 0;
+  if (best.score === secondBestScore && best.score < MIN_UNAMBIGUOUS_TIE_SCORE) return null;
+
+  return best.skill;
 }

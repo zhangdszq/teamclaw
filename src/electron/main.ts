@@ -97,7 +97,7 @@ import {
   getDefaultLogDir,
   type ScheduledTask
 } from "./libs/scheduler/index.js";
-import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer, readLastCompactionAt } from "./libs/heartbeat.js";
+import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer, readLastCompactionAt, getHeartbeatSnapshots } from "./libs/heartbeat.js";
 import { loadPlanItems, updatePlanItem, upsertPlanItem } from "./libs/plan-store.js";
 import {
     loadWorkflowRun,
@@ -957,6 +957,7 @@ app.on("ready", async () => {
         const config = loadAssistantsConfig();
         return {
             ...config,
+            heartbeatSnapshots: getHeartbeatSnapshots(),
             defaults: {
                 defaultProvider: resolveDefaultProvider(),
                 persona: DEFAULT_PERSONA,
@@ -3586,11 +3587,13 @@ app.on("before-quit", () => {
     isQuitting = true;
 });
 
-// Stop embedded API, proxy, and unregister shortcuts when app is quitting
+// Stop embedded API, proxy, pre-warm pool, and unregister shortcuts when app is quitting
 app.on("will-quit", async () => {
     globalShortcut.unregisterAll();
     console.log("Stopping embedded API server...");
     stopEmbeddedApi();
     const { stopProxy } = await import("./libs/openai-proxy.js");
     stopProxy();
+    const { cleanupPool } = await import("./libs/subprocess-pool.js");
+    cleanupPool();
 });

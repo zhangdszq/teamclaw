@@ -9,9 +9,11 @@
  *   - ConvMessage / BaseBotOptions — shared types
  */
 
+import { copyFileSync, existsSync, mkdirSync } from "fs";
+import { basename, extname, isAbsolute, join, relative, resolve } from "path";
 import { loadUserSettings } from "./user-settings.js";
 import { getEnhancedEnv } from "./util.js";
-import { getRecentConversationBlocks } from "./memory-store.js";
+import { getRecentConversationBlocks, recordConversation } from "./memory-store.js";
 import type { StreamMessage } from "../types.js";
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
@@ -129,7 +131,8 @@ export const FILE_SEND_RULE =
   "当你生成了任何文件（音频、图片、视频、PDF、Excel 等），必须调用 `send_file` 工具将文件发送给用户。\n" +
   "- 不要说「已通过钉钉/其他渠道发送」\n" +
   "- 不要只告诉用户文件路径\n" +
-  "- 直接调用 send_file(file_path='/tmp/xxx') 发送";
+  "- 优先将最终成品保存到当前工作区的 `outputs/<助理名>/` 目录，再调用 `send_file` 发送\n" +
+  "- 如果文件先生成在 `/tmp` 等临时目录，发送时系统会自动归档到输出目录";
 
 /**
  * The "图文混排规则" section — injected via applyAssistantContext for all channels (App + Bot).
@@ -143,6 +146,81 @@ export const IMAGE_INLINE_RULE =
   "- 图片应出现在文字对应位置，不要只列文件路径。\n" +
   "- Windows 路径示例：`![截图](C:/Users/xxx/AppData/Local/Temp/shot.png)`\n" +
   "- macOS/Linux 路径示例：`![关键截图](/tmp/shot-123.png)`";
+
+export type VisibleArtifactOptions = {
+  defaultCwd?: string;
+  assistantName?: string;
+  assistantId?: string;
+};
+
+export type VisibleArtifactResult =
+  | { filePath: string; originalPath: string; archivedPath?: string; error?: undefined }
+  | { filePath: string; originalPath: string; archivedPath?: string; error: string };
+
+export function sanitizeArtifactPathSegment(value?: string): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^\w\-\u4e00-\u9fff]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+export function getAssistantOutputDir(opts: VisibleArtifactOptions): string | null {
+  const cwd = opts.defaultCwd?.trim();
+  if (!cwd) return null;
+  const dirName = sanitizeArtifactPathSegment(opts.assistantName)
+    || sanitizeArtifactPathSegment(opts.assistantId)
+    || "assistant";
+  return join(resolve(cwd), "outputs", dirName);
+}
+
+function isPathInsideDir(targetDir: string, targetPath: string): boolean {
+  const rel = relative(targetDir, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function buildUniqueArtifactPath(targetDir: string, fileName: string): string {
+  const ext = extname(fileName);
+  const stem = basename(fileName, ext);
+  let candidate = join(targetDir, fileName);
+  let index = 2;
+  while (existsSync(candidate)) {
+    candidate = join(targetDir, `${stem}-${index}${ext}`);
+    index++;
+  }
+  return candidate;
+}
+
+export function prepareVisibleArtifact(
+  filePath: string,
+  opts: VisibleArtifactOptions = {},
+): VisibleArtifactResult {
+  const rawPath = String(filePath ?? "").trim();
+  const originalPath = rawPath
+    ? (isAbsolute(rawPath) ? resolve(rawPath) : resolve(opts.defaultCwd?.trim() || process.cwd(), rawPath))
+    : rawPath;
+
+  if (!originalPath || !existsSync(originalPath)) {
+    return {
+      filePath: originalPath || rawPath,
+      originalPath: originalPath || rawPath,
+      error: `文件不存在: ${rawPath || filePath}`,
+    };
+  }
+
+  const outputDir = getAssistantOutputDir(opts);
+  if (!outputDir) {
+    return { filePath: originalPath, originalPath };
+  }
+
+  if (isPathInsideDir(outputDir, originalPath)) {
+    return { filePath: originalPath, originalPath };
+  }
+
+  mkdirSync(outputDir, { recursive: true });
+  const archivedPath = buildUniqueArtifactPath(outputDir, basename(originalPath));
+  copyFileSync(originalPath, archivedPath);
+  return { filePath: archivedPath, originalPath, archivedPath };
+}
 
 // ─── parseReplySegments ───────────────────────────────────────────────────────
 
@@ -232,6 +310,33 @@ export function buildHistoryContext(
     "⚠️ 如历史中出现文件路径，那是以前的文件，与当前任务无关。",
     lines.join("\n"),
   ].join("\n");
+}
+
+export type BotPostResponseTasks = {
+  logEntry: string;
+  recordOpts: { assistantId?: string; assistantName?: string; channel?: string };
+  updateTitle?: () => Promise<void> | void;
+  onError?: (phase: "recordConversation" | "updateTitle", error: unknown) => void;
+};
+
+/**
+ * Keep bot reply delivery on the critical path, and move log/title work
+ * to the next tick so the user sees the answer first.
+ */
+export function scheduleBotPostResponseTasks(opts: BotPostResponseTasks): void {
+  const timer = setTimeout(() => {
+    try {
+      recordConversation(opts.logEntry, opts.recordOpts);
+    } catch (error) {
+      opts.onError?.("recordConversation", error);
+    }
+
+    if (!opts.updateTitle) return;
+    void Promise.resolve(opts.updateTitle()).catch((error) => {
+      opts.onError?.("updateTitle", error);
+    });
+  }, 0);
+  timer.unref?.();
 }
 
 // ─── Message deduplication ────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ import { promptOnce, runAgent } from "./agent-client.js";
 import { EventEmitter } from "events";
 import { homedir } from "os";
 import { loadUserSettings } from "./user-settings.js";
-import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { buildSmartMemoryContext } from "./memory-store.js";
 import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-config.js";
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
@@ -34,6 +34,7 @@ import {
   FILE_PATH_RE,
   FILE_SEND_RULE,
   buildOpenAIOverrides,
+  prepareVisibleArtifact,
   buildQueryEnv,
   buildStructuredPersona as buildStructuredPersonaBase,
   buildHistoryContext,
@@ -43,6 +44,7 @@ import {
   extractPartialText,
   bufferPersistedBotMessage,
   flushBufferedBotAssistantMessage,
+  scheduleBotPostResponseTasks,
   MediaGroupBuffer,
   type FlushedMediaGroup,
 } from "./bot-base.js";
@@ -501,6 +503,127 @@ async function downloadTelegramFile(
   }
 }
 
+function shouldUseHalfDuplex(body: unknown): boolean {
+  if (body == null) return false;
+  if (typeof body === "string") return false;
+  if (body instanceof ArrayBuffer) return false;
+  if (ArrayBuffer.isView(body)) return false;
+  if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) return false;
+  if (typeof FormData !== "undefined" && body instanceof FormData) return false;
+  if (typeof Blob !== "undefined" && body instanceof Blob) return false;
+  return true;
+}
+
+function formatTelegramFetchError(err: unknown): string {
+  if (err instanceof HttpError) {
+    const inner = formatTelegramFetchError(err.error);
+    return inner && inner !== err.message ? `${err.message} (${inner})` : err.message;
+  }
+  if (!(err instanceof Error)) return String(err);
+  const typedErr = err as Error & { cause?: unknown; code?: string };
+  const parts = [err.message];
+  if (typedErr.code && !err.message.includes(typedErr.code)) {
+    parts.push(`code=${typedErr.code}`);
+  }
+  const cause = typedErr.cause;
+  if (cause instanceof Error && cause.message) {
+    const nested = formatTelegramFetchError(cause);
+    if (nested && nested !== err.message) parts.push(`cause=${nested}`);
+    return parts.join(" | ");
+  }
+  if (cause != null) {
+    parts.push(`cause=${String(cause)}`);
+    return parts.join(" | ");
+  }
+  return parts.join(" | ");
+}
+
+type TelegramClientFetch = NonNullable<NonNullable<ConstructorParameters<typeof Bot>[1]>["client"]>["fetch"];
+
+async function createTelegramFetch(proxyUrl?: string): Promise<TelegramClientFetch> {
+  const undici = await import("undici");
+  const dispatcher = proxyUrl ? new undici.ProxyAgent(proxyUrl) : undefined;
+
+  const telegramFetch: typeof fetch = async (input, init) => {
+    const requestInit: Record<string, unknown> = { ...(init ?? {}) };
+
+    if (dispatcher) {
+      requestInit.dispatcher = dispatcher;
+    }
+
+    if (init?.signal) {
+      if (init.signal.aborted) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
+      const ac = new AbortController();
+      init.signal.addEventListener("abort", () => ac.abort((init.signal as AbortSignal & { reason?: unknown }).reason), { once: true });
+      requestInit.signal = ac.signal;
+    }
+
+    if (shouldUseHalfDuplex(requestInit.body)) {
+      requestInit.duplex = "half";
+    }
+
+    return undici.fetch(input as Parameters<typeof undici.fetch>[0], requestInit as Parameters<typeof undici.fetch>[1]) as unknown as Response;
+  };
+
+  return telegramFetch as unknown as TelegramClientFetch;
+}
+
+async function sendTelegramVideoDirect(params: {
+  token: string;
+  chatId: string;
+  fileName: string;
+  fileBuffer: Buffer;
+  contentType: string;
+  proxyUrl?: string;
+  replyToMessageId?: number;
+}): Promise<void> {
+  const undici = await import("undici");
+  const crypto = await import("crypto");
+  const dispatcher = params.proxyUrl ? new undici.ProxyAgent(params.proxyUrl) : undefined;
+  const boundary = `----vk-tg-${crypto.randomBytes(12).toString("hex")}`;
+  const parts: Buffer[] = [];
+  const pushText = (value: string) => parts.push(Buffer.from(value, "utf8"));
+
+  pushText(`--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${params.chatId}\r\n`);
+  pushText(`--${boundary}\r\nContent-Disposition: form-data; name="supports_streaming"\r\n\r\ntrue\r\n`);
+  if (params.replyToMessageId) {
+    pushText(`--${boundary}\r\nContent-Disposition: form-data; name="reply_to_message_id"\r\n\r\n${params.replyToMessageId}\r\n`);
+  }
+  pushText(
+    `--${boundary}\r\n`
+    + `Content-Disposition: form-data; name="video"; filename="${params.fileName}"\r\n`
+    + `Content-Type: ${params.contentType}\r\n\r\n`,
+  );
+  parts.push(params.fileBuffer);
+  pushText(`\r\n--${boundary}--\r\n`);
+
+  const body = Buffer.concat(parts);
+  const resp = await undici.fetch(`https://api.telegram.org/bot${params.token}/sendVideo`, {
+    method: "POST",
+    headers: {
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+      "content-length": String(body.length),
+    },
+    body,
+    dispatcher,
+  });
+
+  const text = await resp.text();
+  let parsed: { ok?: boolean; description?: string } | null = null;
+  try {
+    parsed = JSON.parse(text) as { ok?: boolean; description?: string };
+  } catch {
+    parsed = null;
+  }
+
+  if (!resp.ok || !parsed?.ok) {
+    const detail = parsed?.description || text || `${resp.status} ${resp.statusText}`;
+    throw new Error(`sendVideo failed: ${detail}`);
+  }
+}
+
 // ─── TelegramConnection ──────────────────────────────────────────────────────
 
 class TelegramConnection {
@@ -543,67 +666,21 @@ class TelegramConnection {
         || undefined;
 
       this.effectiveProxyUrl = proxyUrl;
-
-      let proxyDispatcher: import("undici").Dispatcher | undefined;
-      if (proxyUrl) {
-        const undici = await import("undici");
-        proxyDispatcher = new undici.ProxyAgent(proxyUrl);
-        console.log(`[Telegram] Using proxy: ${proxyUrl}`);
-      }
-
+      botConfig.client = { fetch: await createTelegramFetch(proxyUrl) };
+      if (proxyUrl) console.log(`[Telegram] Using proxy: ${proxyUrl}`);
       this.bot = new Bot(this.opts.token, botConfig);
 
-      // Electron's built-in fetch ignores undici dispatcher, so we intercept
-      // all grammY API calls and route them through undici.fetch + ProxyAgent.
-      if (proxyDispatcher) {
-        const dispatcher = proxyDispatcher;
-        const undiciModule = await import("undici");
-        const { InputFile } = await import("grammy");
-
-        this.bot.api.config.use(async (_prev, method, payload, signal) => {
-          // File upload methods contain InputFile instances which cannot be JSON-serialized.
-          // Fall back to grammY's native multipart handler for these methods.
-          const isFileUpload = payload != null && Object.values(payload as object).some((v) => v instanceof InputFile);
-          if (isFileUpload) {
-            if (method !== "getUpdates") console.log(`[Telegram] API call (native): ${method}`);
-            return _prev(method, payload, signal);
-          }
-
-          const url = `https://api.telegram.org/bot${this.bot!.token}/${method}`;
-          const body = payload !== undefined ? JSON.stringify(payload) : undefined;
-          if (method !== "getUpdates") {
-            console.log(`[Telegram] API call: ${method}`);
-          }
-          // Bridge AbortSignal: Electron's AbortSignal is incompatible with undici's,
-          // so create a fresh controller and wire up the abort event.
-          let fetchSignal: AbortSignal | undefined;
-          if (signal) {
-            if (signal.aborted) {
-              throw new DOMException("The operation was aborted.", "AbortError");
-            }
-            const ac = new AbortController();
-            signal.addEventListener("abort", () => ac.abort((signal as any).reason), { once: true });
-            fetchSignal = ac.signal;
-          }
-          try {
-            const resp = await undiciModule.fetch(url, {
-              method: "POST",
-              headers: body ? { "Content-Type": "application/json" } : undefined,
-              body,
-              dispatcher,
-              signal: fetchSignal,
-            });
-            const json = await resp.json() as any;
-            if (!json.ok && method !== "getUpdates") {
-              console.error(`[Telegram] API error ${method}:`, json.description);
-            }
-            return json;
-          } catch (err) {
-            console.error(`[Telegram] API fetch error ${method}:`, err instanceof Error ? err.message : err);
-            throw err;
-          }
-        });
-      }
+      this.bot.api.config.use(async (prev, method, payload, signal) => {
+        if (method !== "getUpdates") {
+          console.log(`[Telegram] API call: ${method}`);
+        }
+        try {
+          return await prev(method, payload, signal);
+        } catch (err) {
+          console.error(`[Telegram] API fetch error ${method}:`, formatTelegramFetchError(err));
+          throw err;
+        }
+      });
 
       const me = await this.bot.api.getMe();
       this.botUsername = me.username ?? "";
@@ -1221,14 +1298,22 @@ class TelegramConnection {
 
     const replyText = result.text;
     history.push({ role: "assistant", content: replyText });
-    recordConversation(
-      `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-      { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "Telegram" },
-    );
-    updateBotSessionTitle(sessionId, history, "[Telegram]").catch((e) => console.warn("[Telegram] Failed to update session title:", e));
+    const historySnapshot = history.slice();
 
     // Finalize: deliver the response
     await this.finalizeResponse(ctx, chatId, replyText, result.draftMessageId);
+    scheduleBotPostResponseTasks({
+      logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+      recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "Telegram" },
+      updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[Telegram]"),
+      onError: (phase, error) => {
+        if (phase === "updateTitle") {
+          console.warn("[Telegram] Failed to update session title:", error);
+          return;
+        }
+        console.warn("[Telegram] Failed to persist conversation:", error);
+      },
+    });
   }
 
   /** Edit the draft or send chunked final response */
@@ -1483,7 +1568,7 @@ class TelegramConnection {
 
     const sendFileTool = tool(
       "send_file",
-      "通过 Telegram 将本地文件直接发送给当前对话的用户。支持所有文件类型：图片（jpg/png）、音频（mp3/m4a/wav/aac）、视频（mp4/mov）、文档（pdf/xlsx/docx）、压缩包等。生成任何文件后必须立即调用此工具发送，不要通过其他渠道发送。",
+      "通过 Telegram 将本地文件直接发送给当前对话的用户。支持所有文件类型：图片（jpg/png）、音频（mp3/m4a/wav/aac）、视频（mp4/mov）、文档（pdf/xlsx/docx）、压缩包等。生成任何文件后必须立即调用此工具发送，不要通过其他渠道发送。发送前系统会自动将最终成品归档到助理的 outputs 目录。",
       { file_path: z.string().describe("要发送的文件的完整本地路径，例如 /tmp/voice.m4a") },
       async (input) => {
         const result = await self.doSendFile(String(input.file_path ?? ""), ctx);
@@ -1498,11 +1583,16 @@ class TelegramConnection {
   private async doSendFile(filePath: string, ctx: Context): Promise<string> {
     const fs = await import("fs");
     const path = await import("path");
+    const prepared = prepareVisibleArtifact(filePath, {
+      defaultCwd: this.opts.defaultCwd,
+      assistantName: this.opts.assistantName,
+      assistantId: this.opts.assistantId,
+    });
+    if (prepared.error) return prepared.error;
 
-    if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
-
-    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-    const fileName = path.basename(filePath);
+    const sendPath = prepared.filePath;
+    const ext = sendPath.split(".").pop()?.toLowerCase() ?? "";
+    const fileName = path.basename(sendPath);
 
     const isImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext);
     const isAudio = ["mp3", "m4a", "aac", "flac", "wav", "wma", "ogg"].includes(ext);
@@ -1510,25 +1600,41 @@ class TelegramConnection {
     const isVideo = ["mp4", "mov", "avi", "mkv", "webm", "flv", "wmv"].includes(ext);
 
     try {
-      const fileBuffer = fs.readFileSync(filePath);
+      const fileBuffer = fs.readFileSync(sendPath);
       const { InputFile } = await import("grammy");
-      const inputFile = new InputFile(fileBuffer, fileName);
+      const makeInputFile = () => new InputFile(fileBuffer, fileName);
 
       if (isImage) {
-        await ctx.replyWithPhoto(inputFile);
+        await ctx.replyWithPhoto(makeInputFile());
       } else if (isVoice) {
-        await ctx.replyWithVoice(inputFile);
+        await ctx.replyWithVoice(makeInputFile());
       } else if (isAudio) {
-        await ctx.replyWithAudio(inputFile);
+        await ctx.replyWithAudio(makeInputFile());
       } else if (isVideo) {
-        await ctx.replyWithVideo(inputFile);
+        if (!this.bot) throw new Error("Telegram bot 未初始化");
+        const videoContentType = ext === "mov" ? "video/quicktime"
+          : ext === "webm" ? "video/webm"
+          : ext === "mkv" ? "video/x-matroska"
+          : ext === "avi" ? "video/x-msvideo"
+          : ext === "wmv" ? "video/x-ms-wmv"
+          : ext === "flv" ? "video/x-flv"
+          : "video/mp4";
+        await sendTelegramVideoDirect({
+          token: this.bot.token,
+          chatId: String(ctx.chat!.id),
+          fileName,
+          fileBuffer,
+          contentType: videoContentType,
+          proxyUrl: this.effectiveProxyUrl,
+          replyToMessageId: ctx.message?.message_id,
+        });
       } else {
         // PDF, Excel, Word, zip, txt, etc.
-        await ctx.replyWithDocument(inputFile);
+        await ctx.replyWithDocument(makeInputFile());
       }
       return `文件已发送: ${fileName}`;
     } catch (err) {
-      return `发送失败: ${err instanceof Error ? err.message : String(err)}`;
+      return `发送失败: ${formatTelegramFetchError(err)}`;
     }
   }
 

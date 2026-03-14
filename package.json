@@ -3,7 +3,7 @@
   "productName": "AI Team",
   "private": true,
   "license": "UNLICENSED",
-  "version": "0.0.78",
+  "version": "0.0.79",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {

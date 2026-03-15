@@ -5,6 +5,7 @@ import type { ClientEvent } from "../types.js";
 import { loadAssistantsConfig, type AssistantConfig } from "./assistants-config.js";
 import { readRecentNotified } from "./notification-log.js";
 import { recordHeartbeatMetric } from "./heartbeat-metrics.js";
+import { listAssistantTasks } from "./memory-store.js";
 
 type SessionRunner = (event: ClientEvent) => Promise<void>;
 export type HeartbeatResultSource = "json" | "legacy" | "missing";
@@ -66,6 +67,7 @@ const COMPACT_LAST_RUN_FILE = join(MEMORY_ROOT, "insights", ".last-run");
 
 /** Key used for the compaction currently in progress (to be written on success). */
 let pendingCompactKey = "";
+let pendingCompactionTargets: Array<{ path: string; beforeMtime: number }> = [];
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
@@ -84,9 +86,34 @@ function getAssistantDailyPath(assistantId: string, date?: string): string {
   return join(MEMORY_ROOT, "assistants", assistantId, "daily", `${date ?? localDateStr()}.md`);
 }
 
+function getAssistantTasksPath(assistantId: string): string {
+  return join(MEMORY_ROOT, "assistants", assistantId, "tasks.json");
+}
+
 function resolveAssistantName(assistantId: string): string {
   const assistant = loadAssistantsConfig().assistants.find((item) => item.id === assistantId);
   return assistant?.name ?? assistantId;
+}
+
+function buildCompactionTargetPaths(assistants: AssistantConfig[], yearMonth: string): string[] {
+  return [
+    join(MEMORY_ROOT, "insights", `${yearMonth}.md`),
+    ...assistants.map((assistant) => join(MEMORY_ROOT, "assistants", assistant.id, "insights", `${yearMonth}.md`)),
+  ];
+}
+
+function captureCompactionTargets(assistants: AssistantConfig[], yearMonth: string): Array<{ path: string; beforeMtime: number }> {
+  return buildCompactionTargetPaths(assistants, yearMonth).map((path) => ({
+    path,
+    beforeMtime: existsSync(path) ? statSync(path).mtimeMs : 0,
+  }));
+}
+
+function hasVerifiedCompactionWrites(): boolean {
+  return pendingCompactionTargets.some(({ path, beforeMtime }) => {
+    if (!existsSync(path)) return false;
+    return statSync(path).mtimeMs > beforeMtime;
+  });
 }
 
 // ── ISO week helpers ──────────────────────────────────────────────────────────
@@ -288,19 +315,29 @@ export function buildHeartbeatPrompt(assistant: AssistantConfig): string {
     pendingAssistantMemoryOffset.delete(assistant.id);
   }
 
+  const pendingTasks = listAssistantTasks(assistant.id);
+  if (pendingTasks.length > 0) {
+    const lines = pendingTasks.slice(0, 20).map((task) => {
+      const due = task.dueDate ? ` | 截止 ${task.dueDate}` : "";
+      return `- [${task.id}] ${task.title} | 状态 ${task.status}${due}`;
+    });
+    sections.push(`## 结构化未完成任务\n${lines.join("\n")}`);
+  }
+
   // Recent notification history to avoid repeating
   const recentNotified = readRecentNotified(assistant.id);
   if (recentNotified.length > 0) {
     const lines = recentNotified.map((e) => {
       const time = new Date(e.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-      return `- ${time}  ${e.summary}`;
+      const taskLabel = e.taskId ? ` [task:${e.taskId}]` : "";
+      return `- ${time}${taskLabel} ${e.summary}`;
     });
     sections.push(`## 今日已推送通知（不要重复汇报以下内容）\n${lines.join("\n")}`);
   }
 
   sections.push(
     "请根据以上规则，结合今日记忆中的待办/未完成事项执行心跳巡检。\n" +
-    "如有需要通知的事项，使用 send_notification 工具主动推送给用户（不要设置 title 参数，直接在 text 中写内容）。\n" +
+    "如有需要通知的事项，使用 send_notification 工具主动推送给用户（不要设置 title 参数，直接在 text 中写内容；若对应结构化任务，请尽量传 task_id）。\n" +
     "输出结尾必须包含一行结构化回执：HEARTBEAT_RESULT: {\"noAction\": true|false, \"reason\": \"一句话原因\"}。\n" +
     "若没有「已推送通知」列表之外的新情况，必须输出 noAction=true（并可附带 <no-action> 作为兼容兜底），禁止重复汇报。",
   );
@@ -420,6 +457,8 @@ export function resetHeartbeatStateForTests(): void {
   pendingMemoryOffset.clear();
   pendingAssistantMemoryOffset.clear();
   heartbeatSnapshots.clear();
+  pendingCompactKey = "";
+  pendingCompactionTargets = [];
 }
 
 /**
@@ -427,14 +466,18 @@ export function resetHeartbeatStateForTests(): void {
  * Only persists the compact key on success, so failed compactions are retried.
  */
 export function onCompactionResult(succeeded: boolean): void {
-  if (succeeded && pendingCompactKey) {
+  const verified = succeeded && hasVerifiedCompactionWrites();
+  if (verified && pendingCompactKey) {
     writeLastCompactKey(pendingCompactKey);
     writeLastRunMetadata(pendingCompactKey);
     console.log(`[Heartbeat] Memory compaction succeeded, persisted key: ${pendingCompactKey}`);
+  } else if (succeeded) {
+    console.warn("[Heartbeat] Memory compaction finished without updating target insight files; will retry next opportunity");
   } else if (!succeeded) {
     console.warn("[Heartbeat] Memory compaction failed or errored, will retry next opportunity");
   }
   pendingCompactKey = "";
+  pendingCompactionTargets = [];
 }
 
 // ── Heartbeat loop ────────────────────────────────────────────────────────────
@@ -469,11 +512,13 @@ export function startHeartbeatLoop(runner: SessionRunner): void {
         onHeartbeatTimeout(a.id, runningMs);
       }
 
-      // Optimization A: skip if neither shared daily nor assistant daily has changed
+      // Optimization A: skip if neither shared daily, assistant daily, nor structured tasks changed
       const assistantMemPath = getAssistantDailyPath(a.id);
+      const assistantTasksPath = getAssistantTasksPath(a.id);
       const sharedMtime = existsSync(sharedMemPath) ? statSync(sharedMemPath).mtimeMs : 0;
       const assistantMtime = existsSync(assistantMemPath) ? statSync(assistantMemPath).mtimeMs : 0;
-      const latestMtime = Math.max(sharedMtime, assistantMtime);
+      const tasksMtime = existsSync(assistantTasksPath) ? statSync(assistantTasksPath).mtimeMs : 0;
+      const latestMtime = Math.max(sharedMtime, assistantMtime, tasksMtime);
 
       if (latestMtime > 0 && latestMtime === lastMemoryMtime.get(a.id)) {
         const completionAt = lastCompletionAt.get(a.id) ?? 0;
@@ -532,9 +577,12 @@ export function cleanupHeartbeatData(assistantId: string): void {
   errorStreak.delete(assistantId);
   lastMemoryOffset.delete(assistantId);
   lastAssistantMemoryOffset.delete(assistantId);
+  pendingMemoryOffset.delete(assistantId);
+  pendingAssistantMemoryOffset.delete(assistantId);
   runningByAssistant.delete(assistantId);
   lastCompletionAt.delete(assistantId);
   lastCompletionOutcome.delete(assistantId);
+  heartbeatSnapshots.delete(assistantId);
   console.log(`[Heartbeat] Cleaned up data for assistant: ${assistantId}`);
 }
 
@@ -616,6 +664,7 @@ function runCompaction(runner: SessionRunner, key: string): void {
   }
 
   pendingCompactKey = key;
+  pendingCompactionTargets = captureCompactionTargets(config.assistants, new Date().toISOString().slice(0, 7));
   const prompt = buildCompactionPrompt(config.assistants);
 
   console.log(`[Heartbeat] Running memory compaction for key=${key}...`);
@@ -634,6 +683,7 @@ function runCompaction(runner: SessionRunner, key: string): void {
   }).catch((e) => {
     console.error("[Heartbeat] Memory compaction start failed:", e);
     pendingCompactKey = ""; // reset so next check can retry
+    pendingCompactionTargets = [];
   });
 }
 

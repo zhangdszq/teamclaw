@@ -22,12 +22,13 @@ import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-co
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
 import type { StreamMessage } from "../types.js";
-import { createSharedMcpServer } from "./shared-mcp.js";
+import { createSharedMcpServer, type SharedMcpSensitiveTurnState } from "./shared-mcp.js";
 import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
   type BaseBotOptions,
   FILE_SEND_RULE,
+  PRIVATE_WHITELIST_RULE,
   buildOpenAIOverrides,
   buildQueryEnv,
   buildStructuredPersona as buildStructuredPersonaBase,
@@ -852,6 +853,9 @@ class QQBotConnection {
     const historyKey = `${this.opts.assistantId}:${chatKey}`;
     const history = getHistory(historyKey);
     const provider = this.opts.provider ?? "claude";
+    const isOwner = !isGroup && Boolean(c2cOpenId && this.opts.ownerOpenIds?.includes(c2cOpenId));
+    const sensitiveTurnState: SharedMcpSensitiveTurnState = { active: false };
+    const persistedMessages: StreamMessage[] = [];
 
     const sessionId = getBotSession(
       this.opts.assistantId,
@@ -862,9 +866,7 @@ class QQBotConnection {
       this.opts.defaultCwd,
       this.opts.skillNames,
     );
-
-    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: effectiveUserText });
-
+    const historyLengthBeforeTurn = history.length;
     history.push({ role: "user", content: effectiveUserText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
@@ -883,34 +885,59 @@ class QQBotConnection {
       : undefined;
 
     const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection);
+    const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
+    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection, privateWhitelistSection);
 
     let replyText: string;
     try {
-      replyText = await this.runClaudeQuery(system, effectiveUserText, chatKey, provider, sessionId, isGroup, c2cOpenId, groupOpenId, msgId);
+      replyText = await this.runClaudeQuery(
+        system,
+        effectiveUserText,
+        chatKey,
+        provider,
+        sessionId,
+        isGroup,
+        isOwner,
+        sensitiveTurnState,
+        persistedMessages,
+        c2cOpenId,
+        groupOpenId,
+        msgId,
+      );
     } catch (err) {
       console.error("[QQBot] AI error:", err);
       replyText = "抱歉，处理您的消息时遇到了问题，请稍后再试。";
     }
 
-    history.push({ role: "assistant", content: replyText });
+    const shouldPersistTurn = !sensitiveTurnState.active;
+    if (shouldPersistTurn) {
+      sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: effectiveUserText });
+      for (const message of persistedMessages) {
+        sessionStore?.recordMessage(sessionId, message);
+      }
+      history.push({ role: "assistant", content: replyText });
+    } else {
+      history.length = historyLengthBeforeTurn;
+    }
     emitSessionUpdate(sessionId, { status: "idle" });
     const historySnapshot = history.slice();
 
     // Deliver response
     await this.deliverReply(replyText, isGroup, c2cOpenId, groupOpenId, msgId);
-    scheduleBotPostResponseTasks({
-      logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-      recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
-      updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[QQ]"),
-      onError: (phase, error) => {
-        if (phase === "updateTitle") {
-          console.warn("[QQBot] Failed to update session title:", error);
-          return;
-        }
-        console.warn("[QQBot] Failed to persist conversation:", error);
-      },
-    });
+    if (shouldPersistTurn) {
+      scheduleBotPostResponseTasks({
+        logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+        recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
+        updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[QQ]"),
+        onError: (phase, error) => {
+          if (phase === "updateTitle") {
+            console.warn("[QQBot] Failed to update session title:", error);
+            return;
+          }
+          console.warn("[QQBot] Failed to persist conversation:", error);
+        },
+      });
+    }
   }
 
   private async runClaudeQuery(
@@ -920,6 +947,9 @@ class QQBotConnection {
     provider: "claude" | "openai",
     sessionId: string,
     isGroup: boolean,
+    isOwner: boolean,
+    sensitiveTurnState: SharedMcpSensitiveTurnState,
+    persistedMessages: StreamMessage[],
     c2cOpenId?: string,
     groupOpenId?: string,
     msgId?: string,
@@ -933,7 +963,12 @@ class QQBotConnection {
     })();
 
     const env = buildQueryEnv(assistantConfig);
-    const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
+    const sharedMcp = createSharedMcpServer({
+      assistantId: this.opts.assistantId,
+      sessionCwd: this.opts.defaultCwd,
+      isOwner,
+      sensitiveTurnState,
+    });
 
     // Per-session MCP with send_file tool
     const self = this;
@@ -993,7 +1028,9 @@ class QQBotConnection {
 
     let finalText = "";
     let bufferedAssistant: StreamMessage | null = null;
-    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
+    const persistStreamMessage = (streamMessage: StreamMessage) => {
+      persistedMessages.push(streamMessage);
+    };
     for await (const msg of q) {
       bufferedAssistant = bufferPersistedBotMessage(
         msg as StreamMessage,
@@ -1003,7 +1040,9 @@ class QQBotConnection {
       const m = msg as Record<string, unknown>;
       if (m.type === "result" && m.subtype === "success") {
         finalText = m.result as string;
-        setBotClaudeSessionId(historyKey, m.session_id as string);
+        if (!sensitiveTurnState.active) {
+          setBotClaudeSessionId(historyKey, m.session_id as string);
+        }
       } else {
         const partial = extractPartialText(m);
         if (partial) finalText = partial;

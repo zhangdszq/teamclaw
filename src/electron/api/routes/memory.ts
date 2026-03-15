@@ -19,19 +19,28 @@ import {
   getMemoryDir,
   getMemorySummary,
   ScopedMemory,
+  isConfiguredAssistantId,
+  validateMemoryEntry,
 } from '../../libs/memory-store.js';
 
 export const memoryRoutes = new Hono();
 
 function getScopedMemory(c: { req: { query: (k: string) => string | undefined } }): ScopedMemory | null {
   const assistantId = c.req.query('assistantId');
+  if (assistantId && !isConfiguredAssistantId(assistantId)) {
+    throw new Error(`Unknown assistantId: ${assistantId}`);
+  }
   return assistantId ? new ScopedMemory(assistantId) : null;
 }
 
 // GET /memory — full assembled memory context
 memoryRoutes.get('/', async (c) => {
   try {
-    const context = await buildMemoryContext();
+    const assistantId = c.req.query('assistantId');
+    if (assistantId && !isConfiguredAssistantId(assistantId)) {
+      return c.json({ error: 'Invalid assistantId' }, 400);
+    }
+    const context = await buildMemoryContext(assistantId);
     const scoped = getScopedMemory(c);
     const summary = scoped ? scoped.getMemorySummary() : getMemorySummary();
     return c.json({ context, summary, memoryDir: getMemoryDir() });
@@ -76,7 +85,11 @@ memoryRoutes.get('/daily/:date?', (c) => {
 memoryRoutes.post('/daily', async (c) => {
   try {
     const { content, date } = await c.req.json<{ content: string; date?: string }>();
-    appendDailyMemory(content, date);
+    const validation = validateMemoryEntry(content, { allowMarkdownBlocks: true, maxChars: 20_000 });
+    if (!validation.ok) {
+      return c.json({ error: validation.message ?? 'Invalid daily memory content' }, 400);
+    }
+    appendDailyMemory(validation.normalized, date);
     return c.json({ success: true });
   } catch (error) {
     return c.json({ error: 'Failed to append daily memory', message: String(error) }, 500);

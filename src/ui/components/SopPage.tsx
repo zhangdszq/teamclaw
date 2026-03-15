@@ -172,6 +172,9 @@ const TOOL_OPTIONS: ToolOption[] = [
   { value: "read_document",          group: "文件",  desc: "读取本地文件（PDF/Word/Excel/文本/CSV）内容" },
   // 记忆
   { value: "save_memory",            group: "记忆",  desc: "保存长期记忆条目（private 专属 / shared 团队共享）" },
+  { value: "save_task",              group: "记忆",  desc: "保存或更新结构化待办任务，供心跳和后续会话跟进" },
+  { value: "complete_task",          group: "记忆",  desc: "将结构化待办任务标记为已完成" },
+  { value: "list_tasks",             group: "记忆",  desc: "列出当前助理的结构化任务" },
   { value: "save_working_memory",    group: "记忆",  desc: "保存当前任务上下文的工作记忆检查点" },
   { value: "read_working_memory",    group: "记忆",  desc: "读取最近保存的工作记忆检查点" },
   { value: "query_team_memory",      group: "记忆",  desc: "跨助理只读搜索记忆，获取其他助理的历史上下文" },

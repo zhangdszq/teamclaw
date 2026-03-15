@@ -26,13 +26,14 @@ import { patchAssistantBotOwnerIds, loadAssistantsConfig } from "./assistants-co
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
 import type { StreamMessage } from "../types.js";
-import { createSharedMcpServer } from "./shared-mcp.js";
+import { createSharedMcpServer, type SharedMcpSensitiveTurnState } from "./shared-mcp.js";
 import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
   type BaseBotOptions,
   FILE_PATH_RE,
   FILE_SEND_RULE,
+  PRIVATE_WHITELIST_RULE,
   buildOpenAIOverrides,
   prepareVisibleArtifact,
   buildQueryEnv,
@@ -1252,6 +1253,11 @@ class TelegramConnection {
     const historyKey = `${this.opts.assistantId}:${chatId}`;
     const history = getHistory(historyKey);
     const provider = this.opts.provider ?? "claude";
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    const senderId = String(ctx.message?.from?.id ?? "");
+    const isOwner = !isGroup && Boolean(senderId && this.opts.ownerUserIds?.includes(senderId));
+    const sensitiveTurnState: SharedMcpSensitiveTurnState = { active: false };
+    const persistedMessages: StreamMessage[] = [];
 
     const sessionId = getBotSession(
       this.opts.assistantId,
@@ -1262,9 +1268,7 @@ class TelegramConnection {
       this.opts.defaultCwd,
       this.opts.skillNames,
     );
-
-    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
-
+    const historyLengthBeforeTurn = history.length;
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
@@ -1282,7 +1286,8 @@ class TelegramConnection {
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;
 
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection);
+    const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
+    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection, privateWhitelistSection);
 
     // Set thinking reaction
     await this.setReaction(chatId, ctx.message!.message_id, "🤔");
@@ -1290,30 +1295,52 @@ class TelegramConnection {
     let result: StreamResult;
 
     try {
-      result = await this.runClaudeQuery(system, userText, ctx, chatId, provider, sessionId, hasFiles);
+      result = await this.runClaudeQuery(
+        system,
+        userText,
+        ctx,
+        chatId,
+        provider,
+        sessionId,
+        isOwner,
+        sensitiveTurnState,
+        persistedMessages,
+        hasFiles,
+      );
     } catch (err) {
       console.error("[Telegram] AI error:", err);
       result = { text: "抱歉，处理您的消息时遇到了问题，请稍后再试。", draftMessageId: null };
     }
 
     const replyText = result.text;
-    history.push({ role: "assistant", content: replyText });
+    const shouldPersistTurn = !sensitiveTurnState.active;
+    if (shouldPersistTurn) {
+      sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
+      for (const message of persistedMessages) {
+        sessionStore?.recordMessage(sessionId, message);
+      }
+      history.push({ role: "assistant", content: replyText });
+    } else {
+      history.length = historyLengthBeforeTurn;
+    }
     const historySnapshot = history.slice();
 
     // Finalize: deliver the response
     await this.finalizeResponse(ctx, chatId, replyText, result.draftMessageId);
-    scheduleBotPostResponseTasks({
-      logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-      recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "Telegram" },
-      updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[Telegram]"),
-      onError: (phase, error) => {
-        if (phase === "updateTitle") {
-          console.warn("[Telegram] Failed to update session title:", error);
-          return;
-        }
-        console.warn("[Telegram] Failed to persist conversation:", error);
-      },
-    });
+    if (shouldPersistTurn) {
+      scheduleBotPostResponseTasks({
+        logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+        recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "Telegram" },
+        updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[Telegram]"),
+        onError: (phase, error) => {
+          if (phase === "updateTitle") {
+            console.warn("[Telegram] Failed to update session title:", error);
+            return;
+          }
+          console.warn("[Telegram] Failed to persist conversation:", error);
+        },
+      });
+    }
   }
 
   /** Edit the draft or send chunked final response */
@@ -1472,11 +1499,19 @@ class TelegramConnection {
     chatId: string,
     provider: "claude" | "openai",
     sessionId: string,
+    isOwner: boolean,
+    sensitiveTurnState: SharedMcpSensitiveTurnState,
+    persistedMessages: StreamMessage[],
     hasFiles?: boolean,
   ): Promise<StreamResult> {
     const sessionKey = `${this.opts.assistantId}:${chatId}`;
     const sessionMcp = this.createSessionMcp(ctx);
-    const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
+    const sharedMcp = createSharedMcpServer({
+      assistantId: this.opts.assistantId,
+      sessionCwd: this.opts.defaultCwd,
+      isOwner,
+      sensitiveTurnState,
+    });
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();
 
@@ -1490,7 +1525,9 @@ class TelegramConnection {
     let lastEditTime = 0;
     let bufferedAssistant: StreamMessage | null = null;
     const assistantConfig = loadAssistantsConfig().assistants.find(a => a.id === this.opts.assistantId);
-    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
+    const persistStreamMessage = (streamMessage: StreamMessage) => {
+      persistedMessages.push(streamMessage);
+    };
 
     try {
       const q = await runAgent(userText, {
@@ -1513,7 +1550,9 @@ class TelegramConnection {
         const msg = message as Record<string, unknown>;
         if (msg.type === "result" && msg.subtype === "success") {
           finalText = msg.result as string;
-          setBotClaudeSessionId(sessionKey, msg.session_id as string);
+          if (!sensitiveTurnState.active) {
+            setBotClaudeSessionId(sessionKey, msg.session_id as string);
+          }
           continue;
         }
 

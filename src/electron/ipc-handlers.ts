@@ -41,7 +41,6 @@ import {
   isResumeReadyMessage,
   shouldFallbackFromContinueError,
 } from './libs/session-resume.js';
-import { recordHeartbeatMetric } from './libs/heartbeat-metrics.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -230,17 +229,6 @@ function emit(event: ServerEvent) {
               ? "未检测到结构化心跳回执"
               : "已完成心跳巡检");
 
-          if (notificationSummary.successes > 0) {
-            recordHeartbeatMetric("notification_sent", {
-              assistantId: session.assistantId,
-              count: notificationSummary.successes,
-            });
-          } else if (notificationSummary.attempts > 0) {
-            recordHeartbeatMetric("notification_skipped", {
-              assistantId: session.assistantId,
-              count: notificationSummary.attempts,
-            });
-          }
           if (parsed.noAction && notificationSummary.successes > 0) {
             console.warn(`[IPC] Heartbeat result contradicted notification send, overriding to action: ${sessionId}`);
           }
@@ -293,7 +281,6 @@ function emit(event: ServerEvent) {
       });
     }
 
-    // Auto-extract knowledge candidate from completed/idle sessions.
     if (status === 'completed' || status === 'idle') {
       const session = sessions.getSession(sessionId);
       const shouldSkip =
@@ -353,9 +340,61 @@ function emit(event: ServerEvent) {
             console.warn('[IPC] Knowledge candidate extraction failed:', err);
           }
         });
+      }
+    }
 
-        // Auto-record in-app session to daily memory (BUG 4 fix).
-        // Bot sessions use recordConversation(); this covers UI/app sessions.
+    if (isTerminalStatus) {
+      const session = sessions.getSession(sessionId);
+      const shouldSkip =
+        !session ||
+        session.background ||
+        session.title?.startsWith('[心跳]') ||
+        session.title?.startsWith('[经验候选]') ||
+        session.title?.startsWith('[记忆压缩]');
+
+      if (!shouldSkip) {
+        if ((status === 'completed' || status === 'idle') && session) {
+          setImmediate(async () => {
+            try {
+              const history = sessions.getSessionHistory(sessionId);
+              const allMessages = history?.messages ?? [];
+              if (allMessages.length < 5) return;
+
+              const digest = buildConversationDigest(allMessages);
+              if (digest.length < 150) return;
+
+              const title = (session.title || '普通会话').slice(0, 80);
+              const distillPrompt = [
+                "请回顾下面这段刚结束的会话摘要，提取值得长期保留的信息。",
+                "优先使用 save_memory 保存长期事实/偏好/决策，用 save_task 保存待跟进任务，用 save_working_memory 保存后续上下文。",
+                "如果没有值得沉淀的内容，请仅输出 NO_MEMORY_CANDIDATE。",
+                "",
+                `## 会话标题`,
+                title,
+                "",
+                `## 会话摘要`,
+                digest.slice(0, 4000),
+              ].join('\n');
+
+              await handleClientEvent({
+                type: 'session.start',
+                payload: {
+                  title: `[经验候选] ${title}`,
+                  prompt: distillPrompt,
+                  cwd: session.cwd,
+                  provider: session.provider,
+                  model: session.model,
+                  assistantId: session.assistantId,
+                  assistantSkillNames: session.assistantSkillNames,
+                  background: true,
+                },
+              });
+            } catch (err) {
+              console.warn('[IPC] Memory distillation follow-up failed:', err);
+            }
+          });
+        }
+
         setImmediate(async () => {
           try {
             const session = sessions.getSession(sessionId);
@@ -363,26 +402,36 @@ function emit(event: ServerEvent) {
 
             const history = sessions.getSessionHistory(sessionId);
             const allMessages = history?.messages ?? [];
-            if (allMessages.length < 2) return;
-
             const digest = buildConversationDigest(allMessages);
-            if (digest.length < 100) return;
-
             const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             const assistantLabel = session.assistantId ? `app/${session.assistantId}` : 'app';
             const title = (session.title || '普通会话').slice(0, 80);
-
-            // One-line summary → shared daily (heartbeat and compaction can see it)
             const firstLine = digest.split('\n').find((l) => l.trim()) ?? '';
-            const summary = firstLine.replace(/^\[[AU]\]\s*/, '').slice(0, 100);
-            appendDailyMemory(`- ${time} [${assistantLabel}] ${title} — ${summary}`);
+            const cleanedFirstLine = firstLine.replace(/^\[[AU]\]\s*/, '').slice(0, 100);
 
-            // Detailed digest → assistant private daily (full context for heartbeat)
-            if (session.assistantId) {
-              const scoped = new ScopedMemory(session.assistantId);
-              const block = `## ${time}\n**会话**: ${title}\n\n${digest.slice(0, 3000)}`;
-              scoped.appendDaily(block);
+            if ((status === 'completed' || status === 'idle') && allMessages.length >= 2 && digest.length >= 100) {
+              appendDailyMemory(`- ${time} [${assistantLabel}] ${title} — ${cleanedFirstLine}`);
+
+              if (session.assistantId) {
+                const scoped = new ScopedMemory(session.assistantId);
+                const block = `## ${time}\n**会话**: ${title}\n\n${digest.slice(0, 3000)}`;
+                scoped.appendDaily(block);
+              }
+              return;
             }
+
+            const errorText = 'payload' in event ? String((event.payload as { error?: string }).error ?? '').trim() : '';
+            const summaryBase =
+              cleanedFirstLine ||
+              errorText ||
+              (status === 'error' ? '会话异常结束' : '会话内容较短');
+            const suffix =
+              status === 'error'
+                ? '[error]'
+                : allMessages.length < 2
+                ? '[短对话]'
+                : '[摘要过短]';
+            appendDailyMemory(`- ${time} [${assistantLabel}] ${title} ${suffix} — ${summaryBase.slice(0, 120)}`);
           } catch (err) {
             console.warn('[IPC] Daily memory recording failed:', err);
           }

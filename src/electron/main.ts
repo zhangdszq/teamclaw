@@ -77,7 +77,7 @@ import {
   readSessionState, writeSessionState, clearSessionState,
   readAbstract, localDateStr,
   listSops, readSop, writeSop, searchSops, deleteSop,
-  ScopedMemory,
+  ScopedMemory, deleteAssistantMemoryRoot, isConfiguredAssistantId, validateMemoryEntry,
 } from "./libs/memory-store.js";
 import { 
   loadScheduledTasks, 
@@ -97,7 +97,7 @@ import {
   getDefaultLogDir,
   type ScheduledTask
 } from "./libs/scheduler/index.js";
-import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer, readLastCompactionAt, getHeartbeatSnapshots } from "./libs/heartbeat.js";
+import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer, readLastCompactionAt, getHeartbeatSnapshots, cleanupHeartbeatData } from "./libs/heartbeat.js";
 import { loadPlanItems, updatePlanItem, upsertPlanItem } from "./libs/plan-store.js";
 import {
     loadWorkflowRun,
@@ -147,6 +147,19 @@ function startMemoryJanitor(): void {
 }
 
 const JANITOR_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 h
+const ABSTRACT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+function refreshAllMemoryAbstracts(): void {
+    try {
+        refreshRootAbstract();
+        const config = loadAssistantsConfig();
+        for (const assistant of config.assistants) {
+            refreshRootAbstract(assistant.id);
+        }
+    } catch (e) {
+        console.warn("[MemoryAbstract] Failed:", e);
+    }
+}
 
 // ─── Auto-connect bots on startup ────────────────────────────
 async function autoConnectBots(win: BrowserWindow): Promise<void> {
@@ -361,6 +374,8 @@ app.on("ready", async () => {
     // Run memory janitor once on startup, then every 24 h
     startMemoryJanitor();
     setInterval(startMemoryJanitor, JANITOR_INTERVAL_MS);
+    refreshAllMemoryAbstracts();
+    setInterval(refreshAllMemoryAbstracts, ABSTRACT_REFRESH_INTERVAL_MS);
 
     // Verify stored OpenAI tokens
     ensureOpenAIAuthSync();
@@ -971,7 +986,11 @@ app.on("ready", async () => {
     });
 
     ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
+        const previous = loadAssistantsConfig();
+        const previousIds = new Set(previous.assistants.map((assistant) => assistant.id));
         const result = saveAssistantsConfig(config);
+        const nextIds = new Set(result.assistants.map((assistant) => assistant.id));
+        const deletedIds = [...previousIds].filter((assistantId) => !nextIds.has(assistantId));
         const configUpdates = {
             provider: undefined as "claude" | "openai" | undefined,
             model: undefined as string | undefined,
@@ -1012,6 +1031,16 @@ app.on("ready", async () => {
             updateFeishuBotConfig(assistant.id, updates);
             updateQQBotConfig(assistant.id, updates);
         }
+
+        for (const assistantId of deletedIds) {
+            try {
+                cleanupHeartbeatData(assistantId);
+                deleteAssistantMemoryRoot(assistantId);
+            } catch (err) {
+                console.warn(`[Assistants] Failed to clean deleted assistant ${assistantId}:`, err);
+            }
+        }
+        refreshAllMemoryAbstracts();
 
         // Notify all renderer windows so Sidebar refreshes without restart
         const wins = BrowserWindow.getAllWindows();
@@ -1434,19 +1463,32 @@ app.on("ready", async () => {
     // The optional last argument `assistantId` scopes per-assistant operations.
     // Shared operations (long-term, daily, abstract) are unaffected by assistantId.
     ipcMainHandle("memory-read", async (_: any, target: string, date?: string, assistantId?: string) => {
+        if (assistantId && !isConfiguredAssistantId(assistantId)) {
+            throw new Error(`Unknown assistantId: ${assistantId}`);
+        }
         const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         if (target === "long-term") return { content: readLongTermMemory() };
         if (target === "assistant-long-term") return { content: scoped ? scoped.readLongTermMemory() : "" };
         if (target === "daily") return { content: readDailyMemory(date ?? localDateStr()) };
         if (target === "assistant-daily") return { content: scoped ? scoped.readDaily(date ?? localDateStr()) : "" };
-        if (target === "context") return { content: await buildMemoryContext() };
+        if (target === "context") return { content: await buildMemoryContext(assistantId) };
         if (target === "session-state") return { content: scoped ? scoped.readSessionState() : readSessionState() };
         if (target === "abstract") return { content: readAbstract() };
         return { content: "", memoryDir: getMemoryDir() };
     });
 
     ipcMainHandle("memory-write", (_: any, target: string, content: string, date?: string, assistantId?: string) => {
+        if (assistantId && !isConfiguredAssistantId(assistantId)) {
+            throw new Error(`Unknown assistantId: ${assistantId}`);
+        }
         const scoped = assistantId ? new ScopedMemory(assistantId) : null;
+        if (target === "daily-append" || target === "assistant-daily-append") {
+            const validation = validateMemoryEntry(content, { allowMarkdownBlocks: true, maxChars: 20_000 });
+            if (!validation.ok) {
+                throw new Error(validation.message ?? "Invalid memory content");
+            }
+            content = validation.normalized;
+        }
         if (target === "long-term") { writeLongTermMemory(content); return { success: true }; }
         if (target === "assistant-long-term") { scoped?.writeLongTermMemory(content); return { success: true }; }
         if (target === "daily-append") { appendDailyMemory(content, date); return { success: true }; }
@@ -1464,6 +1506,9 @@ app.on("ready", async () => {
     });
 
     ipcMainHandle("memory-list", (_: any, assistantId?: string) => {
+        if (assistantId && !isConfiguredAssistantId(assistantId)) {
+            throw new Error(`Unknown assistantId: ${assistantId}`);
+        }
         const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         return {
             memoryDir: getMemoryDir(),
@@ -1988,7 +2033,7 @@ app.on("ready", async () => {
         "file_read", "read_document", "file_write", "file_list",
         "web_fetch", "web_search",
         "shell_exec", "run_script",
-        "memory_store", "save_memory", "memory_recall", "query_team_memory", "read_working_memory", "save_working_memory",
+        "memory_store", "save_memory", "save_task", "complete_task", "list_tasks", "memory_recall", "query_team_memory", "read_working_memory", "save_working_memory",
         "schedule_create", "create_scheduled_task", "schedule_list", "list_scheduled_tasks", "schedule_delete", "delete_scheduled_task",
         "knowledge_add_entity", "knowledge_add_relation", "knowledge_query",
         "event_publish", "send_notification",

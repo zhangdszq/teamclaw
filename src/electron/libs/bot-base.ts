@@ -147,6 +147,13 @@ export const IMAGE_INLINE_RULE =
   "- Windows 路径示例：`![截图](C:/Users/xxx/AppData/Local/Temp/shot.png)`\n" +
   "- macOS/Linux 路径示例：`![关键截图](/tmp/shot-123.png)`";
 
+export const PRIVATE_WHITELIST_RULE =
+  "## 私聊白名单权限\n" +
+  "当前发起者位于本 Bot 的私聊白名单中，可使用完整的共享工具能力完成 setup、本地配置读取和自动化操作。\n" +
+  "- 常见本地配置路径：`~/.vk-cowork/user-settings.json`、`~/.vk-cowork/bot-config.json`\n" +
+  "- 读取本地配置时优先使用 `read_document`\n" +
+  "- 一旦命中敏感配置/密钥路径，不要调用任何记忆沉淀或经验沉淀工具";
+
 export type VisibleArtifactOptions = {
   defaultCwd?: string;
   assistantName?: string;

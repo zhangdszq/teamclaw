@@ -27,7 +27,7 @@ import { buildSmartMemoryContext } from "./memory-store.js";
 import { getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
 import type { StreamMessage } from "../types.js";
-import { createSharedMcpServer } from "./shared-mcp.js";
+import { createSharedMcpServer, type SharedMcpSensitiveTurnState } from "./shared-mcp.js";
 import { loadMcporterServers } from "./mcporter-loader.js";
 import {
   type ConvMessage,
@@ -39,6 +39,7 @@ import {
   parseReplySegments,
   bufferPersistedBotMessage,
   flushBufferedBotAssistantMessage,
+  PRIVATE_WHITELIST_RULE,
   scheduleBotPostResponseTasks,
 } from "./bot-base.js";
 import { loadAssistantsConfig, patchAssistantBotOwnerIds } from "./assistants-config.js";
@@ -846,7 +847,7 @@ class FeishuConnection {
       const sessionKey = `${this.opts.assistantId}:${chatType === "group" ? chatId : senderId}`;
       const releaseSessionLock = await this.acquireSessionLock(sessionKey);
       try {
-        await this.generateAndDeliver(finalText, senderId, chatId, messageId, sessionKey, mediaInfo, forwardMentions);
+        await this.generateAndDeliver(finalText, senderId, chatId, chatType, messageId, sessionKey, mediaInfo, forwardMentions);
       } finally {
         releaseSessionLock();
       }
@@ -1006,6 +1007,7 @@ class FeishuConnection {
     userText: string,
     senderId: string,
     chatId: string,
+    chatType: string,
     messageId: string,
     sessionKey: string,
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
@@ -1015,6 +1017,9 @@ class FeishuConnection {
     const effectiveUserText = skillContext?.userText ?? userText;
     const history = getHistory(sessionKey);
     const provider = this.opts.provider ?? "claude";
+    const isOwner = chatType === "p2p" && Boolean(senderId && this.opts.ownerOpenIds?.includes(senderId));
+    const sensitiveTurnState: SharedMcpSensitiveTurnState = { active: false };
+    const persistedMessages: StreamMessage[] = [];
     const deliveryState: FeishuDeliveryState = {
       streamStarted: false,
       streamingMsgId: null,
@@ -1031,10 +1036,7 @@ class FeishuConnection {
       this.opts.skillNames,
       sessionKey,
     );
-
-    sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: effectiveUserText });
-    updateBotSessionTitle(sessionId, effectiveUserText).catch(() => {});
-
+    const historyLengthBeforeTurn = history.length;
     history.push({ role: "user", content: effectiveUserText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
@@ -1047,7 +1049,8 @@ class FeishuConnection {
       ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
       : undefined;
     const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
-    const system = buildStructuredPersona(this.opts, memoryContext, skillSection, historySection);
+    const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
+    const system = buildStructuredPersona(this.opts, memoryContext, skillSection, historySection, privateWhitelistSection);
 
     // Add typing indicator (emoji reaction)
     await this.addTypingReaction(messageId).catch(() => {});
@@ -1065,6 +1068,9 @@ class FeishuConnection {
         sessionKey,
         sessionId,
         deliveryState,
+        isOwner,
+        sensitiveTurnState,
+        persistedMessages,
         mediaInfo,
       );
       replyText = result.text;
@@ -1086,8 +1092,16 @@ class FeishuConnection {
     // If streaming sent the reply directly, use the accumulated text for history
     const isStreamed = replyText === "\x00feishu_streamed\x00";
     const persistText = isStreamed ? streamedFinalText : replyText;
-
-    history.push({ role: "assistant", content: persistText });
+    const shouldPersistTurn = !sensitiveTurnState.active;
+    if (shouldPersistTurn) {
+      sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: effectiveUserText });
+      for (const message of persistedMessages) {
+        sessionStore?.recordMessage(sessionId, message);
+      }
+      history.push({ role: "assistant", content: persistText });
+    } else {
+      history.length = historyLengthBeforeTurn;
+    }
 
     // Build @-mention prefix for group replies
     const mentionPrefix = forwardMentions?.length
@@ -1104,13 +1118,16 @@ class FeishuConnection {
       }
     }
 
-    scheduleBotPostResponseTasks({
-      logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${persistText}\n`,
-      recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
-      onError: (_phase, error) => {
-        console.warn("[Feishu] Failed to persist conversation:", error);
-      },
-    });
+    if (shouldPersistTurn) {
+      scheduleBotPostResponseTasks({
+        logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${persistText}\n`,
+        recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
+        updateTitle: () => updateBotSessionTitle(sessionId, effectiveUserText),
+        onError: (_phase, error) => {
+          console.warn("[Feishu] Failed to persist conversation:", error);
+        },
+      });
+    }
   }
 
   // ── Typing indicator ──────────────────────────────────────────────────────────
@@ -1159,11 +1176,19 @@ class FeishuConnection {
     sessionKey: string,
     sessionId: string,
     deliveryState: FeishuDeliveryState,
+    isOwner: boolean,
+    sensitiveTurnState: SharedMcpSensitiveTurnState,
+    persistedMessages: StreamMessage[],
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
   ): Promise<{ text: string; streamedText: string }> {
     const sessionMcp = this.createSessionMcp(messageId, chatId, deliveryState);
     const feishuMcp = this.createFeishuEcosystemMcp();
-    const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
+    const sharedMcp = createSharedMcpServer({
+      assistantId: this.opts.assistantId,
+      sessionCwd: this.opts.defaultCwd,
+      isOwner,
+      sensitiveTurnState,
+    });
     const claudeSessionId = mediaInfo ? undefined : getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();
 
@@ -1203,7 +1228,9 @@ class FeishuConnection {
     // Minimum characters between patches to avoid rate limiting
     const PATCH_THRESHOLD = 80;
     let patchTimer: ReturnType<typeof setTimeout> | null = null;
-    const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
+    const persistStreamMessage = (streamMessage: StreamMessage) => {
+      persistedMessages.push(streamMessage);
+    };
 
     const doPatch = async (text: string, isFinal = false): Promise<boolean> => {
       if (streamModeDisabled) return false;
@@ -1273,7 +1300,9 @@ class FeishuConnection {
       }
       if (message.type === "result" && message.subtype === "success") {
         finalText = message.result;
-        setBotClaudeSessionId(sessionKey, message.session_id);
+        if (!sensitiveTurnState.active) {
+          setBotClaudeSessionId(sessionKey, message.session_id);
+        }
       }
     }
 

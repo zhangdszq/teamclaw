@@ -21,19 +21,41 @@
  *     └── insights/           per-assistant monthly distillation
  */
 import {
-  existsSync, mkdirSync, readFileSync, writeFileSync,
-  readdirSync, renameSync, unlinkSync, statSync,
+  appendFileSync,
   copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
 } from "fs";
 import { readFile as readFileAsync } from "fs/promises";
 import { spawn } from "child_process";
-import { join } from "path";
+import { randomUUID } from "crypto";
+import { dirname, join } from "path";
 import { homedir } from "os";
+import { loadAssistantsConfig } from "./assistants-config.js";
 import { loadUserSettingsAsync } from "./user-settings.js";
 import { listKnowledgeDocs } from "./knowledge-store.js";
 
 // Write lock to prevent concurrent writes
 const writeLocks = new Map<string, Promise<void>>();
+const ASSISTANT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MEMORY_ENTRY_MAX_CHARS = 8_000;
+const MEMORY_CONTEXT_MAX_CHARS = 80_000;
+const WORKING_MEMORY_VERSION_LIMIT = 5;
+const MEMORY_CONTEXT_SECTION_LIMITS = {
+  abstract: { max: 12_000, min: 4_000 },
+  longTerm: { max: 16_000, min: 6_000 },
+  privateLongTerm: { max: 14_000, min: 4_000 },
+  sessionState: { max: 8_000, min: 2_000 },
+  sharedDaily: { max: 10_000, min: 2_000 },
+  assistantDaily: { max: 10_000, min: 2_000 },
+} as const;
 
 // ─── Paths ──────────────────────────────────────────────────
 
@@ -51,10 +73,68 @@ const MIGRATION_MARKER   = join(MEMORY_ROOT, ".migrated-v2");
 
 const ALL_DIRS = [MEMORY_ROOT, DAILY_DIR, INSIGHTS_DIR, LESSONS_DIR, ARCHIVE_DIR, SOPS_DIR];
 
+export type AssistantTaskStatus = "pending" | "in_progress" | "completed";
+export type AssistantTask = {
+  id: string;
+  title: string;
+  status: AssistantTaskStatus;
+  dueDate?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ValidateMemoryEntryOptions = {
+  requireLifecycleTag?: boolean;
+  allowMarkdownBlocks?: boolean;
+  maxChars?: number;
+};
+
+type MemoryContextSectionKey = keyof typeof MEMORY_CONTEXT_SECTION_LIMITS;
+type MemoryContextSection = {
+  key: MemoryContextSectionKey;
+  title: string;
+  rawContent: string;
+  limit: number;
+  minLimit: number;
+};
+
 // ─── Per-assistant path helpers ──────────────────────────────
 
+export function assertSafeAssistantId(assistantId: string): string {
+  const normalized = String(assistantId ?? "").trim();
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.includes("/") ||
+    normalized.includes("\\") ||
+    !ASSISTANT_ID_RE.test(normalized)
+  ) {
+    throw new Error(`Invalid assistantId: ${assistantId}`);
+  }
+  return normalized;
+}
+
+export function isConfiguredAssistantId(assistantId: string): boolean {
+  try {
+    const safeAssistantId = assertSafeAssistantId(assistantId);
+    return loadAssistantsConfig().assistants.some((assistant) => assistant.id === safeAssistantId);
+  } catch {
+    return false;
+  }
+}
+
+export function deleteAssistantMemoryRoot(assistantId: string): void {
+  const safeAssistantId = assertSafeAssistantId(assistantId);
+  const root = join(ASSISTANTS_DIR, safeAssistantId);
+  if (existsSync(root)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+  _memoryContextCache.clear();
+}
+
 function getAssistantMemoryRoot(assistantId: string): string {
-  return join(ASSISTANTS_DIR, assistantId);
+  return join(ASSISTANTS_DIR, assertSafeAssistantId(assistantId));
 }
 
 function ensureAssistantDirs(assistantId: string): void {
@@ -206,6 +286,102 @@ function dailyPath(date: string): string {
   return join(DAILY_DIR, `${date}.md`);
 }
 
+function appendTextFile(filePath: string, content: string): void {
+  const normalized = content.trimEnd();
+  if (!normalized) return;
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  let prefix = "";
+  try {
+    prefix = existsSync(filePath) && statSync(filePath).size > 0 ? "\n" : "";
+  } catch {
+    prefix = "";
+  }
+  appendFileSync(filePath, `${prefix}${normalized}`, "utf8");
+}
+
+function rotateWorkingMemoryVersions(filePath: string, previousContent: string): void {
+  const dir = dirname(filePath);
+  const overflowPath = join(dir, `SESSION-STATE.v${WORKING_MEMORY_VERSION_LIMIT}.md`);
+  if (existsSync(overflowPath)) {
+    try { unlinkSync(overflowPath); } catch { /* ignore */ }
+  }
+  for (let i = WORKING_MEMORY_VERSION_LIMIT - 1; i >= 1; i -= 1) {
+    const src = join(dir, `SESSION-STATE.v${i}.md`);
+    const dest = join(dir, `SESSION-STATE.v${i + 1}.md`);
+    if (!existsSync(src)) continue;
+    try { renameSync(src, dest); } catch { /* ignore */ }
+  }
+  atomicWrite(join(dir, "SESSION-STATE.v1.md"), previousContent);
+}
+
+function writeWorkingMemoryWithHistory(filePath: string, content: string): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const previous = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+  if (previous.trim() && previous !== content) {
+    rotateWorkingMemoryVersions(filePath, previous);
+  }
+  atomicWrite(filePath, content);
+  _memoryContextCache.clear();
+}
+
+function normalizeMemoryEntryContent(content: string): string {
+  return String(content ?? "")
+    .replace(/\[\/P[012][^\]]*\]/g, "")
+    .trim();
+}
+
+export function validateMemoryEntry(
+  content: string,
+  opts: ValidateMemoryEntryOptions = {},
+): { ok: boolean; normalized: string; message?: string } {
+  const normalized = normalizeMemoryEntryContent(content);
+  if (!normalized) {
+    return { ok: false, normalized, message: "content 不能为空" };
+  }
+
+  const maxChars = opts.maxChars ?? MEMORY_ENTRY_MAX_CHARS;
+  if (normalized.length > maxChars) {
+    return {
+      ok: false,
+      normalized,
+      message: `内容过长：最多允许 ${maxChars} 个字符`,
+    };
+  }
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim());
+
+  if (!opts.allowMarkdownBlocks) {
+    const invalidListLine = lines.find((line) => !/^[-*]\s+/.test(line.trimStart()));
+    if (invalidListLine) {
+      return {
+        ok: false,
+        normalized,
+        message: "每个条目必须以 '- ' 或 '* ' 开头。",
+      };
+    }
+  }
+
+  if (opts.requireLifecycleTag) {
+    const invalidLifecycleLine = lines.find(
+      (line) => !/^[-*]\s+\[(?:P0|P1\|expire:\d{4}-\d{2}-\d{2}|P2\|expire:\d{4}-\d{2}-\d{2})\]\s+/.test(line.trimStart()),
+    );
+    if (invalidLifecycleLine) {
+      return {
+        ok: false,
+        normalized,
+        message: "每个条目必须以 '- [P0] ' / '- [P1|expire:YYYY-MM-DD] ' / '- [P2|expire:YYYY-MM-DD] ' 开头。",
+      };
+    }
+  }
+
+  return { ok: true, normalized };
+}
+
 // ─── Atomic write with lock ───────────────────────────────────
 
 async function atomicWriteWithLock(filePath: string, content: string): Promise<void> {
@@ -304,8 +480,7 @@ export function readDailyMemory(date: string): string {
 export function appendDailyMemory(content: string, date?: string): void {
   ensureDirs();
   const p = dailyPath(date ?? localDateStr());
-  const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
-  atomicWrite(p, existing ? existing + "\n" + content : content);
+  appendTextFile(p, content);
   _memoryContextCache.clear();
   // Refresh root abstract after each write (non-blocking)
   try { refreshRootAbstract(); } catch { /* ignore */ }
@@ -314,6 +489,7 @@ export function appendDailyMemory(content: string, date?: string): void {
 export function writeDailyMemory(content: string, date: string): void {
   ensureDirs();
   atomicWrite(dailyPath(date), content);
+  _memoryContextCache.clear();
 }
 
 export function readRecentDailyMemories(): {
@@ -621,6 +797,7 @@ export function writeWorkingMemory(checkpoint: {
   relatedSops?: string[];
   history?: string[];
 }): void {
+  ensureDirs();
   const lines: string[] = [
     `# Working Memory Checkpoint`,
     `> Updated: ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
@@ -638,7 +815,7 @@ export function writeWorkingMemory(checkpoint: {
   if (checkpoint.history?.length) {
     lines.push(`## 操作历史`, ...checkpoint.history.slice(-20).map(h => `- ${h}`), "");
   }
-  writeSessionState(lines.join("\n"));
+  writeWorkingMemoryWithHistory(SESSION_STATE_FILE, lines.join("\n"));
 }
 
 // ─── ScopedMemory (per-assistant memory operations) ──────────
@@ -684,11 +861,13 @@ export class ScopedMemory {
 
   writeSessionState(content: string): void {
     atomicWrite(this._sessionStatePath(), content);
+    _memoryContextCache.clear();
   }
 
   clearSessionState(): void {
     const p = this._sessionStatePath();
     if (existsSync(p)) atomicWrite(p, "");
+    _memoryContextCache.clear();
   }
 
   readDaily(date: string): string {
@@ -703,12 +882,13 @@ export class ScopedMemory {
 
   appendDaily(content: string, date?: string): void {
     const p = this._dailyPath(date ?? localDateStr());
-    const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
-    atomicWrite(p, existing ? existing + "\n" + content : content);
+    appendTextFile(p, content);
+    _memoryContextCache.clear();
   }
 
   writeDaily(content: string, date: string): void {
     atomicWrite(this._dailyPath(date), content);
+    _memoryContextCache.clear();
   }
 
   listDailies(): MemoryFileInfo[] {
@@ -738,7 +918,7 @@ export class ScopedMemory {
     if (checkpoint.keyInfo) lines.push(`## 关键上下文`, checkpoint.keyInfo, "");
     if (checkpoint.relatedSops?.length) lines.push(`## 相关 SOP`, ...checkpoint.relatedSops.map(s => `- ${s}`), "");
     if (checkpoint.history?.length) lines.push(`## 操作历史`, ...checkpoint.history.slice(-20).map(h => `- ${h}`), "");
-    this.writeSessionState(lines.join("\n"));
+    writeWorkingMemoryWithHistory(this._sessionStatePath(), lines.join("\n"));
   }
 
   // ── Per-assistant long-term memory (private MEMORY.md) ──
@@ -757,6 +937,7 @@ export class ScopedMemory {
 
   writeLongTermMemory(content: string): void {
     atomicWrite(this._longTermPath(), content);
+    _memoryContextCache.clear();
     try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
   }
 
@@ -765,6 +946,7 @@ export class ScopedMemory {
     const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
     const newContent = existing.trim() ? existing.trimEnd() + "\n" + entry : entry;
     atomicWrite(p, newContent);
+    _memoryContextCache.clear();
     try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
   }
 
@@ -793,7 +975,9 @@ export class ScopedMemory {
 
     for (const line of lines) {
       const m = line.match(LIFECYCLE_RE);
-      if (m && m[1] < today) {
+      if (line.includes("[P0]")) {
+        kept.push(line);
+      } else if (m && m[1] < today) {
         expired.push(line);
       } else {
         kept.push(line);
@@ -813,6 +997,102 @@ export class ScopedMemory {
 
     return { archived: expired.length, cleaned: expired };
   }
+}
+
+function tasksPath(assistantId: string): string {
+  return join(getAssistantMemoryRoot(assistantId), "tasks.json");
+}
+
+function normalizeTaskStatus(status?: string): AssistantTaskStatus {
+  if (status === "completed" || status === "in_progress") return status;
+  return "pending";
+}
+
+function loadAssistantTasksRaw(assistantId: string): AssistantTask[] {
+  ensureAssistantDirs(assistantId);
+  const p = tasksPath(assistantId);
+  if (!existsSync(p)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      .map((item) => ({
+        id: String(item.id ?? "").trim(),
+        title: String(item.title ?? "").trim(),
+        status: normalizeTaskStatus(typeof item.status === "string" ? item.status : undefined),
+        dueDate: item.dueDate ? String(item.dueDate) : undefined,
+        createdAt: String(item.createdAt ?? new Date().toISOString()),
+        updatedAt: String(item.updatedAt ?? new Date().toISOString()),
+      }))
+      .filter((item) => item.id && item.title);
+  } catch {
+    return [];
+  }
+}
+
+function saveAssistantTasksRaw(assistantId: string, tasks: AssistantTask[]): void {
+  atomicWrite(tasksPath(assistantId), JSON.stringify(tasks, null, 2));
+  _memoryContextCache.clear();
+}
+
+export function listAssistantTasks(
+  assistantId: string,
+  opts?: { includeCompleted?: boolean },
+): AssistantTask[] {
+  const tasks = loadAssistantTasksRaw(assistantId);
+  const filtered = opts?.includeCompleted
+    ? tasks
+    : tasks.filter((task) => task.status !== "completed");
+  return filtered.sort((left, right) => {
+    const leftDue = left.dueDate ?? "9999-99-99";
+    const rightDue = right.dueDate ?? "9999-99-99";
+    if (leftDue !== rightDue) return leftDue.localeCompare(rightDue);
+    return right.updatedAt.localeCompare(left.updatedAt);
+  });
+}
+
+export function upsertAssistantTask(
+  assistantId: string,
+  input: { id?: string; title: string; status?: AssistantTaskStatus; dueDate?: string },
+): AssistantTask {
+  const title = String(input.title ?? "").trim();
+  if (!title) throw new Error("title 不能为空");
+
+  const now = new Date().toISOString();
+  const tasks = loadAssistantTasksRaw(assistantId);
+  const existing = input.id ? tasks.find((task) => task.id === input.id) : undefined;
+
+  if (existing) {
+    existing.title = title;
+    existing.status = normalizeTaskStatus(input.status);
+    existing.dueDate = input.dueDate?.trim() || undefined;
+    existing.updatedAt = now;
+    saveAssistantTasksRaw(assistantId, tasks);
+    return existing;
+  }
+
+  const created: AssistantTask = {
+    id: input.id?.trim() || randomUUID(),
+    title,
+    status: normalizeTaskStatus(input.status),
+    dueDate: input.dueDate?.trim() || undefined,
+    createdAt: now,
+    updatedAt: now,
+  };
+  tasks.push(created);
+  saveAssistantTasksRaw(assistantId, tasks);
+  return created;
+}
+
+export function completeAssistantTask(assistantId: string, taskId: string): AssistantTask | null {
+  const tasks = loadAssistantTasksRaw(assistantId);
+  const target = tasks.find((task) => task.id === taskId);
+  if (!target) return null;
+  target.status = "completed";
+  target.updatedAt = new Date().toISOString();
+  saveAssistantTasksRaw(assistantId, tasks);
+  return target;
 }
 
 // ─── Dual-write conversation logger ─────────────────────────
@@ -847,8 +1127,13 @@ export function recordConversation(
 export function listAssistantIds(): string[] {
   if (!existsSync(ASSISTANTS_DIR)) return [];
   return readdirSync(ASSISTANTS_DIR).filter(f => {
-    const p = join(ASSISTANTS_DIR, f);
-    return statSync(p).isDirectory();
+    try {
+      assertSafeAssistantId(f);
+      const p = join(ASSISTANTS_DIR, f);
+      return statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
   });
 }
 
@@ -872,7 +1157,9 @@ export function runMemoryJanitor(): { archived: number; cleaned: string[] } {
 
   for (const line of lines) {
     const m = line.match(LIFECYCLE_RE);
-    if (m && m[1] < today) {
+    if (line.includes("[P0]")) {
+      kept.push(line);
+    } else if (m && m[1] < today) {
       expired.push(line);
     } else {
       kept.push(line);
@@ -967,6 +1254,80 @@ const MEMORY_PROTOCOL = `
 2. 如有未完成任务，用 save_working_memory 更新工作记忆
 3. 如果解决了复杂任务，用 save_experience 沉淀操作经验
 `.trim();
+
+function limitContextText(content: string, maxChars: number): string {
+  const trimmed = content.trim();
+  if (!trimmed || trimmed.length <= maxChars) return trimmed;
+  const clipped = trimmed.slice(0, Math.max(0, maxChars - 10)).trimEnd();
+  return `${clipped}\n[...已截断]`;
+}
+
+function createMemoryContextSection(
+  key: MemoryContextSectionKey,
+  title: string,
+  rawContent: string,
+): MemoryContextSection {
+  const limits = MEMORY_CONTEXT_SECTION_LIMITS[key];
+  return {
+    key,
+    title,
+    rawContent: rawContent.trim(),
+    limit: limits.max,
+    minLimit: limits.min,
+  };
+}
+
+function renderMemoryContextResult(
+  preamble: string[],
+  sections: MemoryContextSection[],
+  extraSections: string[],
+): string {
+  const parts: string[] = [...preamble, "<memory>"];
+  for (const section of sections) {
+    const limited = limitContextText(section.rawContent, section.limit);
+    if (!limited) continue;
+    parts.push(section.title, limited, "");
+  }
+  if (extraSections.length) {
+    parts.push(...extraSections);
+  }
+  if (parts.length <= preamble.length + 1) {
+    parts.push("（暂无历史记忆）");
+  }
+  parts.push("</memory>", "", MEMORY_PROTOCOL);
+  return parts.join("\n");
+}
+
+function fitMemoryContext(
+  preamble: string[],
+  sections: MemoryContextSection[],
+  extraSections: string[],
+): string {
+  const shrinkOrder: MemoryContextSectionKey[] = [
+    "assistantDaily",
+    "sharedDaily",
+    "sessionState",
+    "privateLongTerm",
+    "longTerm",
+  ];
+
+  let rendered = renderMemoryContextResult(preamble, sections, extraSections);
+  for (const key of shrinkOrder) {
+    if (rendered.length <= MEMORY_CONTEXT_MAX_CHARS) break;
+    const section = sections.find((item) => item.key === key);
+    if (!section) continue;
+    while (rendered.length > MEMORY_CONTEXT_MAX_CHARS && section.limit > section.minLimit) {
+      const overflow = rendered.length - MEMORY_CONTEXT_MAX_CHARS;
+      section.limit = Math.max(section.minLimit, section.limit - overflow);
+      rendered = renderMemoryContextResult(preamble, sections, extraSections);
+    }
+  }
+
+  if (rendered.length > MEMORY_CONTEXT_MAX_CHARS) {
+    return `${rendered.slice(0, MEMORY_CONTEXT_MAX_CHARS - 10).trimEnd()}\n[...已截断]`;
+  }
+  return rendered;
+}
 
 // ─── Pre-flight knowledge retrieval ──────────────────────────
 
@@ -1248,7 +1609,7 @@ async function queryKnowledgeViaQmd(prompt: string, topK = 3): Promise<QmdHit[]>
  */
 // ─── Memory Context TTL Cache ────────────────────────────────
 // Per-assistant cache to avoid repeated file reads for parallel/heartbeat sessions.
-// Keyed by `${assistantId}:${sessionCwd}`, TTL 30s.
+// Keyed by `${assistantId}:${sessionCwd}:${skipDailyLog}:${prompt.slice(0, 120)}`, TTL 30s.
 const _memoryContextCache = new Map<string, { result: string; ts: number }>();
 const MEMORY_CONTEXT_TTL_MS = 30_000;
 
@@ -1260,7 +1621,12 @@ export async function buildSmartMemoryContext(
 ): Promise<string> {
   ensureDirs();
 
-  const cacheKey = `${assistantId ?? ""}:${sessionCwd ?? ""}`;
+  const cacheKey = [
+    assistantId ?? "",
+    sessionCwd ?? "",
+    opts?.skipDailyLog ? "skip-daily" : "with-daily",
+    prompt.slice(0, 120),
+  ].join(":");
   const cached = _memoryContextCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < MEMORY_CONTEXT_TTL_MS) {
     return cached.result;
@@ -1300,93 +1666,81 @@ export async function buildSmartMemoryContext(
   const preamble: string[] = [];
   const profileLines: string[] = [];
   if (settings.userName?.trim()) profileLines.push(`- 姓名: ${settings.userName.trim()}`);
-  if (settings.workDescription?.trim()) profileLines.push(`- 工作描述: ${settings.workDescription.trim()}`);
+  if (settings.workDescription?.trim()) {
+    profileLines.push(`- 工作描述: ${limitContextText(settings.workDescription.trim(), 600)}`);
+  }
   if (profileLines.length) {
     preamble.push("[用户档案]", ...profileLines, "");
   }
   if (settings.globalPrompt?.trim()) {
-    preamble.push("[全局指令]", settings.globalPrompt.trim(), "");
+    preamble.push("[全局指令]", limitContextText(settings.globalPrompt.trim(), 4_000), "");
   }
 
   if (sessionCwd?.trim()) {
     preamble.push("[工作环境]", `- 当前工作目录: ${sessionCwd.trim()}`, "");
   }
 
-  const parts: string[] = [...preamble, "<memory>"];
-
+  const sections: MemoryContextSection[] = [];
   const abstractTrimmed = abstract.trim();
   if (abstractTrimmed) {
-    parts.push("## 记忆目录索引");
-    parts.push(abstractTrimmed);
-    parts.push("");
+    sections.push(createMemoryContextSection("abstract", "## 记忆目录索引", abstractTrimmed));
   }
   const memoryIsolation = settings.memoryIsolationV3 !== false; // default: on
   const longTermTrimmed = longTerm.trim();
   if (longTermTrimmed) {
-    parts.push(memoryIsolation ? "## 团队共享记忆 (MEMORY.md)" : "## 共享长期记忆 (MEMORY.md)");
-    parts.push(longTermTrimmed);
-    parts.push("");
+    sections.push(
+      createMemoryContextSection(
+        "longTerm",
+        memoryIsolation ? "## 团队共享记忆 (MEMORY.md)" : "## 共享长期记忆 (MEMORY.md)",
+        longTermTrimmed,
+      ),
+    );
   }
   if (memoryIsolation) {
     const privateLongTermTrimmed = privateLongTerm.trim();
     if (privateLongTermTrimmed) {
-      parts.push("## 你的专属记忆 (private MEMORY.md)");
-      parts.push(privateLongTermTrimmed);
-      parts.push("");
+      sections.push(createMemoryContextSection("privateLongTerm", "## 你的专属记忆 (private MEMORY.md)", privateLongTermTrimmed));
     }
   }
   const sessionStateTrimmed = sessionState.trim();
   if (sessionStateTrimmed) {
-    parts.push("## 工作记忆 (SESSION-STATE.md)");
-    parts.push(sessionStateTrimmed);
-    parts.push("");
+    sections.push(createMemoryContextSection("sessionState", "## 工作记忆 (SESSION-STATE.md)", sessionStateTrimmed));
   }
   // Skip daily logs for file-analysis messages — the logs contain previous file analyses
   // that pollute Claude's output with content from a different file.
   if (!opts?.skipDailyLog) {
     const sharedTodayTrimmed = sharedToday.trim();
     if (sharedTodayTrimmed) {
-      parts.push(`## 今日共享日志 (${todayDate})`);
-      parts.push(sharedTodayTrimmed);
-      parts.push("");
+      sections.push(createMemoryContextSection("sharedDaily", `## 今日共享日志 (${todayDate})`, sharedTodayTrimmed));
     }
     const assistantTodayTrimmed = assistantToday.trim();
     if (assistantTodayTrimmed) {
-      parts.push(`## 今日对话日志 (${todayDate})`);
-      parts.push(assistantTodayTrimmed);
-      parts.push("");
+      sections.push(createMemoryContextSection("assistantDaily", `## 今日对话日志 (${todayDate})`, assistantTodayTrimmed));
     }
   }
 
   // Pre-flight knowledge retrieval via qmd (semantic search)
+  const extraSections: string[] = [];
   try {
     const qmdHits = await queryKnowledgeViaQmd(prompt, 3);
     if (qmdHits.length) {
-      parts.push("## 相关知识（语义检索）");
+      extraSections.push("## 相关知识（语义检索）");
       for (const hit of qmdHits) {
-        parts.push(`### ${hit.title}`);
-        parts.push(hit.snippet);
-        parts.push("");
+        extraSections.push(`### ${limitContextText(hit.title, 120)}`);
+        extraSections.push(limitContextText(hit.snippet, 500));
+        extraSections.push("");
       }
     }
   } catch { /* qmd unavailable, skip silently */ }
 
-  if (parts.length <= preamble.length + 1) {
-    parts.push("（暂无历史记忆）");
-  }
-
-  parts.push("</memory>");
-  parts.push("");
-  parts.push(MEMORY_PROTOCOL);
-
-  const result = parts.join("\n");
+  const result = fitMemoryContext(preamble, sections, extraSections);
   _memoryContextCache.set(cacheKey, { result, ts: Date.now() });
   return result;
 }
 
 /** Legacy alias — kept for backward compat */
-export async function buildMemoryContext(): Promise<string> {
-  return buildSmartMemoryContext("");
+export async function buildMemoryContext(assistantId?: string, sessionCwd?: string): Promise<string> {
+  return buildSmartMemoryContext("", assistantId, sessionCwd);
 }
 
 /**

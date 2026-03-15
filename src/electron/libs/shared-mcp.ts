@@ -25,11 +25,14 @@ import {
   writeWorkingMemory,
   readWorkingMemory,
   readSop,
-  appendDailyMemory,
+  completeAssistantTask,
+  listAssistantTasks,
+  upsertAssistantTask,
   writeLongTermMemory,
   readLongTermMemory,
   listAssistantIds,
   ScopedMemory,
+  validateMemoryEntry,
 } from "./memory-store.js";
 import {
   loadPlanItems,
@@ -49,6 +52,7 @@ import { resolveAppAsset } from "../pathResolver.js";
 import { ensurePyPackages, ensurePythonEnv, getManagedPythonInfo, getPythonEnvDir } from "./python-env.js";
 import { delegateToCursor } from "./acp-bridge.js";
 import { prepareVisibleArtifact } from "./bot-base.js";
+import { recordHeartbeatMetric } from "./heartbeat-metrics.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -121,6 +125,122 @@ function archiveVisibleArtifact(filePath: string, sessionCwd?: string, assistant
   const prepared = prepareVisibleArtifact(filePath, resolveVisibleArtifactOptions(sessionCwd, assistantId));
   if (prepared.error) return { filePath, archived: false };
   return { filePath: prepared.filePath, archived: Boolean(prepared.archivedPath) };
+}
+
+export type SharedMcpSensitiveTurnState = {
+  active: boolean;
+  matchedPath?: string;
+};
+
+type SharedMcpToolDef = {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  handler: (...args: any[]) => Promise<any>;
+  annotations?: unknown;
+};
+
+const RESTRICTED_BOT_TOOL_NAMES = new Set([
+  "run_script",
+  "delegate_to_cursor",
+  "desktop_control",
+  "process_control",
+  "clipboard",
+  "take_screenshot",
+  "screen_analyze",
+  "system_info",
+  "create_scheduled_task",
+  "list_scheduled_tasks",
+  "delete_scheduled_task",
+  "register_sop_schedule",
+  "generate_sop",
+  "execute_sop",
+  "send_notification",
+  "save_experience",
+]);
+
+const SENSITIVE_TURN_BLOCKED_TOOL_NAMES = new Set([
+  "save_memory",
+  "save_working_memory",
+  "distill_memory",
+  "save_task",
+  "complete_task",
+  "upsert_plan_item",
+  "complete_plan_item",
+  "fail_plan_item",
+  "save_experience",
+]);
+
+function expandHomePath(filePath: string): string {
+  if (filePath === "~") return os.homedir();
+  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
+    return join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
+
+function resolveToolPath(filePath: string, sessionCwd?: string): string {
+  const expanded = expandHomePath(filePath);
+  return resolve(isAbsolute(expanded) ? expanded : resolve(sessionCwd || process.cwd(), expanded));
+}
+
+function isDotEnvLike(baseName: string): boolean {
+  return baseName === ".env"
+    || baseName.startsWith(".env.")
+    || baseName.endsWith(".env");
+}
+
+function hasSensitiveConfigName(baseName: string): boolean {
+  const lower = baseName.toLowerCase();
+  const match = /(secret|token|credential)/i.test(lower);
+  if (!match) return false;
+  return [".json", ".yaml", ".yml", ".toml", ".env", ".txt", ".conf", ".ini", ""]
+    .some((ext) => ext === "" ? !baseName.includes(".") : lower.endsWith(ext));
+}
+
+export function isSensitiveLocalPath(filePath: string, sessionCwd?: string): boolean {
+  const resolvedPath = resolveToolPath(filePath, sessionCwd);
+  const home = os.homedir();
+  const normalized = resolvedPath.replace(/\\/g, "/");
+  const sensitiveRoots = [
+    join(home, ".vk-cowork").replace(/\\/g, "/"),
+    join(home, ".claude").replace(/\\/g, "/"),
+  ];
+  if (sensitiveRoots.some((root) => normalized === root || normalized.startsWith(`${root}/`))) {
+    return true;
+  }
+  const baseName = normalized.split("/").pop() ?? normalized;
+  return isDotEnvLike(baseName) || hasSensitiveConfigName(baseName);
+}
+
+function denyRestrictedBotTool(name: string) {
+  return ok(`工具 ${name} 仅允许私聊白名单用户执行。请改为白名单私聊后重试。`);
+}
+
+function denySensitivePathRead() {
+  return ok("当前会话无权读取敏感本地路径。请通过白名单私聊发起。");
+}
+
+function denySensitiveTurnPersistence(name: string) {
+  return ok(`当前回合命中了敏感路径，已禁用 ${name} 以避免本地持久化。`);
+}
+
+function wrapSharedTool(toolDef: SharedMcpToolDef, opts: {
+  isOwner?: boolean;
+  sensitiveTurnState?: SharedMcpSensitiveTurnState;
+}): SharedMcpToolDef {
+  return {
+    ...toolDef,
+    handler: async (...args: any[]) => {
+      if (opts.sensitiveTurnState?.active && SENSITIVE_TURN_BLOCKED_TOOL_NAMES.has(toolDef.name)) {
+        return denySensitiveTurnPersistence(toolDef.name);
+      }
+      if (opts.isOwner === false && RESTRICTED_BOT_TOOL_NAMES.has(toolDef.name)) {
+        return denyRestrictedBotTool(toolDef.name);
+      }
+      return toolDef.handler(...args);
+    },
+  };
 }
 
 const WEB_FETCH_SCRIPT = String.raw`import json
@@ -830,63 +950,79 @@ const webFetchTool = tool(
   },
 );
 
-const readDocumentTool = tool(
-  "read_document",
-  "读取本地文件内容并返回纯文本。支持 PDF、Word（.docx）、Excel（.xlsx/.xls）、纯文本、CSV 等格式。" +
-  "收到文件路径时必须优先调用此工具获取实际内容，不得凭猜测或训练数据捏造文件内容。",
-  {
-    file_path: z.string().describe("本地文件的绝对路径"),
-    max_chars: z.number().optional().describe("最多返回字符数，默认 20000"),
-  },
-  async (input) => {
-    const filePath = String(input.file_path ?? "").trim();
-    if (!filePath) return ok("file_path 不能为空");
-    const maxChars = Math.min(Number(input.max_chars ?? 20_000), 60_000);
+function createReadDocumentTool(
+  sessionCwd?: string,
+  isOwner?: boolean,
+  sensitiveTurnState?: SharedMcpSensitiveTurnState,
+) {
+  return tool(
+    "read_document",
+    "读取本地文件内容并返回纯文本。支持 PDF、Word（.docx）、Excel（.xlsx/.xls）、纯文本、CSV 等格式。" +
+    "收到文件路径时必须优先调用此工具获取实际内容，不得凭猜测或训练数据捏造文件内容。",
+    {
+      file_path: z.string().describe("本地文件的绝对路径"),
+      max_chars: z.number().optional().describe("最多返回字符数，默认 20000"),
+    },
+    async (input) => {
+      const filePath = String(input.file_path ?? "").trim();
+      if (!filePath) return ok("file_path 不能为空");
+      const maxChars = Math.min(Number(input.max_chars ?? 20_000), 60_000);
+      const resolvedPath = resolveToolPath(filePath, sessionCwd);
+      const sensitivePath = isSensitiveLocalPath(resolvedPath, sessionCwd);
 
-    const fs = await import("fs");
-    if (!fs.existsSync(filePath)) return ok(`文件不存在: ${filePath}`);
-
-    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-
-    try {
-      // PDF
-      if (ext === "pdf") {
-        const { createRequire } = await import("module");
-        const require = createRequire(import.meta.url);
-        const pdfParse = require("pdf-parse");
-        const buffer = fs.readFileSync(filePath);
-        const data = await pdfParse(buffer);
-        const text = (data.text as string).trim();
-        if (!text) return ok("PDF 内容为空或无法提取文本（可能是扫描件图片 PDF）");
-        return ok(text.slice(0, maxChars));
+      if (sensitivePath && isOwner === false) {
+        return denySensitivePathRead();
+      }
+      if (sensitivePath && isOwner === true && sensitiveTurnState) {
+        sensitiveTurnState.active = true;
+        sensitiveTurnState.matchedPath = resolvedPath;
       }
 
-      // Word (.docx)
-      if (ext === "docx") {
-        const { createRequire } = await import("module");
-        const require = createRequire(import.meta.url);
-        try {
-          const mammoth = require("mammoth");
-          const result = await mammoth.extractRawText({ path: filePath });
-          return ok((result.value as string).trim().slice(0, maxChars));
-        } catch {
-          return ok("需要安装 mammoth 包以读取 .docx 文件：npm install mammoth");
+      const fs = await import("fs");
+      if (!fs.existsSync(resolvedPath)) return ok(`文件不存在: ${resolvedPath}`);
+
+      const ext = resolvedPath.split(".").pop()?.toLowerCase() ?? "";
+
+      try {
+        // PDF
+        if (ext === "pdf") {
+          const { createRequire } = await import("module");
+          const require = createRequire(import.meta.url);
+          const pdfParse = require("pdf-parse");
+          const buffer = fs.readFileSync(resolvedPath);
+          const data = await pdfParse(buffer);
+          const text = (data.text as string).trim();
+          if (!text) return ok("PDF 内容为空或无法提取文本（可能是扫描件图片 PDF）");
+          return ok(text.slice(0, maxChars));
         }
-      }
 
-      // Plain text / CSV / JSON / XML / Markdown etc.
-      const textExts = ["txt", "csv", "json", "xml", "md", "yaml", "yml", "log", "html", "htm"];
-      if (textExts.includes(ext) || ext === "") {
-        const content = fs.readFileSync(filePath, "utf8");
-        return ok(content.slice(0, maxChars));
-      }
+        // Word (.docx)
+        if (ext === "docx") {
+          const { createRequire } = await import("module");
+          const require = createRequire(import.meta.url);
+          try {
+            const mammoth = require("mammoth");
+            const result = await mammoth.extractRawText({ path: resolvedPath });
+            return ok((result.value as string).trim().slice(0, maxChars));
+          } catch {
+            return ok("需要安装 mammoth 包以读取 .docx 文件：npm install mammoth");
+          }
+        }
 
-      return ok(`不支持的文件类型: .${ext}。支持: pdf, docx, txt, csv, json, xml, md 等文本格式。`);
-    } catch (err) {
-      return ok(`读取失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
+        // Plain text / CSV / JSON / XML / Markdown etc.
+        const textExts = ["txt", "csv", "json", "xml", "md", "yaml", "yml", "log", "html", "htm"];
+        if (textExts.includes(ext) || ext === "") {
+          const content = fs.readFileSync(resolvedPath, "utf8");
+          return ok(content.slice(0, maxChars));
+        }
+
+        return ok(`不支持的文件类型: .${ext}。支持: pdf, docx, txt, csv, json, xml, md 等文本格式。`);
+      } catch (err) {
+        return ok(`读取失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
 
 function createTakeScreenshotTool(sessionCwd?: string, assistantId?: string) {
   return tool(
@@ -1064,10 +1200,14 @@ function createSaveMemoryTool(assistantId?: string) {
           return line.trimEnd();
         }).join("\n").trim();
 
-        const taggedMemoryPattern = /^[-*]\s+\[(?:P0|P1\|expire:\d{4}-\d{2}-\d{2}|P2\|expire:\d{4}-\d{2}-\d{2})\]\s+/m;
-        if (!taggedMemoryPattern.test(content)) {
-          return ok("保存失败：每个条目必须以 '- [P0] ' / '- [P1|expire:YYYY-MM-DD] ' / '- [P2|expire:YYYY-MM-DD] ' 开头。");
+        const validation = validateMemoryEntry(content, {
+          requireLifecycleTag: true,
+          maxChars: 8_000,
+        });
+        if (!validation.ok) {
+          return ok(`保存失败：${validation.message}`);
         }
+        content = validation.normalized;
 
         const settings = loadUserSettings();
         const memoryIsolation = settings.memoryIsolationV3 !== false; // default: on
@@ -1151,6 +1291,89 @@ function createQueryTeamMemoryTool(assistantId?: string) {
   );
 }
 
+function createSaveTaskTool(assistantId?: string) {
+  return tool(
+    "save_task",
+    "保存或更新一条结构化待办任务。适用于用户明确要求后续跟进、提醒、推进的事项。",
+    {
+      task_id: z.string().optional().describe("任务 ID。传入时更新现有任务，不传则创建新任务"),
+      title: z.string().describe("任务标题，简明描述要跟进的事项"),
+      due_date: z.string().optional().describe("截止日期，格式 YYYY-MM-DD（可选）"),
+      status: z.enum(["pending", "in_progress", "completed"]).default("pending").describe("任务状态"),
+    },
+    async (input) => {
+      if (!assistantId) {
+        return ok("保存失败：save_task 需要 assistantId。");
+      }
+      try {
+        const task = upsertAssistantTask(assistantId, {
+          id: input.task_id ? String(input.task_id).trim() : undefined,
+          title: String(input.title ?? ""),
+          dueDate: input.due_date ? String(input.due_date).trim() : undefined,
+          status: input.status,
+        });
+        const due = task.dueDate ? `\n- 截止：${task.dueDate}` : "";
+        return ok(
+          `任务已保存：\n- ID：${task.id}\n- 标题：${task.title}\n- 状态：${task.status}${due}`,
+        );
+      } catch (err) {
+        return ok(`保存任务失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
+function createCompleteTaskTool(assistantId?: string) {
+  return tool(
+    "complete_task",
+    "将一条结构化待办任务标记为已完成。",
+    {
+      task_id: z.string().describe("任务 ID"),
+    },
+    async (input) => {
+      if (!assistantId) {
+        return ok("标记失败：complete_task 需要 assistantId。");
+      }
+      try {
+        const task = completeAssistantTask(assistantId, String(input.task_id ?? "").trim());
+        if (!task) return ok("未找到对应任务。");
+        return ok(`任务已完成：${task.title} (${task.id})`);
+      } catch (err) {
+        return ok(`完成任务失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
+function createListTasksTool(assistantId?: string) {
+  return tool(
+    "list_tasks",
+    "读取当前助理的结构化任务列表，查看待办与完成状态。",
+    {
+      status: z.enum(["pending", "in_progress", "completed"]).optional().describe("按状态筛选"),
+      include_completed: z.boolean().optional().describe("是否包含已完成任务，默认 false"),
+    },
+    async (input) => {
+      if (!assistantId) {
+        return ok("读取失败：list_tasks 需要 assistantId。");
+      }
+      try {
+        const tasks = listAssistantTasks(assistantId, {
+          includeCompleted: input.include_completed === true || input.status === "completed",
+        }).filter((task) => (input.status ? task.status === input.status : true));
+        if (tasks.length === 0) return ok("当前没有匹配的结构化任务。");
+        const lines = tasks.map((task) => {
+          const due = task.dueDate ? ` | 截止 ${task.dueDate}` : "";
+          return `- [${task.id}] ${task.title} | ${task.status}${due}`;
+        });
+        return ok(`## 当前结构化任务\n${lines.join("\n")}`);
+      } catch (err) {
+        return ok(`读取任务失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
 // ── Memory Distillation ─────────────────────────────────────────────────────
 
 const distillMemoryTool = tool(
@@ -1172,7 +1395,7 @@ const distillMemoryTool = tool(
       `2. **用户在你领域的偏好/决策** → save_memory(scope:"private", content:"- [P0] 内容")\n` +
       `3. **用户身份变更/团队级决策** → save_memory(scope:"shared", content:"- [P0] 内容")\n` +
       `4. **复杂任务流程**（多步骤、有踩坑点）→ 用 save_experience 沉淀为经验候选\n` +
-      `5. **未完成任务/下次需继续的上下文** → 用 save_working_memory 保存\n` +
+      `5. **未完成任务/下次需继续的上下文** → 用 save_task 保存任务，用 save_working_memory 保存上下文\n` +
       `   （daily 日志由系统自动写入，无需手动处理）\n\n` +
       `━━ 分流判断 ━━\n` +
       `默认写专属记忆（private）。只有当信息对所有助理都有用时才写共享（shared）。\n\n` +
@@ -2068,10 +2291,11 @@ function markChannelUsed(platform: string, targetId: string): void {
  */
 export async function sendNotificationDirect(
   text: string,
-  opts?: { assistantId?: string; skipCooldown?: boolean },
+  opts?: { assistantId?: string; skipCooldown?: boolean; taskId?: string },
 ): Promise<{ ok: boolean; channel?: string; error?: string }> {
   const assistantId = opts?.assistantId;
   const skipCooldown = opts?.skipCooldown ?? true; // scheduled tasks skip cooldown by default
+  const taskId = opts?.taskId?.trim() || undefined;
   const cooldownMs = getCooldownMs(assistantId);
 
   const resolveId = (
@@ -2106,18 +2330,47 @@ export async function sendNotificationDirect(
     },
   ];
 
+  let lastError = "no connected channel";
   for (const ch of channels) {
     if (!ch.id) continue;
-    if (!skipCooldown && isChannelOnCooldown(ch.name, ch.id, cooldownMs)) continue;
+    if (!skipCooldown && isChannelOnCooldown(ch.name, ch.id, cooldownMs)) {
+      lastError = `${ch.name} on cooldown`;
+      continue;
+    }
     const result = await ch.send(ch.id);
     if (result.ok) {
       markChannelUsed(ch.name, ch.id);
-      appendNotified({ summary: text.slice(0, 120), ts: Date.now(), assistantId: assistantId ?? "" });
+      const ts = Date.now();
+      appendNotified({
+        summary: text.slice(0, 120),
+        ts,
+        assistantId: assistantId ?? "",
+        taskId,
+      });
+      if (assistantId) {
+        const time = new Date(ts).toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        new ScopedMemory(assistantId).appendDaily(`- ${time} [通知/${ch.name}] ${text.slice(0, 200)}`);
+      }
+      recordHeartbeatMetric("notification_sent", {
+        assistantId,
+        channel: ch.name,
+        taskId,
+      });
       return { ok: true, channel: ch.name };
     }
+    lastError = result.error ?? `send failed via ${ch.name}`;
   }
 
-  return { ok: false, error: "no connected channel" };
+  recordHeartbeatMetric("notification_failed", {
+    assistantId,
+    error: lastError,
+    taskId,
+  });
+  return { ok: false, error: lastError };
 }
 
 function createSendNotificationTool(assistantId?: string) {
@@ -2127,6 +2380,7 @@ function createSendNotificationTool(assistantId?: string) {
     {
       text: z.string().describe("通知内容（支持 Markdown）"),
       title: z.string().optional().describe("通知标题（可选，部分渠道会用到）"),
+      task_id: z.string().optional().describe("关联的结构化任务 ID（可选，用于去重）"),
       urgent: z.boolean().optional().describe("紧急通知：设为 true 可跳过冷却限制，立即发送"),
     },
     async (input) => {
@@ -2134,12 +2388,18 @@ function createSendNotificationTool(assistantId?: string) {
       const result = await sendNotificationDirect(text, {
         assistantId,
         skipCooldown: input.urgent === true,
+        taskId: input.task_id ? String(input.task_id).trim() : undefined,
       });
       if (result.ok) {
-        const channelNames: Record<string, string> = { telegram: "Telegram", feishu: "飞书", dingtalk: "钉钉" };
+        const channelNames: Record<string, string> = {
+          telegram: "Telegram",
+          feishu: "飞书",
+          qqbot: "QQ",
+          dingtalk: "钉钉",
+        };
         return ok(`通知已通过 ${channelNames[result.channel!] ?? result.channel} 发送。`);
       }
-      return ok("无可用推送渠道（Telegram / 飞书 / 钉钉 均未连接或未配置接收者）。");
+      return ok(`通知未发送：${result.error ?? "无可用推送渠道（Telegram / 飞书 / QQ / 钉钉 均未连接或未配置接收者）。"}`);
     },
   );
 }
@@ -2180,6 +2440,9 @@ export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "read_document", category: "文件", description: "读取本地文件（PDF/Word/Excel/文本/CSV）内容" },
   // Memory
   { name: "save_memory",         category: "记忆", description: "保存长期记忆条目（private 专属 / shared 团队共享）" },
+  { name: "save_task",           category: "记忆", description: "保存或更新结构化待办任务，供心跳和后续会话跟进" },
+  { name: "complete_task",       category: "记忆", description: "将结构化待办任务标记为已完成" },
+  { name: "list_tasks",          category: "记忆", description: "列出当前助理的结构化任务" },
   { name: "save_working_memory", category: "记忆", description: "保存当前任务上下文的工作记忆检查点" },
   // framework injects prevOutput automatically; manual read is redundant and confusing in SOP stages
   { name: "read_working_memory", category: "记忆", description: "读取最近保存的工作记忆检查点", sopExclude: true },
@@ -2353,72 +2616,87 @@ const querySopGenerateStatusTool = tool(
   },
 );
 
-export function createSharedMcpServer(opts?: { assistantId?: string; sessionId?: string; sessionCwd?: string; workflowSopId?: string; scheduledTaskId?: string }) {
+export function createSharedMcpServer(opts?: {
+  assistantId?: string;
+  sessionId?: string;
+  sessionCwd?: string;
+  workflowSopId?: string;
+  scheduledTaskId?: string;
+  isOwner?: boolean;
+  sensitiveTurnState?: SharedMcpSensitiveTurnState;
+}) {
   const assistantId = opts?.assistantId;
   const sessionId = opts?.sessionId;
   const sessionCwd = opts?.sessionCwd;
   const workflowSopId = opts?.workflowSopId;
   const scheduledTaskId = opts?.scheduledTaskId;
+  const isOwner = opts?.isOwner;
+  const sensitiveTurnState = opts?.sensitiveTurnState;
 
   // When executing a scheduled task, exclude scheduler tools to prevent
   // infinite recursion (AI creating new tasks instead of executing the prompt)
   const isScheduledRun = !!scheduledTaskId && !workflowSopId;
 
+  const tools: SharedMcpToolDef[] = [
+    // Scheduler — excluded during scheduled task execution to prevent loops
+    ...(isScheduledRun ? [] : [
+      createScheduledTaskTool(workflowSopId),
+      listScheduledTasksTool,
+      deleteScheduledTaskTool,
+      createRegisterSopScheduleTool(workflowSopId),
+    ]),
+    // Web & Documents
+    webSearchTool,
+    webFetchTool,
+    createReadDocumentTool(sessionCwd, isOwner, sensitiveTurnState),
+    // Screen & Desktop
+    createTakeScreenshotTool(sessionCwd, assistantId),
+    createScreenAnalyzeTool(sessionCwd, assistantId),
+    desktopControlTool,
+    // Experience documentation (shared across all assistants)
+    createSaveExperienceTool(sessionId, assistantId),
+    // Working Memory (scoped to assistant if ID provided)
+    createSaveWorkingMemoryTool(assistantId),
+    createReadWorkingMemoryTool(assistantId),
+    // Long-term Memory (scoped — private by default)
+    createSaveMemoryTool(assistantId),
+    createSaveTaskTool(assistantId),
+    createCompleteTaskTool(assistantId),
+    createListTasksTool(assistantId),
+    // Cross-assistant memory search (read-only)
+    createQueryTeamMemoryTool(assistantId),
+    // Memory Distillation
+    distillMemoryTool,
+    // Atomic Power Tools
+    createDelegateToCursorTool(sessionCwd),
+    createRunScriptTool(sessionCwd),
+    processControlTool,
+    clipboardTool,
+    systemInfoTool,
+    // 6551 OpenNews — crypto/financial news with AI ratings
+    newsLatestTool,
+    newsSearchTool,
+    // 6551 OpenTwitter — Twitter/X data
+    twitterUserTweetsTool,
+    twitterSearchTool,
+    // Plan Table (AI writes, frontend reads)
+    createUpsertPlanItemTool(assistantId, scheduledTaskId),
+    createCompletePlanItemTool(assistantId),
+    createFailPlanItemTool(assistantId),
+    createListPlanItemsTool(assistantId),
+    // Proactive notification (Telegram > Feishu > DingTalk priority)
+    createSendNotificationTool(assistantId),
+    // Workflow SOP (conversational creation & execution)
+    listSopWorkflowsTool,
+    generateSopTool,
+    executeSopTool,
+    querySopRunStatusTool,
+    querySopGenerateStatusTool,
+  ];
+
   return createSdkMcpServer({
     name: "vk-shared",
     version: "2.0.0",
-    tools: [
-      // Scheduler — excluded during scheduled task execution to prevent loops
-      ...(isScheduledRun ? [] : [
-        createScheduledTaskTool(workflowSopId),
-        listScheduledTasksTool,
-        deleteScheduledTaskTool,
-        createRegisterSopScheduleTool(workflowSopId),
-      ]),
-      // Web & Documents
-      webSearchTool,
-      webFetchTool,
-      readDocumentTool,
-      // Screen & Desktop
-      createTakeScreenshotTool(sessionCwd, assistantId),
-      createScreenAnalyzeTool(sessionCwd, assistantId),
-      desktopControlTool,
-      // Experience documentation (shared across all assistants)
-      createSaveExperienceTool(sessionId, assistantId),
-      // Working Memory (scoped to assistant if ID provided)
-      createSaveWorkingMemoryTool(assistantId),
-      createReadWorkingMemoryTool(assistantId),
-      // Long-term Memory (scoped — private by default)
-      createSaveMemoryTool(assistantId),
-      // Cross-assistant memory search (read-only)
-      createQueryTeamMemoryTool(assistantId),
-      // Memory Distillation
-      distillMemoryTool,
-      // Atomic Power Tools
-      createDelegateToCursorTool(sessionCwd),
-      createRunScriptTool(sessionCwd),
-      processControlTool,
-      clipboardTool,
-      systemInfoTool,
-      // 6551 OpenNews — crypto/financial news with AI ratings
-      newsLatestTool,
-      newsSearchTool,
-      // 6551 OpenTwitter — Twitter/X data
-      twitterUserTweetsTool,
-      twitterSearchTool,
-      // Plan Table (AI writes, frontend reads)
-      createUpsertPlanItemTool(assistantId, scheduledTaskId),
-      createCompletePlanItemTool(assistantId),
-      createFailPlanItemTool(assistantId),
-      createListPlanItemsTool(assistantId),
-      // Proactive notification (Telegram > Feishu > DingTalk priority)
-      createSendNotificationTool(assistantId),
-      // Workflow SOP (conversational creation & execution)
-      listSopWorkflowsTool,
-      generateSopTool,
-      executeSopTool,
-      querySopRunStatusTool,
-      querySopGenerateStatusTool,
-    ],
+    tools: tools.map((toolDef) => wrapSharedTool(toolDef, { isOwner, sensitiveTurnState })),
   });
 }

@@ -13,7 +13,13 @@ const mockState = vi.hoisted(() => ({
     provider: "claude" as const,
     heartbeatRules: "检查未完成事项",
   },
-  readRecentNotified: vi.fn(() => []),
+  readRecentNotified: vi.fn<(...args: any[]) => any[]>(() => []),
+}));
+
+vi.mock("electron", () => ({
+  app: {
+    getPath: () => "/mock/user-data",
+  },
 }));
 
 vi.mock("os", async () => {
@@ -41,6 +47,7 @@ import {
   parseHeartbeatResultText,
   resetHeartbeatStateForTests,
 } from "../heartbeat.js";
+import { upsertAssistantTask } from "../memory-store.js";
 
 function today(): string {
   const now = new Date();
@@ -156,5 +163,29 @@ describe("heartbeat helpers", () => {
       noActionStreak: 0,
       errorStreak: 1,
     });
+  });
+
+  it("injects structured tasks and task-based notification history", () => {
+    const task = upsertAssistantTask(mockState.assistant.id, {
+      title: "跟进发布回归结果",
+      dueDate: "2026-03-20",
+    });
+    mockState.readRecentNotified.mockReturnValue([
+      {
+        key: "abc12345",
+        summary: "已提醒用户跟进发布回归结果",
+        ts: Date.now(),
+        assistantId: mockState.assistant.id,
+        taskId: task.id,
+      },
+    ]);
+
+    const prompt = buildHeartbeatPrompt(mockState.assistant as any);
+
+    expect(prompt).toContain("## 结构化未完成任务");
+    expect(prompt).toContain(task.id);
+    expect(prompt).toContain("跟进发布回归结果");
+    expect(prompt).toContain(`[task:${task.id}]`);
+    expect(prompt).toContain("尽量传 task_id");
   });
 });

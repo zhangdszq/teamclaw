@@ -9,6 +9,7 @@ export type HeartbeatMetricEvent =
   | "skipped"
   | "completed"
   | "notification_sent"
+  | "notification_failed"
   | "notification_skipped";
 
 export function recordHeartbeatMetric(

@@ -11,6 +11,7 @@ export interface NotifiedEntry {
   summary: string;   // first 120 chars of text for AI context
   ts: number;
   assistantId: string;
+  taskId?: string;
 }
 
 function loadEntries(): NotifiedEntry[] {
@@ -31,7 +32,8 @@ function saveEntries(entries: NotifiedEntry[]): void {
 }
 
 export function appendNotified(entry: Omit<NotifiedEntry, "key">): void {
-  const key = createHash("sha1").update(entry.summary).digest("hex").slice(0, 8);
+  const keySource = entry.taskId?.trim() || entry.summary;
+  const key = createHash("sha1").update(keySource).digest("hex").slice(0, 8);
   const cutoff = Date.now() - RETENTION_MS;
   // Load, prune old entries, append new one
   const entries = loadEntries().filter((e) => e.ts > cutoff);

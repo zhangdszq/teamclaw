@@ -119,6 +119,8 @@ export function buildStructuredPersona(
     );
   }
 
+  sections.push(SCHEDULE_REMINDER_RULE);
+
   for (const extra of extras) {
     if (extra?.trim()) sections.push(extra.trim());
   }
@@ -133,6 +135,13 @@ export const FILE_SEND_RULE =
   "- 不要只告诉用户文件路径\n" +
   "- 优先将最终成品保存到当前工作区的 `outputs/<助理名>/` 目录，再调用 `send_file` 发送\n" +
   "- 如果文件先生成在 `/tmp` 等临时目录，发送时系统会自动归档到输出目录";
+
+export const SCHEDULE_REMINDER_RULE =
+  "## 定时与提醒规则\n" +
+  "- 用户要求你在未来某个时间提醒、通知、催办，或按每天/每周/间隔重复执行时，必须调用 `create_scheduled_task` 创建系统定时任务。\n" +
+  "- 简单提醒优先使用 `notifyText`；只有需要 AI 思考、搜索、读写文件或调用其他工具时才使用 `prompt`。\n" +
+  "- 除非用户明确要求“只在当前会话里临时提醒”或“临时定时”，否则禁止使用当前会话内置的临时提醒、临时定时器或类似替代方案。\n" +
+  "- 创建定时任务时若需要 `assistantId`，应使用助理 ID，而不是助理显示名称。";
 
 /**
  * The "图文混排规则" section — injected via applyAssistantContext for all channels (App + Bot).

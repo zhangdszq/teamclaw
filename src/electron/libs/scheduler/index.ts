@@ -8,7 +8,7 @@ import type { ClientEvent } from "../../types.js";
 import { TaskScheduler, getDefaultStorePath, getDefaultLogDir } from "./modules/task-scheduler.js";
 import { SopScheduler } from "./modules/sop-scheduler.js";
 import { HookRunner } from "./modules/hook-runner.js";
-import { loadAssistantsConfig, type AssistantConfig } from "../assistants-config.js";
+import { loadAssistantsConfig, resolveAssistantReference, type AssistantConfig } from "../assistants-config.js";
 import { sendNotificationDirect } from "../shared-mcp.js";
 import { calculateNextRunAtMs } from "./core/schedule.js";
 import type {
@@ -91,11 +91,18 @@ export class SchedulerService {
   }
 
   private async executeTask(task: ScheduledTask): Promise<void> {
+    const config = loadAssistantsConfig();
+    const assistantMatch = task.assistantId ? resolveAssistantReference(task.assistantId, config) : { matchedBy: "none" as const };
+    const assistant: AssistantConfig | undefined = assistantMatch.assistant
+      ?? (task.assistantId
+        ? undefined
+        : config.assistants.find((a: AssistantConfig) => a.id === config.defaultAssistantId) ?? config.assistants[0]);
+
     // Direct push mode: skip AI session entirely, just send notification
     if (task.notifyText) {
       console.log(`[Scheduler] Direct push for task "${task.name}": ${task.notifyText.slice(0, 60)}`);
       const result = await sendNotificationDirect(task.notifyText, {
-        assistantId: task.assistantId,
+        assistantId: assistant?.id ?? assistantMatch.assistant?.id ?? task.assistantId,
         skipCooldown: true,
       });
       if (!result.ok) {
@@ -109,10 +116,6 @@ export class SchedulerService {
       console.warn(`[Scheduler] sessionRunner not set, cannot run task: ${task.name}`);
       return;
     }
-    const config = loadAssistantsConfig();
-    const assistant: AssistantConfig | undefined = task.assistantId
-      ? config.assistants.find((a: AssistantConfig) => a.id === task.assistantId)
-      : config.assistants.find((a: AssistantConfig) => a.id === config.defaultAssistantId) ?? config.assistants[0];
 
     const scheduledPrefix =
       `[系统] 这是一个自动触发的定时任务「${task.name}」，请直接执行以下指令并输出结果。` +
@@ -143,7 +146,7 @@ export class SchedulerService {
     }
     const config = loadAssistantsConfig();
     const assistant: AssistantConfig | undefined = hook.assistantId
-      ? config.assistants.find((a: AssistantConfig) => a.id === hook.assistantId)
+      ? resolveAssistantReference(hook.assistantId, config).assistant
       : config.assistants.find((a: AssistantConfig) => a.id === config.defaultAssistantId) ?? config.assistants[0];
 
     const hookPrefix =
@@ -346,6 +349,9 @@ export async function addScheduledTask(
   input: Partial<LegacyTask>,
 ): Promise<LegacyTask> {
   const svc = getSchedulerService();
+  const normalizedAssistantId = input.assistantId
+    ? (resolveAssistantReference(input.assistantId).assistant?.id ?? input.assistantId)
+    : input.assistantId;
 
   // SOP task
   if (input.sopId) {
@@ -381,7 +387,7 @@ export async function addScheduledTask(
       prompt: input.prompt ?? "",
       hookEvent: input.hookEvent,
       hookFilter: input.hookFilter,
-      assistantId: input.assistantId,
+      assistantId: normalizedAssistantId,
     });
     return {
       id: hook.id,
@@ -399,7 +405,7 @@ export async function addScheduledTask(
   }
 
   // Regular task
-  const internal = legacyToInternal(input);
+  const internal = legacyToInternal({ ...input, assistantId: normalizedAssistantId });
   const created = await svc.tasks.add(internal);
   return internalToLegacy(created);
 }
@@ -446,7 +452,11 @@ export async function updateScheduledTask(
   if (updates.enabled !== undefined) patch.enabled = updates.enabled;
   if (updates.name !== undefined) patch.name = updates.name;
   if (updates.prompt !== undefined) patch.prompt = updates.prompt;
-  if (updates.assistantId !== undefined) patch.assistantId = updates.assistantId;
+  if (updates.assistantId !== undefined) {
+    patch.assistantId = updates.assistantId
+      ? (resolveAssistantReference(updates.assistantId).assistant?.id ?? updates.assistantId)
+      : updates.assistantId;
+  }
   if (updates.cwd !== undefined) patch.cwd = updates.cwd;
   if (updates.scheduleType !== undefined || updates.dailyTime !== undefined ||
       updates.intervalValue !== undefined || updates.scheduledTime !== undefined) {

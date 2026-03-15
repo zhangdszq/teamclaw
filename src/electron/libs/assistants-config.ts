@@ -36,6 +36,10 @@ export type AssistantsConfig = {
   userContext?: string;
 };
 
+export type AssistantReferenceResolution =
+  | { assistant: AssistantConfig; matchedBy: "id" | "name" }
+  | { assistant?: undefined; matchedBy: "none" | "ambiguous-name" };
+
 const VK_COWORK_DIR = join(homedir(), ".vk-cowork");
 const ASSISTANTS_FILE = join(VK_COWORK_DIR, "assistants-config.json");
 
@@ -186,6 +190,22 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
     defaultAssistantId: defaultExists ? preferredDefault : assistants[0]?.id,
     userContext: optStr(input?.userContext),
   };
+}
+
+export function resolveAssistantReference(
+  reference: string | undefined | null,
+  config: AssistantsConfig = loadAssistantsConfig(),
+): AssistantReferenceResolution {
+  const ref = String(reference ?? "").trim();
+  if (!ref) return { matchedBy: "none" };
+
+  const byId = config.assistants.find((assistant) => assistant.id === ref);
+  if (byId) return { assistant: byId, matchedBy: "id" };
+
+  const byName = config.assistants.filter((assistant) => assistant.name === ref);
+  if (byName.length === 1) return { assistant: byName[0], matchedBy: "name" };
+  if (byName.length > 1) return { matchedBy: "ambiguous-name" };
+  return { matchedBy: "none" };
 }
 
 export function loadAssistantsConfig(): AssistantsConfig {

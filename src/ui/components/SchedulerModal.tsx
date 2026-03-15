@@ -87,11 +87,28 @@ const isSameDay = (a: Date, b: Date) =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
+const startOfDayMs = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+
 const getTaskDisplayDate = (task: ScheduledTask): Date | null => {
   // Always prefer nextRun (dynamic, accurate) over scheduledTime (original, may be past)
   if (task.nextRun) return new Date(task.nextRun);
   if (task.scheduleType === "once" && task.scheduledTime) return new Date(task.scheduledTime);
   return null;
+};
+
+const isTaskStartedByDay = (task: ScheduledTask, date: Date): boolean => {
+  if (!task.createdAt) return true;
+  const createdAt = new Date(task.createdAt);
+  if (Number.isNaN(createdAt.getTime())) return true;
+  return startOfDayMs(date) >= startOfDayMs(createdAt);
+};
+
+const isDailyTaskOnDay = (task: ScheduledTask, date: Date): boolean => {
+  if (!task.dailyTime || !isTaskStartedByDay(task, date)) return false;
+  if (task.dailyDays && task.dailyDays.length > 0) {
+    return task.dailyDays.includes(date.getDay());
+  }
+  return true;
 };
 
 // Returns true if task should appear on this calendar day
@@ -102,16 +119,11 @@ const isTaskOnDay = (task: ScheduledTask, date: Date): boolean => {
     const d = getTaskDisplayDate(task);
     return !!d && isSameDay(d, date);
   }
-  if (task.scheduleType === "daily" || task.scheduleType === "cron") {
-    // Show on the day of next scheduled run if available; otherwise fall back to day-of-week match
+  if (task.scheduleType === "daily") {
+    return isDailyTaskOnDay(task, date);
+  }
+  if (task.scheduleType === "cron") {
     if (task.nextRun) return isSameDay(new Date(task.nextRun), date);
-    if (task.scheduleType === "daily") {
-      if (!task.dailyTime) return false;
-      if (task.dailyDays && task.dailyDays.length > 0) {
-        return task.dailyDays.includes(date.getDay());
-      }
-      return true;
-    }
     return false;
   }
   return false;

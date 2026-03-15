@@ -96,6 +96,17 @@ vi.mock("../assistants-config.js", () => ({
   loadAssistantsConfig: vi.fn(() => ({
     assistants: [{ id: "assistant-1", name: "小助理" }],
   })),
+  resolveAssistantReference: vi.fn((reference: string | undefined | null, config?: { assistants: Array<{ id: string; name: string }> }) => {
+    const cfg = config ?? { assistants: [{ id: "assistant-1", name: "小助理" }] };
+    const ref = String(reference ?? "").trim();
+    if (!ref) return { matchedBy: "none" };
+    const byId = cfg.assistants.find((assistant) => assistant.id === ref);
+    if (byId) return { assistant: byId, matchedBy: "id" };
+    const byName = cfg.assistants.filter((assistant) => assistant.name === ref);
+    if (byName.length === 1) return { assistant: byName[0], matchedBy: "name" };
+    if (byName.length > 1) return { matchedBy: "ambiguous-name" };
+    return { matchedBy: "none" };
+  }),
 }));
 
 vi.mock("../user-settings.js", () => ({
@@ -126,6 +137,7 @@ vi.mock("../heartbeat-metrics.js", () => ({
 }));
 
 import { createSharedMcpServer, isSensitiveLocalPath, type SharedMcpSensitiveTurnState } from "../shared-mcp.js";
+import { addScheduledTask } from "../scheduler/index.js";
 
 function toolText(result: any): string {
   return result?.content?.map((item: any) => item.text).join("\n") ?? "";
@@ -140,6 +152,13 @@ describe("shared MCP bot whitelist access", () => {
     rmSync(tempHome, { recursive: true, force: true });
     mkdirSync(tempHome, { recursive: true });
     mockState.delegateToCursor.mockClear();
+    vi.mocked(addScheduledTask).mockClear();
+    vi.mocked(addScheduledTask).mockResolvedValue({
+      id: "task-1",
+      name: "喝水提醒",
+      scheduleType: "once",
+      nextRun: undefined,
+    } as any);
   });
 
   afterEach(() => {
@@ -218,5 +237,62 @@ describe("shared MCP bot whitelist access", () => {
     expect(sensitiveTurnState.active).toBe(true);
     expect(sensitiveTurnState.matchedPath).toBe(sensitivePath);
     expect(toolText(saveMemoryResult)).toContain("已禁用 save_memory");
+  });
+
+  it("defaults scheduled tasks to the current assistant in bot sessions", async () => {
+    const server = createSharedMcpServer({
+      assistantId: "assistant-1",
+      sessionCwd: tempHome,
+    }) as any;
+
+    const result = await getTool(server, "create_scheduled_task").handler({
+      name: "喝水提醒",
+      notifyText: "该喝水啦",
+      scheduleType: "once",
+      delay_minutes: 5,
+    });
+
+    expect(vi.mocked(addScheduledTask)).toHaveBeenCalledWith(expect.objectContaining({
+      assistantId: "assistant-1",
+    }));
+    expect(toolText(result)).toContain("执行助理：小助理（assistant-1）");
+  });
+
+  it("normalizes assistant display names to assistant ids for scheduled tasks", async () => {
+    const server = createSharedMcpServer({
+      assistantId: "assistant-1",
+      sessionCwd: tempHome,
+    }) as any;
+
+    const result = await getTool(server, "create_scheduled_task").handler({
+      name: "喝水提醒",
+      notifyText: "该喝水啦",
+      scheduleType: "once",
+      delay_minutes: 5,
+      assistantId: "小助理",
+    });
+
+    expect(vi.mocked(addScheduledTask)).toHaveBeenCalledWith(expect.objectContaining({
+      assistantId: "assistant-1",
+    }));
+    expect(toolText(result)).toContain("执行助理：小助理（assistant-1）");
+  });
+
+  it("rejects unknown assistant references for scheduled tasks", async () => {
+    const server = createSharedMcpServer({
+      assistantId: "assistant-1",
+      sessionCwd: tempHome,
+    }) as any;
+
+    const result = await getTool(server, "create_scheduled_task").handler({
+      name: "喝水提醒",
+      notifyText: "该喝水啦",
+      scheduleType: "once",
+      delay_minutes: 5,
+      assistantId: "不存在的助理",
+    });
+
+    expect(toolText(result)).toContain("未找到助理");
+    expect(vi.mocked(addScheduledTask)).not.toHaveBeenCalled();
   });
 });

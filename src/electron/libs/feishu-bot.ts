@@ -36,8 +36,6 @@ import {
   buildStructuredPersona,
   prepareVisibleArtifact,
   buildHistoryContext,
-  isDuplicate as isDuplicateMsg,
-  markProcessed as markProcessedMsg,
   parseReplySegments,
   bufferPersistedBotMessage,
   flushBufferedBotAssistantMessage,
@@ -48,6 +46,17 @@ import {
   buildActivatedSkillSection,
   resolveSkillPromptContext,
 } from "./skill-context.js";
+import {
+  buildFeishuRequestUuid,
+  buildFeishuContentDedupKey,
+  type FeishuDeliveryState,
+  type FeishuInboundMeta,
+  buildFeishuInboundKeys,
+  claimFeishuInboundKeys,
+  normalizeFeishuComparableText,
+  releaseFeishuInboundKeys,
+  shouldSkipFeishuFinalReply,
+} from "./feishu-bot-utils.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -103,6 +112,10 @@ export interface FeishuBotOptions {
   ownerOpenIds?: string[];
 }
 
+const FEISHU_MESSAGE_RESOURCE_LIMIT = 100 * 1024 * 1024;
+const FEISHU_IMAGE_UPLOAD_LIMIT = 10 * 1024 * 1024;
+const FEISHU_FILE_UPLOAD_LIMIT = 30 * 1024 * 1024;
+
 // ─── Pairing store ─────────────────────────────────────────────────────────────
 
 /** In-memory pairing codes: code → openId */
@@ -142,9 +155,28 @@ export function approvePairingCode(code: string): string | null {
 // ─── Message deduplication ─────────────────────────────────────────────────────
 
 const processedMsgs = new Map<string, number>();
+const recentInboundFingerprints = new Map<string, number>();
+const FEISHU_CONTENT_DEDUP_TTL_MS = 15_000;
 
-function isDuplicate(key: string): boolean { return isDuplicateMsg(key, processedMsgs); }
-function markProcessed(key: string): void { markProcessedMsg(key, processedMsgs); }
+function isRecentFeishuContentDuplicate(key: string): boolean {
+  const ts = recentInboundFingerprints.get(key);
+  if (!ts) return false;
+  if (Date.now() - ts > FEISHU_CONTENT_DEDUP_TTL_MS) {
+    recentInboundFingerprints.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markRecentFeishuContent(key: string): void {
+  recentInboundFingerprints.set(key, Date.now());
+  if (recentInboundFingerprints.size > 5000) {
+    const cutoff = Date.now() - FEISHU_CONTENT_DEDUP_TTL_MS;
+    for (const [k, ts] of recentInboundFingerprints) {
+      if (ts < cutoff) recentInboundFingerprints.delete(k);
+    }
+  }
+}
 
 // ─── Status emitter ────────────────────────────────────────────────────────────
 
@@ -371,6 +403,93 @@ async function downloadMedia(
   }
 }
 
+function parseContentSizeBytes(content: Record<string, unknown>): number | null {
+  const candidates = [content.file_size, content.fileSize, content.size];
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  return null;
+}
+
+function sanitizeTempFileName(fileName: string, fallbackBase: string, fallbackExt: string): string {
+  const trimmed = fileName.trim();
+  const lastDot = trimmed.lastIndexOf(".");
+  const hasExt = lastDot > 0 && lastDot < trimmed.length - 1;
+  const rawBase = (hasExt ? trimmed.slice(0, lastDot) : trimmed) || fallbackBase;
+  const rawExt = hasExt ? trimmed.slice(lastDot) : fallbackExt;
+  const safeBase = rawBase.replace(/[^\w.\-\u4e00-\u9fff]/g, "_") || fallbackBase;
+  const safeExt = rawExt.replace(/[^\w.]/g, "") || fallbackExt;
+  return `${safeBase}${safeExt.startsWith(".") ? safeExt : `.${safeExt}`}`;
+}
+
+async function writeInboundMediaTempFile(
+  buffer: Buffer,
+  preferredName: string,
+  fallbackBase: string,
+  fallbackExt: string,
+): Promise<string | null> {
+  try {
+    const os = await import("os");
+    const path = await import("path");
+    const fs = await import("fs");
+    const safeName = sanitizeTempFileName(preferredName, fallbackBase, fallbackExt);
+    const tmpPath = path.join(os.tmpdir(), `vk-feishu-${Date.now()}-${safeName}`);
+    fs.writeFileSync(tmpPath, buffer);
+    return tmpPath;
+  } catch (err) {
+    console.error("[Feishu] Failed to save inbound media:", err);
+    return null;
+  }
+}
+
+async function prepareImageForFeishuUpload(sourcePath: string): Promise<{
+  sendPath: string;
+  cleanup: () => void;
+  error?: string;
+}> {
+  const { exec } = await import("child_process");
+  const { promisify } = await import("util");
+  const execAsync = promisify(exec);
+  const path = await import("path");
+  const fs = await import("fs");
+  const os2 = await import("os");
+
+  const tempFiles: string[] = [];
+  const cleanup = () => {
+    for (const f of tempFiles) {
+      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
+    }
+  };
+
+  const stat = fs.statSync(sourcePath);
+  if (stat.size <= FEISHU_IMAGE_UPLOAD_LIMIT) {
+    return { sendPath: sourcePath, cleanup };
+  }
+
+  const compressedPath = path.join(os2.tmpdir(), `vk-feishu-compressed-${Date.now()}.jpg`);
+  tempFiles.push(compressedPath);
+  try {
+    if (process.platform === "darwin") {
+      await execAsync(`sips -s format jpeg -s formatOptions 70 -Z 2000 "${sourcePath}" --out "${compressedPath}"`);
+    } else {
+      await execAsync(`convert "${sourcePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`);
+    }
+    const newStat = fs.statSync(compressedPath);
+    if (newStat.size <= FEISHU_IMAGE_UPLOAD_LIMIT) {
+      return { sendPath: compressedPath, cleanup };
+    }
+    cleanup();
+    return { sendPath: sourcePath, cleanup, error: "图片压缩后仍超过 10MB，建议先裁剪或降低分辨率。" };
+  } catch {
+    cleanup();
+    return { sendPath: sourcePath, cleanup, error: "图片超过 10MB 限制，压缩失败，请先手动压缩。" };
+  }
+}
+
 // ─── FeishuConnection ──────────────────────────────────────────────────────────
 
 class FeishuConnection {
@@ -382,6 +501,8 @@ class FeishuConnection {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private inflight = new Set<string>();
+  private sessionLocks = new Map<string, Promise<void>>();
+  private static readonly SESSION_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
 
   constructor(private opts: FeishuBotOptions) {
     const domain = resolveDomain(opts.domain);
@@ -437,7 +558,7 @@ class FeishuConnection {
       encryptKey: this.opts.encryptKey ?? "",
     }).register({
       "im.message.receive_v1": async (data: Record<string, unknown>) => {
-        try { await this.handleMessage(data); } catch (err) {
+        try { await this.handleMessage(data, { source: "websocket" }); } catch (err) {
           console.error("[Feishu] Message handling error:", err);
         }
       },
@@ -556,8 +677,9 @@ class FeishuConnection {
             const event = body.event ?? {};
             const header = body.header ?? {};
             const eventType: string = header.event_type ?? body.type ?? "";
+            const eventId = String(header.event_id ?? "");
             if (eventType === "im.message.receive_v1") {
-              await this.handleMessage(event).catch((e) =>
+              await this.handleMessage(event, { source: "webhook", eventId }).catch((e) =>
                 console.error("[Feishu/Webhook] Message error:", e));
             }
           } catch (err) {
@@ -587,7 +709,30 @@ class FeishuConnection {
 
   // ── Message handling ──────────────────────────────────────────────────────────
 
-  private async handleMessage(data: Record<string, unknown>): Promise<void> {
+  private async acquireSessionLock(key: string): Promise<() => void> {
+    const deadline = Date.now() + FeishuConnection.SESSION_LOCK_TIMEOUT_MS;
+    while (this.sessionLocks.has(key)) {
+      if (Date.now() > deadline) {
+        console.warn(`[Feishu] Session lock timeout for ${key}, force-releasing stale lock`);
+        this.sessionLocks.delete(key);
+        break;
+      }
+      const raceTimeout = new Promise<void>((resolve) => setTimeout(resolve, 30_000));
+      await Promise.race([this.sessionLocks.get(key), raceTimeout]);
+    }
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    this.sessionLocks.set(key, promise);
+    return () => {
+      this.sessionLocks.delete(key);
+      release();
+    };
+  }
+
+  private async handleMessage(
+    data: Record<string, unknown>,
+    meta: FeishuInboundMeta = { source: "websocket" },
+  ): Promise<void> {
     const message = data.message as Record<string, unknown> | undefined;
     const sender = data.sender as Record<string, unknown> | undefined;
     if (!message || !sender) return;
@@ -597,62 +742,88 @@ class FeishuConnection {
     const chatId = String(message.chat_id ?? "");
     const chatType = String(message.chat_type ?? "p2p"); // "p2p" or "group"
     const senderId = String((sender.sender_id as Record<string, unknown>)?.open_id ?? "");
+    const createTime = String(message.create_time ?? data.create_time ?? "");
+    const rawContent = String(message.content ?? "");
 
     // Skip bot's own messages
     if (String(sender.sender_type ?? "") === "app") return;
 
-    recordLastSeenChat(this.opts.assistantId, chatId);
-
-    // ── Access control ─────────────────────────────────────────────────────────
-    if (chatType === "p2p") {
-      const policy = this.opts.dmPolicy ?? "open";
-      if (policy !== "open") {
-        if (!isUserApproved(this.opts.assistantId, senderId, this.opts)) {
-          if (policy === "pairing") {
-            const code = generatePairingCode();
-            pairingCodes.set(code, { openId: senderId, assistantId: this.opts.assistantId, ts: Date.now() });
-            await this.sendReply(messageId, chatId, `您好！请将以下配对码告知管理员以获得访问权限：\`${code}\``);
-          }
-          return;
-        }
-      }
-
-      // Auto-populate ownerOpenIds on first private message
-      if (!(this.opts.ownerOpenIds?.length) && senderId) {
-        const updated = patchAssistantBotOwnerIds(this.opts.assistantId, "feishu", senderId);
-        if (updated) {
-          this.opts.ownerOpenIds = [senderId];
-        }
-      }
-    } else if (chatType === "group") {
-      const gp = this.opts.groupPolicy ?? "open";
-      if (gp === "disabled") return;
-      if (gp === "allowlist") {
-        const from = this.opts.allowFrom ?? [];
-        if (!from.includes("*") && !from.includes(chatId) && !from.includes(senderId)) return;
-      }
+    const inboundKeys = buildFeishuInboundKeys(
+      this.opts.assistantId,
+      messageId || undefined,
+      meta.eventId,
+    );
+    if (
+      inboundKeys.length > 0 &&
+      !claimFeishuInboundKeys(inboundKeys, processedMsgs, this.inflight)
+    ) {
+      console.log(
+        `[Feishu][${this.opts.assistantName}] Dup/in-flight skip: message=${messageId || "-"} event=${meta.eventId ?? "-"} source=${meta.source}`,
+      );
+      return;
     }
 
-    // ── Group @mention filter ──────────────────────────────────────────────────
-    const requireMention = this.opts.requireMention ?? (chatType === "group");
-    if (chatType === "group" && requireMention) {
-      const mentions = (message.mentions as Array<{ key: string; id: Record<string, string> }> | undefined) ?? [];
-      const hasBotMention = mentions.some((m) => m.id?.open_id === this.opts.appId || m.key === "@_user_1");
-      if (!hasBotMention) return;
+    const contentDedupKey = buildFeishuContentDedupKey(
+      this.opts.assistantId,
+      chatId,
+      senderId,
+      msgType,
+      createTime || undefined,
+      rawContent || undefined,
+    );
+    if (contentDedupKey && isRecentFeishuContentDuplicate(contentDedupKey)) {
+      console.log(
+        `[Feishu][${this.opts.assistantName}] Content-dup skip: message=${messageId || "-"} create_time=${createTime || "-"} source=${meta.source}`,
+      );
+      releaseFeishuInboundKeys(inboundKeys, this.inflight);
+      return;
     }
-
-    // ── Deduplication ──────────────────────────────────────────────────────────
-    const dedupKey = messageId ? `feishu:${this.opts.assistantId}:${messageId}` : null;
-    if (dedupKey) {
-      if (isDuplicate(dedupKey) || this.inflight.has(dedupKey)) {
-        console.log(`[Feishu][${this.opts.assistantName}] Dup/in-flight skip: ${messageId}`);
-        return;
-      }
-      markProcessed(dedupKey);
-      this.inflight.add(dedupKey);
-    }
+    if (contentDedupKey) markRecentFeishuContent(contentDedupKey);
 
     try {
+      console.log(
+        `[Feishu][${this.opts.assistantName}] Inbound accepted: message=${messageId || "-"} create_time=${createTime || "-"} event=${meta.eventId ?? "-"} source=${meta.source} type=${msgType}`,
+      );
+      recordLastSeenChat(this.opts.assistantId, chatId);
+
+      // ── Access control ───────────────────────────────────────────────────────
+      if (chatType === "p2p") {
+        const policy = this.opts.dmPolicy ?? "open";
+        if (policy !== "open") {
+          if (!isUserApproved(this.opts.assistantId, senderId, this.opts)) {
+            if (policy === "pairing") {
+              const code = generatePairingCode();
+              pairingCodes.set(code, { openId: senderId, assistantId: this.opts.assistantId, ts: Date.now() });
+              await this.sendReply(messageId, chatId, `您好！请将以下配对码告知管理员以获得访问权限：\`${code}\``, "pairing");
+            }
+            return;
+          }
+        }
+
+        // Auto-populate ownerOpenIds on first private message
+        if (!(this.opts.ownerOpenIds?.length) && senderId) {
+          const updated = patchAssistantBotOwnerIds(this.opts.assistantId, "feishu", senderId);
+          if (updated) {
+            this.opts.ownerOpenIds = [senderId];
+          }
+        }
+      } else if (chatType === "group") {
+        const gp = this.opts.groupPolicy ?? "open";
+        if (gp === "disabled") return;
+        if (gp === "allowlist") {
+          const from = this.opts.allowFrom ?? [];
+          if (!from.includes("*") && !from.includes(chatId) && !from.includes(senderId)) return;
+        }
+      }
+
+      // ── Group @mention filter ────────────────────────────────────────────────
+      const requireMention = this.opts.requireMention ?? (chatType === "group");
+      if (chatType === "group" && requireMention) {
+        const mentions = (message.mentions as Array<{ key: string; id: Record<string, string> }> | undefined) ?? [];
+        const hasBotMention = mentions.some((m) => m.id?.open_id === this.opts.appId || m.key === "@_user_1");
+        if (!hasBotMention) return;
+      }
+
       // ── Extract mentions to forward ────────────────────────────────────────
       const mentions = (message.mentions as Array<{ key: string; id: Record<string, string>; name?: string }> | undefined) ?? [];
       const forwardMentions = mentions.filter((m) => m.id?.open_id && m.id.open_id !== this.opts.appId);
@@ -673,10 +844,14 @@ class FeishuConnection {
 
       // ── Session key for per-user isolation in groups ───────────────────────
       const sessionKey = `${this.opts.assistantId}:${chatType === "group" ? chatId : senderId}`;
-
-      await this.generateAndDeliver(finalText, senderId, chatId, messageId, sessionKey, mediaInfo, forwardMentions);
+      const releaseSessionLock = await this.acquireSessionLock(sessionKey);
+      try {
+        await this.generateAndDeliver(finalText, senderId, chatId, messageId, sessionKey, mediaInfo, forwardMentions);
+      } finally {
+        releaseSessionLock();
+      }
     } finally {
-      if (dedupKey) this.inflight.delete(dedupKey);
+      releaseFeishuInboundKeys(inboundKeys, this.inflight);
     }
   }
 
@@ -737,6 +912,12 @@ class FeishuConnection {
       if (msgType === "file") {
         const fileKey = String(content.file_key ?? "");
         const fileName = String(content.file_name ?? "未知文件");
+        const fileSize = parseContentSizeBytes(content);
+        if (fileSize && fileSize > FEISHU_MESSAGE_RESOURCE_LIMIT) {
+          return {
+            text: `[文件: ${fileName}]\n该文件超过飞书机器人可下载的 100MB 上限，请让用户改发链接、云文档或更小的文件。`,
+          };
+        }
         if (fileKey) {
           const buf = await downloadMedia(this.feishuClient, messageId, fileKey, "file");
           if (buf) {
@@ -747,6 +928,12 @@ class FeishuConnection {
               const fileText = buf.toString("utf8").slice(0, 8000);
               return { text: `[文件: ${fileName}]\n文件内容如下：\n\`\`\`\n${fileText}\n\`\`\`` };
             }
+            const tmpPath = await writeInboundMediaTempFile(buf, fileName, "feishu-file", ".bin");
+            if (tmpPath) {
+              return {
+                text: `[文件: ${fileName}]\n文件路径: ${tmpPath}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`,
+              };
+            }
             return { text: `[文件: ${fileName}]`, mediaInfo: { type: "file", fileName, base64: buf.toString("base64") } };
           }
         }
@@ -754,7 +941,41 @@ class FeishuConnection {
       }
 
       if (msgType === "audio") return { text: "[语音消息，暂不支持转录]" };
-      if (msgType === "video") return { text: "[视频消息]" };
+      if (msgType === "video" || msgType === "media") {
+        console.log("[Feishu] Media payload:", {
+          msgType,
+          messageId,
+          content,
+          contentRaw,
+        });
+        const fileKey = String(content.file_key ?? content.video_key ?? "");
+        const fileName = String(content.file_name ?? content.name ?? "feishu-video.mp4");
+        const fileSize = parseContentSizeBytes(content);
+        if (fileSize && fileSize > FEISHU_MESSAGE_RESOURCE_LIMIT) {
+          return {
+            text: `[视频消息: ${fileName}]\n该视频超过飞书机器人可下载的 100MB 上限，请让用户改发链接、云文档或更小的视频文件。`,
+          };
+        }
+        if (fileKey) {
+          const buf = await downloadMedia(this.feishuClient, messageId, fileKey, "file");
+          if (buf) {
+            const tmpPath = await writeInboundMediaTempFile(buf, fileName, "feishu-video", ".mp4");
+            if (tmpPath) {
+              return {
+                text: `[视频消息: ${fileName}]\n文件路径: ${tmpPath}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`,
+              };
+            }
+          }
+        }
+        if (!fileKey) {
+          console.warn("[Feishu] Media message missing downloadable key:", {
+            msgType,
+            messageId,
+            content,
+          });
+        }
+        return { text: `[视频消息: ${fileName}]` };
+      }
       if (msgType === "sticker") return { text: "[表情包]" };
       return { text: `[${msgType} 消息]` };
     } catch {
@@ -794,6 +1015,12 @@ class FeishuConnection {
     const effectiveUserText = skillContext?.userText ?? userText;
     const history = getHistory(sessionKey);
     const provider = this.opts.provider ?? "claude";
+    const deliveryState: FeishuDeliveryState = {
+      streamStarted: false,
+      streamingMsgId: null,
+      lastToolMessage: null,
+      toolMessageCount: 0,
+    };
 
     const sessionId = getBotSession(
       this.opts.assistantId,
@@ -829,7 +1056,17 @@ class FeishuConnection {
     let streamedFinalText = "";
 
     try {
-      const result = await this.runClaudeQuery(system, effectiveUserText, messageId, chatId, provider, sessionKey, sessionId, mediaInfo);
+      const result = await this.runClaudeQuery(
+        system,
+        effectiveUserText,
+        messageId,
+        chatId,
+        provider,
+        sessionKey,
+        sessionId,
+        deliveryState,
+        mediaInfo,
+      );
       replyText = result.text;
       streamedFinalText = result.streamedText;
     } catch (err) {
@@ -856,10 +1093,15 @@ class FeishuConnection {
     const mentionPrefix = forwardMentions?.length
       ? forwardMentions.map((m) => `<at user_id="${m.id.open_id}">${m.name ?? ""}</at>`).join(" ") + " "
       : "";
+    const finalReplyText = mentionPrefix + replyText;
 
     // If already streamed to a card, skip sendReply
     if (!isStreamed) {
-      await this.sendReply(messageId, chatId, mentionPrefix + replyText);
+      if (shouldSkipFeishuFinalReply(deliveryState.lastToolMessage, finalReplyText)) {
+        console.log(`[Feishu][${this.opts.assistantName}] Skip final reply: same content already sent via send_message`);
+      } else {
+        await this.sendReply(messageId, chatId, finalReplyText, "final");
+      }
     }
 
     scheduleBotPostResponseTasks({
@@ -916,9 +1158,10 @@ class FeishuConnection {
     provider: "claude" | "openai",
     sessionKey: string,
     sessionId: string,
+    deliveryState: FeishuDeliveryState,
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
   ): Promise<{ text: string; streamedText: string }> {
-    const sessionMcp = this.createSessionMcp(messageId, chatId);
+    const sessionMcp = this.createSessionMcp(messageId, chatId, deliveryState);
     const feishuMcp = this.createFeishuEcosystemMcp();
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
     const claudeSessionId = mediaInfo ? undefined : getBotClaudeSessionId(sessionKey);
@@ -956,21 +1199,45 @@ class FeishuConnection {
     let accumulatedText = "";
     let lastPatchLen = 0;
     let bufferedAssistant: StreamMessage | null = null;
+    let streamModeDisabled = false;
     // Minimum characters between patches to avoid rate limiting
     const PATCH_THRESHOLD = 80;
     let patchTimer: ReturnType<typeof setTimeout> | null = null;
     const persistStreamMessage = (streamMessage: StreamMessage) => sessionStore?.recordMessage(sessionId, streamMessage);
 
-    const doPatch = async (text: string, isFinal = false) => {
+    const doPatch = async (text: string, isFinal = false): Promise<boolean> => {
+      if (streamModeDisabled) return false;
       if (patchTimer) { clearTimeout(patchTimer); patchTimer = null; }
       const displayText = isFinal ? text : text + " ▌";
       try {
         if (!streamingMsgId) {
+          const streamUuid = buildFeishuRequestUuid(
+            "stream",
+            this.opts.assistantId,
+            messageId,
+            chatId,
+            sessionId,
+          );
           const resp = await this.feishuClient.im.message.reply({
             path: { message_id: messageId },
-            data: { content: buildCardContent(displayText), msg_type: "interactive", reply_in_thread: false },
+            data: {
+              content: buildCardContent(displayText),
+              msg_type: "interactive",
+              reply_in_thread: false,
+              uuid: streamUuid,
+            },
           }) as any;
           streamingMsgId = resp?.data?.message_id ?? null;
+          if (!streamingMsgId) {
+            streamModeDisabled = true;
+            console.warn("[Feishu] Stream reply missing message_id, disabling stream mode for this message");
+            return false;
+          }
+          deliveryState.streamingMsgId = streamingMsgId;
+          deliveryState.streamStarted = true;
+          console.log(
+            `[Feishu][${this.opts.assistantName}] Stream reply created: source=${messageId} stream=${streamingMsgId} uuid=${streamUuid}`,
+          );
         } else {
           await this.feishuClient.im.message.patch({
             path: { message_id: streamingMsgId },
@@ -978,8 +1245,12 @@ class FeishuConnection {
           });
         }
         lastPatchLen = text.length;
+        return true;
       } catch (err) {
-        console.warn("[Feishu] Stream patch failed:", err instanceof Error ? err.message : String(err));
+        if (!streamingMsgId) streamModeDisabled = true;
+        const prefix = isFinal ? "[Feishu] Final stream patch failed:" : "[Feishu] Stream patch failed:";
+        console.warn(prefix, err instanceof Error ? err.message : String(err));
+        return false;
       }
     };
 
@@ -994,7 +1265,7 @@ class FeishuConnection {
         if (evt?.type === "content_block_delta" && evt.delta?.type === "text_delta") {
           accumulatedText += evt.delta.text as string;
           const growth = accumulatedText.length - lastPatchLen;
-          if (growth >= PATCH_THRESHOLD) {
+          if (!streamModeDisabled && growth >= PATCH_THRESHOLD) {
             if (patchTimer) clearTimeout(patchTimer);
             patchTimer = setTimeout(() => { doPatch(accumulatedText).catch(() => {}); }, 300);
           }
@@ -1012,8 +1283,11 @@ class FeishuConnection {
 
     // Final patch: remove cursor indicator, show complete text
     if (streamingMsgId && finalText) {
-      await doPatch(finalText, true);
-      return { text: "\x00feishu_streamed\x00", streamedText: finalText };
+      const finalPatched = await doPatch(finalText, true);
+      if (finalPatched) {
+        return { text: "\x00feishu_streamed\x00", streamedText: finalText };
+      }
+      console.warn("[Feishu] Falling back to a normal reply after stream finalize failure");
     }
 
     return { text: finalText || "抱歉，无法生成回复。", streamedText: "" };
@@ -1021,17 +1295,36 @@ class FeishuConnection {
 
   // ── Per-session MCP ───────────────────────────────────────────────────────────
 
-  private createSessionMcp(messageId: string, chatId: string) {
+  private createSessionMcp(messageId: string, chatId: string, deliveryState: FeishuDeliveryState) {
     const self = this;
 
     const sendMessageTool = tool(
       "send_message",
-      "向当前飞书对话立即发送一条消息。适合在执行长任务时告知用户进度，或推送中间结果。",
+      "向当前飞书对话立即发送一条消息。适合在执行长任务时告知用户进度，或推送中间结果。注意：最终文字回复也会自动发送，请勿重复内容。",
       { text: z.string().describe("要发送的消息内容") },
       async (input) => {
         const text = String(input.text ?? "").trim();
         if (!text) return { content: [{ type: "text" as const, text: "消息内容为空" }] };
-        await self.sendReply(messageId, chatId, text).catch((e) => console.warn("[Feishu] Failed to send reply:", e));
+        if (deliveryState.streamStarted) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "当前回复已经在流式卡片中展示，请不要再额外发送重复消息。",
+            }],
+          };
+        }
+        if (
+          deliveryState.lastToolMessage &&
+          normalizeFeishuComparableText(deliveryState.lastToolMessage) === normalizeFeishuComparableText(text)
+        ) {
+          return { content: [{ type: "text" as const, text: "相同消息已发送，已跳过重复发送。" }] };
+        }
+        const toolSeq = deliveryState.toolMessageCount + 1;
+        await self.sendReply(messageId, chatId, text, `tool-${toolSeq}`).catch((e) =>
+          console.warn("[Feishu] Failed to send reply:", e),
+        );
+        deliveryState.lastToolMessage = text;
+        deliveryState.toolMessageCount++;
         return { content: [{ type: "text" as const, text: "消息已发送" }] };
       },
     );
@@ -1519,12 +1812,8 @@ class FeishuConnection {
   // ── File upload and send ───────────────────────────────────────────────────────
 
   private async doSendFile(filePath: string, messageId: string, chatId: string): Promise<string> {
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execAsync = promisify(exec);
     const path = await import("path");
     const fs = await import("fs");
-    const os2 = await import("os");
     const prepared = prepareVisibleArtifact(filePath, {
       defaultCwd: this.opts.defaultCwd,
       assistantName: this.opts.assistantName,
@@ -1535,38 +1824,14 @@ class FeishuConnection {
     const sourcePath = prepared.filePath;
     const ext = sourcePath.split(".").pop()?.toLowerCase() ?? "";
     const isImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext);
-    const IMAGE_LIMIT = 20 * 1024 * 1024;
-
-    const tempFiles: string[] = [];
-    const cleanup = () => {
-      for (const f of tempFiles) {
-        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
-      }
-    };
-
     let sendPath = sourcePath;
-    const stat = fs.statSync(sourcePath);
+    let cleanup = () => {};
 
-    if (isImage && stat.size > IMAGE_LIMIT) {
-      const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
-      tempFiles.push(compressedPath);
-      try {
-        if (process.platform === "darwin") {
-          await execAsync(`sips -s format jpeg -s formatOptions 70 -Z 2000 "${sourcePath}" --out "${compressedPath}"`);
-        } else {
-          await execAsync(`convert "${sourcePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`);
-        }
-        const newStat = fs.statSync(compressedPath);
-        if (newStat.size <= IMAGE_LIMIT) {
-          sendPath = compressedPath;
-        } else {
-          cleanup();
-          return "图片压缩后仍超过 20MB，建议先裁剪或降低分辨率。";
-        }
-      } catch {
-        cleanup();
-        return "图片超过 20MB 限制，压缩失败，请先手动压缩。";
-      }
+    if (isImage) {
+      const preparedImage = await prepareImageForFeishuUpload(sourcePath);
+      if (preparedImage.error) return preparedImage.error;
+      sendPath = preparedImage.sendPath;
+      cleanup = preparedImage.cleanup;
     }
 
     try {
@@ -1595,6 +1860,11 @@ class FeishuConnection {
         cleanup();
         return `图片已发送: ${path.basename(sendPath)}`;
       } else {
+        const fileStat = fs.statSync(sendPath);
+        if (fileStat.size > FEISHU_FILE_UPLOAD_LIMIT) {
+          cleanup();
+          return "文件超过 30MB 限制，请先压缩、拆分，或改发飞书云文档链接。";
+        }
         const fileBuffer = fs.readFileSync(sendPath);
         const fileName = path.basename(sendPath);
         const uploadResp = await this.feishuClient.im.file.create({
@@ -1626,25 +1896,46 @@ class FeishuConnection {
   // ── Upload image for post ─────────────────────────────────────────────────────
 
   private async uploadImageForPost(filePath: string): Promise<string | null> {
+    let cleanup = () => {};
     try {
       const fs = await import("fs");
-      const imageBuffer = fs.readFileSync(filePath);
+      const prepared = await prepareImageForFeishuUpload(filePath);
+      if (prepared.error) {
+        console.warn("[Feishu] Post image skipped:", prepared.error);
+        return null;
+      }
+      cleanup = prepared.cleanup;
+      const imageBuffer = fs.readFileSync(prepared.sendPath);
       const uploadResp = await this.feishuClient.im.image.create({
         data: { image_type: "message", image: imageBuffer },
       });
+      cleanup();
       return (uploadResp as Record<string, unknown>)?.image_key as string ?? null;
     } catch {
+      cleanup();
       return null;
     }
   }
 
   // ── Send reply ────────────────────────────────────────────────────────────────
 
-  private async sendReply(messageId: string, chatId: string, text: string): Promise<void> {
+  private async sendReply(
+    messageId: string,
+    chatId: string,
+    text: string,
+    dedupKind = "default",
+  ): Promise<void> {
     try {
       const renderMode = this.opts.renderMode ?? "auto";
       const segments = parseReplySegments(text);
       const hasImages = segments.some((s) => s.kind === "image");
+      const requestUuid = buildFeishuRequestUuid(
+        dedupKind,
+        this.opts.assistantId,
+        messageId,
+        chatId,
+        text,
+      );
 
       if (hasImages) {
         const paragraphs: Array<Array<{ tag: string; text?: string; image_key?: string }>> = [];
@@ -1664,17 +1955,23 @@ class FeishuConnection {
         }
         const postContent = JSON.stringify({ zh_cn: { title: "", content: paragraphs } });
         if (messageId) {
-          await this.feishuClient.im.message.reply({
+          const resp = await this.feishuClient.im.message.reply({
             path: { message_id: messageId },
-            data: { content: postContent, msg_type: "post", reply_in_thread: false },
+            data: { content: postContent, msg_type: "post", reply_in_thread: false, uuid: requestUuid },
           });
+          console.log(
+            `[Feishu][${this.opts.assistantName}] Sent reply kind=${dedupKind} uuid=${requestUuid} resp=${(resp as any)?.data?.message_id ?? "-"}`,
+          );
           return;
         }
         if (chatId) {
-          await this.feishuClient.im.message.create({
+          const resp = await this.feishuClient.im.message.create({
             params: { receive_id_type: "chat_id" },
-            data: { receive_id: chatId, content: postContent, msg_type: "post" },
+            data: { receive_id: chatId, content: postContent, msg_type: "post", uuid: requestUuid },
           });
+          console.log(
+            `[Feishu][${this.opts.assistantName}] Sent proactive reply kind=${dedupKind} uuid=${requestUuid} resp=${(resp as any)?.data?.message_id ?? "-"}`,
+          );
         }
         return;
       }
@@ -1683,34 +1980,46 @@ class FeishuConnection {
       if (shouldUseCard(text, renderMode)) {
         const cardContent = buildCardContent(text);
         if (messageId) {
-          await this.feishuClient.im.message.reply({
+          const resp = await this.feishuClient.im.message.reply({
             path: { message_id: messageId },
-            data: { content: cardContent, msg_type: "interactive", reply_in_thread: false },
+            data: { content: cardContent, msg_type: "interactive", reply_in_thread: false, uuid: requestUuid },
           });
+          console.log(
+            `[Feishu][${this.opts.assistantName}] Sent card reply kind=${dedupKind} uuid=${requestUuid} resp=${(resp as any)?.data?.message_id ?? "-"}`,
+          );
           return;
         }
         if (chatId) {
-          await this.feishuClient.im.message.create({
+          const resp = await this.feishuClient.im.message.create({
             params: { receive_id_type: "chat_id" },
-            data: { receive_id: chatId, content: cardContent, msg_type: "interactive" },
+            data: { receive_id: chatId, content: cardContent, msg_type: "interactive", uuid: requestUuid },
           });
+          console.log(
+            `[Feishu][${this.opts.assistantName}] Sent proactive card kind=${dedupKind} uuid=${requestUuid} resp=${(resp as any)?.data?.message_id ?? "-"}`,
+          );
         }
         return;
       }
 
       // Plain text
       if (messageId) {
-        await this.feishuClient.im.message.reply({
+        const resp = await this.feishuClient.im.message.reply({
           path: { message_id: messageId },
-          data: { content: JSON.stringify({ text }), msg_type: "text", reply_in_thread: false },
+          data: { content: JSON.stringify({ text }), msg_type: "text", reply_in_thread: false, uuid: requestUuid },
         });
+        console.log(
+          `[Feishu][${this.opts.assistantName}] Sent text reply kind=${dedupKind} uuid=${requestUuid} resp=${(resp as any)?.data?.message_id ?? "-"}`,
+        );
         return;
       }
       if (chatId) {
-        await this.feishuClient.im.message.create({
+        const resp = await this.feishuClient.im.message.create({
           params: { receive_id_type: "chat_id" },
-          data: { receive_id: chatId, content: JSON.stringify({ text }), msg_type: "text" },
+          data: { receive_id: chatId, content: JSON.stringify({ text }), msg_type: "text", uuid: requestUuid },
         });
+        console.log(
+          `[Feishu][${this.opts.assistantName}] Sent proactive text kind=${dedupKind} uuid=${requestUuid} resp=${(resp as any)?.data?.message_id ?? "-"}`,
+        );
       }
     } catch (err) {
       // Detect permission error and notify

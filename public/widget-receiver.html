@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://esm.sh; style-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://esm.sh; img-src * data: blob:; font-src https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://esm.sh; connect-src 'none';">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --color-surface: #FFFCF5;
+  --color-surface-secondary: #F5F4F1;
+  --color-surface-tertiary: #EEEDEA;
+  --color-ink-900: #1A1915;
+  --color-ink-800: #2A2A25;
+  --color-ink-700: #4A4A45;
+  --color-ink-600: #5A5A55;
+  --color-ink-500: #7A7A75;
+  --color-ink-400: #9A9A95;
+  --color-accent: #5B8C5A;
+  --color-accent-hover: #4A7B49;
+  --font-sans: "Söhne", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Söhne Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+html, body {
+  background: transparent;
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+.flex { display: flex; }
+.grid { display: grid; }
+.gap-1 { gap: 4px; } .gap-2 { gap: 8px; } .gap-3 { gap: 12px; } .gap-4 { gap: 16px; }
+.p-1 { padding: 4px; } .p-2 { padding: 8px; } .p-3 { padding: 12px; } .p-4 { padding: 16px; }
+.rounded-md { border-radius: 8px; } .rounded-lg { border-radius: 12px; }
+.bg-surface-secondary { background: var(--color-surface-secondary); }
+.text-content-secondary { color: var(--color-ink-700); }
+.text-content-tertiary { color: var(--color-ink-500); }
+.font-medium { font-weight: 500; }
+.text-sm { font-size: 13px; }
+.text-xs { font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="__widget_root"></div>
+<script>
+(function() {
+  var root = document.getElementById('__widget_root');
+  var finalized = false;
+  var lastVisualHash = '';
+
+  function reportError(message) {
+    parent.postMessage({ type: 'widget:error', message: message || 'Widget script failed' }, '*');
+  }
+
+  function simpleHash(str) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) {
+      h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+    }
+    return h;
+  }
+
+  var _currentScale = 1;
+  var _reportTimer = null;
+  var _lastReportedHeight = 0;
+
+  function reportHeight() {
+    if (_reportTimer) return;
+    _reportTimer = setTimeout(function() {
+      _reportTimer = null;
+      var rect = root.getBoundingClientRect();
+      var visualHeight = rect && isFinite(rect.height) ? rect.height : 0;
+      var reported = Math.ceil(
+        visualHeight > 0 ? visualHeight : (root.scrollHeight || document.body.scrollHeight || 0)
+      );
+      if (reported === _lastReportedHeight) return;
+      _lastReportedHeight = reported;
+      parent.postMessage({ type: 'widget:resize', height: reported }, '*');
+    }, 80);
+  }
+
+  function ensureSvgViewBoxPadding() {
+    var hasCanvas = root.querySelector('canvas');
+    var svgEl = root.querySelector('svg');
+    if (!svgEl || hasCanvas) return;
+
+    var rawViewBox = svgEl.getAttribute('data-original-viewBox') || svgEl.getAttribute('viewBox') || '';
+    if (!rawViewBox) return;
+    if (!svgEl.getAttribute('data-original-viewBox')) {
+      svgEl.setAttribute('data-original-viewBox', rawViewBox);
+    }
+
+    var parts = rawViewBox.trim().split(/\s+/).map(Number);
+    if (parts.length !== 4 || parts.some(function(v) { return !isFinite(v); })) return;
+
+    try {
+      var bbox = svgEl.getBBox();
+      if (!bbox || !isFinite(bbox.x) || !isFinite(bbox.y) || !isFinite(bbox.width) || !isFinite(bbox.height)) return;
+      var padX = 24;
+      var padTop = 24;
+      var padBottom = 32;
+      var minX = parts[0];
+      var minY = parts[1];
+      var vbWidth = parts[2];
+      var vbHeight = parts[3];
+      var contentLeft = bbox.x;
+      var contentTop = bbox.y;
+      var contentRight = bbox.x + bbox.width;
+      var contentBottom = bbox.y + bbox.height;
+      var paddedMinX = Math.floor(Math.min(minX, contentLeft - padX));
+      var paddedMinY = Math.floor(Math.min(minY, contentTop - padTop));
+      var paddedWidth = Math.ceil(
+        Math.max(vbWidth, contentRight - paddedMinX + padX)
+      );
+      var paddedHeight = Math.ceil(
+        Math.max(vbHeight + (minY - paddedMinY), contentBottom - paddedMinY + padBottom)
+      );
+      svgEl.setAttribute('viewBox', [paddedMinX, paddedMinY, paddedWidth, paddedHeight].join(' '));
+    } catch (err) {
+      // Ignore SVG measurement failures — height sync still runs as before.
+    }
+  }
+
+  function applyAdaptiveScale() {
+    root.style.transform = '';
+    root.style.transformOrigin = '';
+    root.style.marginBottom = '';
+
+    var hasCanvas = root.querySelector('canvas');
+    var hasSvg = root.querySelector('svg');
+    if (!hasSvg || hasCanvas) return;
+
+    ensureSvgViewBoxPadding();
+
+    var textCount = root.querySelectorAll('svg text').length;
+    var boxCount = root.querySelectorAll('svg rect, svg foreignObject').length;
+    var contentHeight = root.scrollHeight || document.body.scrollHeight || 0;
+
+    var scale = 1;
+    if (contentHeight >= 400 || textCount >= 16 || boxCount >= 7) scale = 0.72;
+    else if (contentHeight >= 280 || textCount >= 8 || boxCount >= 4) scale = 0.78;
+    else if (contentHeight >= 160 || textCount >= 4) scale = 0.82;
+
+    _currentScale = scale;
+    if (scale < 1) {
+      root.style.transform = 'scale(' + scale + ')';
+      root.style.transformOrigin = 'top center';
+      var loss = contentHeight * (1 - scale);
+      root.style.marginBottom = '-' + Math.round(loss) + 'px';
+    }
+  }
+
+  window.addEventListener('error', function(e) {
+    reportError(e && e.message ? e.message : 'Widget script failed');
+  });
+
+  window.addEventListener('unhandledrejection', function(e) {
+    var reason = e && e.reason;
+    var message = reason && reason.message ? reason.message : String(reason || 'Unhandled promise rejection');
+    reportError(message);
+  });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(reportHeight).observe(document.body);
+  }
+
+  document.addEventListener('click', function(e) {
+    var a = e.target;
+    while (a && a.tagName !== 'A') a = a.parentElement;
+    if (a && a.href) {
+      e.preventDefault();
+      parent.postMessage({ type: 'widget:link', href: a.href }, '*');
+    }
+  });
+
+  window.__widgetSendMessage = function(msg) {
+    parent.postMessage({ type: 'widget:sendMessage', message: msg }, '*');
+  };
+
+  function countChar(str, target) {
+    var count = 0;
+    for (var i = 0; i < str.length; i++) {
+      if (str[i] === target) count++;
+    }
+    return count;
+  }
+
+  function extractOnloadInitName(attrs) {
+    if (!attrs) return '';
+    for (var i = 0; i < attrs.length; i++) {
+      if (attrs[i].name !== 'onload') continue;
+      var match = String(attrs[i].value || '').match(/^\s*([A-Za-z_$][\w$]*)\s*\(\s*\)\s*;?\s*$/);
+      if (match) return match[1];
+    }
+    return '';
+  }
+
+  function normalizeInlineScript(code, preferredInitName) {
+    var text = String(code || '').trim();
+    var initName = preferredInitName || '';
+    var fallbackMatch = text.match(/\bif\s*\(\s*window\.[A-Za-z_$][\w$]*\s*\)\s*([A-Za-z_$][\w$]*)\s*\(\s*\)\s*;?\s*$/);
+    var removedFallback = false;
+    var trailingCallMatch = text.match(/(?:^|[;\s}])([A-Za-z_$][\w$]*)\s*\(\s*\)\s*;?\s*$/);
+    var trailingCall = '';
+
+    if (fallbackMatch) {
+      initName = fallbackMatch[1] || initName;
+      text = text.slice(0, fallbackMatch.index).trimEnd();
+      removedFallback = true;
+    }
+
+    if (!removedFallback && trailingCallMatch) {
+      trailingCall = trailingCallMatch[1] || '';
+      if (!initName) initName = trailingCall;
+    }
+
+    var missingBraces = countChar(text, '{') - countChar(text, '}');
+    if (missingBraces > 0 && missingBraces <= 2) {
+      if (trailingCall) {
+        var ctorAndCallPattern = new RegExp(
+          '\\)\\s*;\\s*((?:}\\s*)*)' + trailingCall + '\\s*\\(\\s*\\)\\s*;?\\s*$'
+        );
+        var ctorAndCallMatch = text.match(ctorAndCallPattern);
+        if (ctorAndCallMatch) {
+          text = text.slice(0, ctorAndCallMatch.index).trimEnd();
+          text += new Array(missingBraces + 1).join('}');
+          text += ');' + (ctorAndCallMatch[1] || '') + '\n;' + trailingCall + '();';
+        } else {
+          text = text.slice(0, trailingCallMatch.index).trimEnd();
+          text += new Array(missingBraces + 1).join('}');
+          text += '\n;' + trailingCall + '();';
+        }
+      } else if (removedFallback && initName) {
+        var terminalCtorMatch = text.match(/\)\s*;\s*((?:}\s*)*)$/);
+        if (terminalCtorMatch) {
+          text = text.slice(0, terminalCtorMatch.index).trimEnd();
+          text += new Array(missingBraces + 1).join('}');
+          text += ');' + (terminalCtorMatch[1] || '');
+        } else {
+          text += new Array(missingBraces + 1).join('}');
+        }
+      } else {
+        text += new Array(missingBraces + 1).join('}');
+      }
+    }
+
+    if (removedFallback && initName) {
+      text += '\n;if (typeof ' + initName + ' === "function") ' + initName + '();';
+    }
+
+    return text;
+  }
+
+  function executeScriptsSequentially(scripts) {
+    var chain = Promise.resolve();
+    var pendingInitName = '';
+
+    function appendScript(script, preferredInitName) {
+      return new Promise(function(resolve, reject) {
+        try {
+          var el = document.createElement('script');
+          if (script.src) {
+            for (var i = 0; i < script.attrs.length; i++) {
+              var attr = script.attrs[i];
+              if (attr.name === 'src' || attr.name === 'onload') continue;
+              if (/^on/i.test(attr.name)) continue;
+              el.setAttribute(attr.name, attr.value);
+            }
+            el.onload = function() { resolve(); };
+            el.onerror = function() {
+              reject(new Error('Failed to load script: ' + script.src));
+            };
+            el.src = script.src;
+            root.appendChild(el);
+            return;
+          }
+
+          el.textContent = normalizeInlineScript(script.text, preferredInitName);
+          root.appendChild(el);
+          resolve();
+        } catch (ex) {
+          reject(ex);
+        }
+      });
+    }
+
+    for (var i = 0; i < scripts.length; i++) {
+      (function(script) {
+        chain = chain.then(function() {
+          if (script.src) {
+            pendingInitName = extractOnloadInitName(script.attrs);
+            return appendScript(script, '');
+          }
+          var currentInitName = pendingInitName;
+          pendingInitName = '';
+          return appendScript(script, currentInitName);
+        });
+      })(scripts[i]);
+    }
+
+    return chain;
+  }
+
+  function captureWidgetAsPng(requestId) {
+    try {
+      var dpr = window.devicePixelRatio || 2;
+      var pad = 8;
+
+      // Strategy 1: SVG — serialize directly at 2x, skip foreignObject
+      var svgEl = root.querySelector('svg');
+      if (svgEl && !root.querySelector('canvas')) {
+        var svgClone = svgEl.cloneNode(true);
+        var vb = svgEl.viewBox?.baseVal;
+        var svgW = vb && vb.width ? vb.width : svgEl.getBoundingClientRect().width;
+        var svgH = vb && vb.height ? vb.height : svgEl.getBoundingClientRect().height;
+        var outW = Math.ceil(svgW + pad * 2);
+        var outH = Math.ceil(svgH + pad * 2);
+        svgClone.setAttribute('width', String(svgW));
+        svgClone.setAttribute('height', String(svgH));
+        svgClone.setAttribute('x', String(pad));
+        svgClone.setAttribute('y', String(pad));
+        var outerSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + outW + '" height="' + outH + '">' +
+          new XMLSerializer().serializeToString(svgClone) + '</svg>';
+        var img2x = new Image();
+        img2x.onload = function() {
+          try {
+            var c = document.createElement('canvas');
+            c.width = outW * dpr; c.height = outH * dpr;
+            var ctx = c.getContext('2d');
+            ctx.scale(dpr, dpr);
+            ctx.drawImage(img2x, 0, 0, outW, outH);
+            parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: true, dataUrl: c.toDataURL('image/png') }, '*');
+          } catch (ex) {
+            parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: false, reason: ex && ex.message ? ex.message : String(ex) }, '*');
+          }
+        };
+        img2x.onerror = function() {
+          parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: false, reason: 'SVG rasterize failed' }, '*');
+        };
+        img2x.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(outerSvg);
+        return;
+      }
+
+      // Strategy 2: Canvas (Chart.js) — grab canvas directly at native resolution
+      var chartCanvas = root.querySelector('canvas');
+      if (chartCanvas) {
+        var cW = chartCanvas.width;
+        var cH = chartCanvas.height;
+        var outCanvas = document.createElement('canvas');
+        outCanvas.width = cW + pad * 2 * dpr;
+        outCanvas.height = cH + pad * 2 * dpr;
+        var octx = outCanvas.getContext('2d');
+        octx.drawImage(chartCanvas, pad * dpr, pad * dpr);
+        parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: true, dataUrl: outCanvas.toDataURL('image/png') }, '*');
+        return;
+      }
+
+      // Strategy 3: Fallback — foreignObject (HTML widgets)
+      var origWidth = root.scrollWidth || 1;
+      var origHeight = root.scrollHeight || 1;
+      var fW = origWidth + pad * 2;
+      var fH = origHeight + pad * 2;
+      var clone = root.cloneNode(true);
+      clone.style.transform = '';
+      clone.style.transformOrigin = '';
+      clone.style.marginBottom = '';
+      var wrapper = document.createElement('div');
+      wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+      wrapper.style.width = fW + 'px';
+      wrapper.style.height = fH + 'px';
+      wrapper.style.display = 'flex';
+      wrapper.style.justifyContent = 'center';
+      wrapper.style.alignItems = 'center';
+      wrapper.appendChild(clone);
+      var serialized = new XMLSerializer().serializeToString(wrapper);
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + fW + '" height="' + fH + '" viewBox="0 0 ' + fW + ' ' + fH + '">' +
+        '<foreignObject width="100%" height="100%">' + serialized + '</foreignObject></svg>';
+      var image = new Image();
+      image.onload = function() {
+        try {
+          var c = document.createElement('canvas');
+          c.width = fW * dpr; c.height = fH * dpr;
+          var ctx = c.getContext('2d');
+          ctx.scale(dpr, dpr);
+          ctx.drawImage(image, 0, 0, fW, fH);
+          parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: true, dataUrl: c.toDataURL('image/png') }, '*');
+        } catch (ex) {
+          parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: false, reason: ex && ex.message ? ex.message : String(ex) }, '*');
+        }
+      };
+      image.onerror = function() {
+        parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: false, reason: 'Fallback rasterize failed' }, '*');
+      };
+      image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    } catch (ex) {
+      parent.postMessage({ type: 'widget:capture:result', requestId: requestId, ok: false, reason: ex && ex.message ? ex.message : String(ex) }, '*');
+    }
+  }
+
+  window.addEventListener('message', function(e) {
+    var data = e.data;
+    if (!data || !data.type) return;
+
+    if (data.type === 'widget:update') {
+      root.innerHTML = data.html || '';
+      applyAdaptiveScale();
+      reportHeight();
+    }
+
+    if (data.type === 'widget:finalize') {
+      if (finalized) return;
+      finalized = true;
+      var html = data.html || '';
+      // Match CodePilot's finalize path: parse finalized HTML in a temp
+      // container, remove scripts from visual DOM, then append recreated
+      // script nodes. This is more robust than regex-based extraction.
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      var scriptNodes = tmp.querySelectorAll('script');
+      var scripts = [];
+      for (var i = 0; i < scriptNodes.length; i++) {
+        var node = scriptNodes[i];
+        var attrs = [];
+        for (var j = 0; j < node.attributes.length; j++) {
+          attrs.push({ name: node.attributes[j].name, value: node.attributes[j].value });
+        }
+        scripts.push({
+          src: node.src || '',
+          text: node.textContent || '',
+          attrs: attrs,
+        });
+        node.remove();
+      }
+
+      var visual = tmp.innerHTML;
+      var hash = simpleHash(visual);
+      if (hash !== lastVisualHash) {
+        root.innerHTML = visual;
+        lastVisualHash = hash;
+        applyAdaptiveScale();
+      }
+
+      executeScriptsSequentially(scripts)
+        .catch(function(ex) {
+          reportError(ex && ex.message ? ex.message : String(ex));
+        })
+        .finally(function() {
+          setTimeout(reportHeight, 150);
+        });
+    }
+
+    if (data.type === 'widget:theme') {
+      var vars = data.cssVars || '';
+      var style = document.getElementById('__theme_vars');
+      if (!style) {
+        style = document.createElement('style');
+        style.id = '__theme_vars';
+        document.head.appendChild(style);
+      }
+      style.textContent = ':root { ' + vars + ' }';
+    }
+
+    if (data.type === 'widget:capture' && typeof data.requestId === 'string') {
+      captureWidgetAsPng(data.requestId);
+    }
+  });
+
+  parent.postMessage({ type: 'widget:ready' }, '*');
+})();
+</script>
+</body>
+</html>

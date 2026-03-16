@@ -1631,6 +1631,35 @@ app.on("ready", async () => {
         }
     });
 
+    ipcMainHandle("capture-region-to-clipboard", async (_: any, rect: { x: number; y: number; width: number; height: number }) => {
+        try {
+            const { clipboard } = await import("electron");
+            const image = await mainWindow.webContents.capturePage({
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+            });
+            if (image.isEmpty()) return { ok: false, reason: "empty_capture" };
+            clipboard.writeImage(image);
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, reason: String(err) };
+        }
+    });
+
+    ipcMainHandle("copy-image-data-url-to-clipboard", async (_: any, dataUrl: string) => {
+        try {
+            const { nativeImage, clipboard } = await import("electron");
+            const image = nativeImage.createFromDataURL(dataUrl);
+            if (image.isEmpty()) return { ok: false, reason: "invalid_image_data" };
+            clipboard.writeImage(image);
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, reason: String(err) };
+        }
+    });
+
     // Save an image to a user-chosen path via Save dialog
     ipcMainHandle("save-image", async (_: any, sourcePath: string) => {
         const path = await import("path");

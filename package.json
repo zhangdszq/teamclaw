@@ -54,6 +54,7 @@
     "highlight.js": "^11.11.1",
     "hono": "^4.11.7",
     "https-proxy-agent": "^7.0.6",
+    "mermaid": "^11.13.0",
     "os-utils": "^0.0.14",
     "pdf-parse": "^2.4.5",
     "react": "^19.2.3",

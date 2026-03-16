@@ -93,6 +93,10 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("get-image-thumbnail", filePath),
     copyImageToClipboard: (sourcePath: string) =>
         ipcInvoke("copy-image-to-clipboard", sourcePath),
+    captureRegionToClipboard: (rect: { x: number; y: number; width: number; height: number }) =>
+        ipcInvoke("capture-region-to-clipboard", rect),
+    copyImageDataUrlToClipboard: (dataUrl: string) =>
+        ipcInvoke("copy-image-data-url-to-clipboard", dataUrl),
     // Open Save dialog and copy the source image to the chosen path
     saveImage: (sourcePath: string) =>
         ipcInvoke("save-image", sourcePath),

@@ -6,6 +6,8 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { StreamMessage } from "../types";
 import MDContent, { ImagePreviewOverlay, normalizeImageSrc } from "../render/markdown";
+import { RichMessageContent } from "../render/rich-message";
+import { copyMessageAsCompositeImage, copyWidgetsAsImage } from "../render/WidgetRenderer";
 
 type MessageContent = SDKAssistantMessage["message"]["content"][number];
 type ToolResultContent = SDKUserMessage["message"]["content"][number];
@@ -13,6 +15,7 @@ type ToolStatus = "pending" | "success" | "error";
 const toolStatusMap = new Map<string, ToolStatus>();
 const toolStatusListeners = new Set<() => void>();
 const MAX_VISIBLE_LINES = 3;
+const SHOW_WIDGET_BLOCK_RE = /```show-widget\s*\n[\s\S]*?```/g;
 
 type AskUserQuestionInput = {
   questions?: Array<{
@@ -301,24 +304,73 @@ const AssistantBlockCard = ({
   onLike?: () => void;
   liked?: boolean;
 }) => {
-  const [copied, setCopied] = useState(false);
+  const [copiedMode, setCopiedMode] = useState<"text" | "image" | "mixed" | null>(null);
+  const [copyingMode, setCopyingMode] = useState<"text" | "image" | "mixed" | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasWidget = text.includes("```show-widget");
+  const hasMixedWidgetContent = hasWidget
+    && text.replace(SHOW_WIDGET_BLOCK_RE, "").trim().length > 0;
+  const plainCopyText = text.replace(SHOW_WIDGET_BLOCK_RE, "").trim() || text;
 
-  const handleCopy = async () => {
-    if (!contentRef.current) return;
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  const markCopied = (mode: "text" | "image" | "mixed") => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    setCopiedMode(mode);
+    copiedTimerRef.current = setTimeout(() => setCopiedMode(null), 2000);
+  };
+
+  const handleCopyText = async () => {
+    if (!contentRef.current || copyingMode) return;
+    setCopyingMode("text");
     try {
       const htmlContent = contentRef.current.innerHTML;
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/html": new Blob([htmlContent], { type: "text/html" }),
-          "text/plain": new Blob([text], { type: "text/plain" }),
+          "text/plain": new Blob([plainCopyText], { type: "text/plain" }),
         }),
       ]);
+      markCopied("text");
     } catch {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(plainCopyText);
+      markCopied("text");
+    } finally {
+      setCopyingMode(null);
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyImage = async () => {
+    if (!contentRef.current || copyingMode) return;
+    setCopyingMode("image");
+    try {
+      const ok = await copyWidgetsAsImage(contentRef.current);
+      if (!ok) throw new Error("widgets_copy_failed");
+      markCopied("image");
+    } catch {
+      await navigator.clipboard.writeText(plainCopyText);
+      markCopied("text");
+    } finally {
+      setCopyingMode(null);
+    }
+  };
+
+  const handleCopyMixed = async () => {
+    if (!contentRef.current || copyingMode) return;
+    setCopyingMode("mixed");
+    try {
+      const ok = await copyMessageAsCompositeImage(contentRef.current);
+      if (!ok) throw new Error("composite_copy_failed");
+      markCopied("mixed");
+    } catch {
+      await navigator.clipboard.writeText(plainCopyText);
+      markCopied("text");
+    } finally {
+      setCopyingMode(null);
+    }
   };
 
   const handleLike = () => {
@@ -333,7 +385,7 @@ const AssistantBlockCard = ({
         {title}
       </div>
       <div ref={contentRef}>
-        <MDContent text={text} />
+        <RichMessageContent text={text} />
       </div>
       {copyable && (
         <div className="mt-2 flex justify-end gap-1">
@@ -352,28 +404,107 @@ const AssistantBlockCard = ({
               </svg>
             </button>
           )}
-          <button
-            onClick={handleCopy}
-            title="复制为富文本"
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs text-muted hover:text-ink-700 hover:bg-surface-tertiary transition-colors"
-          >
-            {copied ? (
-              <>
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-success" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M20 6L9 17l-5-5" />
-                </svg>
-                <span>已复制</span>
-              </>
-            ) : (
-              <>
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="9" y="9" width="13" height="13" rx="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-                <span>复制</span>
-              </>
-            )}
-          </button>
+          {hasMixedWidgetContent ? (
+            <>
+              <button
+                onClick={handleCopyImage}
+                title="复制图片"
+                disabled={Boolean(copyingMode)}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                  copyingMode
+                    ? "cursor-not-allowed text-ink-400 opacity-70"
+                    : "text-muted hover:text-ink-700 hover:bg-surface-tertiary"
+                }`}
+              >
+                {copyingMode === "image" ? (
+                  <>
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
+                    <span>复制中…</span>
+                  </>
+                ) : copiedMode === "image" ? (
+                  <>
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-success" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                    <span>已复制</span>
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                    <span>复制图片</span>
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleCopyMixed}
+                title="复制文本图片"
+                disabled={Boolean(copyingMode)}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                  copyingMode
+                    ? "cursor-not-allowed text-ink-400 opacity-70"
+                    : "text-muted hover:text-ink-700 hover:bg-surface-tertiary"
+                }`}
+              >
+                {copyingMode === "mixed" ? (
+                  <>
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
+                    <span>复制中…</span>
+                  </>
+                ) : copiedMode === "mixed" ? (
+                  <>
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-success" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                    <span>已复制</span>
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                    <span>复制文本图片</span>
+                  </>
+                )}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={hasWidget ? handleCopyImage : handleCopyText}
+              title={hasWidget ? "复制图片" : "复制为富文本"}
+              disabled={Boolean(copyingMode)}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                copyingMode
+                  ? "cursor-not-allowed text-ink-400 opacity-70"
+                  : "text-muted hover:text-ink-700 hover:bg-surface-tertiary"
+              }`}
+            >
+              {copyingMode === (hasWidget ? "image" : "text") ? (
+                <>
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
+                  <span>复制中…</span>
+                </>
+              ) : copiedMode ? (
+                <>
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-success" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                  <span>已复制</span>
+                </>
+              ) : (
+                <>
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  <span>{hasWidget ? "复制图片" : "复制"}</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       )}
     </div>

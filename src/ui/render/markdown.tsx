@@ -1,10 +1,83 @@
-import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { memo, useState, useCallback, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import { useAppStore } from "../store/useAppStore";
+
+const LazyRichMessageContent = lazy(() =>
+  import("./rich-message").then((m) => ({ default: m.RichMessageContent })),
+);
+
+// Mermaid lazy init — only loaded when a mermaid code block is encountered
+let mermaidInitialized = false;
+let mermaidInstance: typeof import("mermaid").default | null = null;
+let mermaidIdCounter = 0;
+
+async function getMermaid() {
+  if (!mermaidInstance) {
+    const mod = await import("mermaid");
+    mermaidInstance = mod.default;
+  }
+  if (!mermaidInitialized) {
+    mermaidInstance.initialize({
+      startOnLoad: false,
+      theme: document.documentElement.classList.contains("dark") ? "dark" : "default",
+      securityLevel: "strict",
+    });
+    mermaidInitialized = true;
+  }
+  return mermaidInstance;
+}
+
+function MermaidDiagram({ code }: { code: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [rendered, setRendered] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    setRendered(false);
+
+    (async () => {
+      try {
+        const mermaid = await getMermaid();
+        const id = `mermaid-${++mermaidIdCounter}`;
+        const { svg } = await mermaid.render(id, code.trim());
+        if (cancelled || !containerRef.current) return;
+        containerRef.current.innerHTML = svg;
+        setRendered(true);
+      } catch (e: any) {
+        if (cancelled) return;
+        setError(e?.message || "Mermaid 语法错误");
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [code]);
+
+  if (error) {
+    return (
+      <div>
+        <pre className="mt-3 max-w-full overflow-x-auto whitespace-pre-wrap rounded-xl bg-surface-tertiary p-3 text-[13px] leading-relaxed text-ink-700">
+          <code className="font-mono">{code}</code>
+        </pre>
+        <div className="mt-1 text-xs text-ink-400">{error}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3">
+      <div
+        ref={containerRef}
+        className={`overflow-x-auto ${rendered ? "" : "h-20 animate-pulse rounded-xl bg-surface-tertiary"}`}
+      />
+    </div>
+  );
+}
 
 // ─── Toast (singleton pub/sub — ToastHost must be mounted once at app root) ───
 
@@ -617,6 +690,12 @@ const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }
           const match = /language-(\w+)/.exec(className || "");
           const content = String(children);
           const isInline = !match && !content.includes("\n");
+
+          // Mermaid diagram rendering
+          if (match?.[1] === "mermaid" && content.trim()) {
+            return <MermaidDiagram code={content} />;
+          }
+
           const isFilePath = isInline && (
             /^\/[^\s]/.test(content) ||
             /^[A-Za-z]:[/\\]/.test(content)
@@ -717,6 +796,16 @@ const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }
 export const StreamingText = memo(function StreamingText({ text }: { text: string }) {
   const rawText = String(text ?? "");
   const normalizedText = normalizeMarkdownText(rawText);
+
+  // Widget rendering takes priority — delegate to RichMessageContent (lazy to avoid circular dep)
+  if (rawText.includes("```show-widget")) {
+    return (
+      <Suspense fallback={<div className="mt-2 text-sm text-ink-500">加载中…</div>}>
+        <LazyRichMessageContent text={normalizedText} streaming />
+      </Suspense>
+    );
+  }
+
   if (hasRenderableImageMarkdown(normalizedText)) {
     return <MarkdownContent text={normalizedText} />;
   }

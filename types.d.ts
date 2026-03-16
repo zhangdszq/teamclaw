@@ -726,6 +726,8 @@ type EventPayloadMapping = {
     "select-file": { path: string; isDir: boolean }[] | null;
     "get-image-thumbnail": string | null;
     "copy-image-to-clipboard": { ok: boolean; reason?: string };
+    "capture-region-to-clipboard": { ok: boolean; reason?: string };
+    "copy-image-data-url-to-clipboard": { ok: boolean; reason?: string };
     "save-image": { ok: boolean; savedTo?: string; reason?: string };
     "install-nodejs": InstallResult;
     "install-sdk": InstallResult;
@@ -904,6 +906,8 @@ interface Window {
         // Generate a thumbnail data URL for a local image
         getImageThumbnail: (filePath: string) => Promise<string | null>;
         copyImageToClipboard: (sourcePath: string) => Promise<{ ok: boolean; reason?: string }>;
+        captureRegionToClipboard: (rect: { x: number; y: number; width: number; height: number }) => Promise<{ ok: boolean; reason?: string }>;
+        copyImageDataUrlToClipboard: (dataUrl: string) => Promise<{ ok: boolean; reason?: string }>;
         saveImage: (sourcePath: string) => Promise<{ ok: boolean; savedTo?: string; reason?: string }>;
         // Install tools
         installNodeJs: () => Promise<InstallResult>;

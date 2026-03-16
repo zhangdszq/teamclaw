@@ -7,6 +7,7 @@ import { recordMessage, updateSession, addPendingPermission } from './session.js
 import { buildSmartMemoryContext } from '../../libs/memory-store.js';
 import { loadAssistantsConfig } from '../../libs/assistants-config.js';
 import { loadUserSettings } from '../../libs/user-settings.js';
+import { WIDGET_SYSTEM_PROMPT } from '../../libs/widget-guidelines.js';
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -239,6 +240,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
       ...(effectiveProvider === 'openai' && { openaiOverrides }),
       pathToClaudeCodeExecutable: claudeCodePath,
       provider: effectiveProvider,
+      systemPrompt: WIDGET_SYSTEM_PROMPT,
       mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd }), ...loadMcporterServers() },
       canUseTool: async (toolName, input, { signal, toolUseID }) => {
         if (toolName === 'AskUserQuestion') {

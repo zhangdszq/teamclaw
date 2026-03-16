@@ -119,7 +119,7 @@ export function buildStructuredPersona(
     );
   }
 
-  sections.push(SCHEDULE_REMINDER_RULE);
+  sections.push(SCHEDULE_REMINDER_RULE, IMAGE_INLINE_RULE, BOT_VISUALIZATION_RULE);
 
   for (const extra of extras) {
     if (extra?.trim()) sections.push(extra.trim());
@@ -237,6 +237,16 @@ export function prepareVisibleArtifact(
   copyFileSync(originalPath, archivedPath);
   return { filePath: archivedPath, originalPath, archivedPath };
 }
+
+export const BOT_VISUALIZATION_RULE =
+  "## Bot 可视化回复规则\n" +
+  "当前回复渠道是机器人聊天（如 Telegram、钉钉、飞书、QQ），不能使用前端专属的 `show-widget`、HTML、JS、iframe 或 Mermaid 代码块作为最终可视化输出。\n" +
+  "当用户要求图表、流程图、结构图、时间线、海报、示意图等可视化内容时，必须先在本地生成图片文件，再把图片以内嵌方式发出。\n" +
+  "- 优先生成 PNG；必要时也可生成 JPG 或 WebP\n" +
+  "- 推荐用 Python（如 matplotlib、Pillow）或 SVG 导出 PNG\n" +
+  "- 最终回复里把图片放在对应文字位置：`![图表说明](/绝对/路径/chart.png)`\n" +
+  "- 不要把 `show-widget` 代码 fence、HTML 源码、Chart.js 代码直接发给用户\n" +
+  "- 如果有多张图，按“文字 -> 图片 -> 文字 -> 图片”顺序组织回复";
 
 // ─── parseReplySegments ───────────────────────────────────────────────────────
 

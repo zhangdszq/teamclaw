@@ -14,8 +14,8 @@ setQQBotSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
-import { loadAssistantsConfig, saveAssistantsConfig, assistantConfigEvents, resolveDefaultProvider, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
-import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type TelegramBotConfig, type QQBotConfig } from "./libs/bot-config.js";
+import { loadAssistantsConfig, saveAssistantsConfig, assistantConfigEvents, resolveDefaultProvider, type AssistantConfig, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
+import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type FeishuBotConfig, type TelegramBotConfig, type QQBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
   stopDingtalkBot,
@@ -161,169 +161,218 @@ function refreshAllMemoryAbstracts(): void {
     }
 }
 
+function buildAssistantRuntimeUpdates(assistant: AssistantConfig, userContext?: string) {
+    return {
+        assistantName: assistant.name,
+        skillNames: assistant.skillNames,
+        persona: assistant.persona,
+        coreValues: assistant.coreValues,
+        relationship: assistant.relationship,
+        cognitiveStyle: assistant.cognitiveStyle,
+        operatingGuidelines: assistant.operatingGuidelines,
+        userContext,
+        provider: assistant.provider,
+        model: assistant.model,
+        defaultCwd: assistant.defaultCwd,
+    };
+}
+
+function buildDingtalkBotOptions(assistant: AssistantConfig, userContext: string | undefined, config: DingtalkBotConfig): DingtalkBotOptions {
+    return {
+        ...buildAssistantRuntimeUpdates(assistant, userContext),
+        appKey: config.appKey,
+        appSecret: config.appSecret,
+        robotCode: config.robotCode,
+        corpId: config.corpId,
+        agentId: config.agentId,
+        assistantId: assistant.id,
+        messageType: config.messageType,
+        cardTemplateId: config.cardTemplateId,
+        cardTemplateKey: config.cardTemplateKey,
+        dmPolicy: config.dmPolicy,
+        groupPolicy: config.groupPolicy,
+        allowFrom: config.allowFrom,
+        maxConnectionAttempts: config.maxConnectionAttempts,
+        initialReconnectDelay: config.initialReconnectDelay,
+        maxReconnectDelay: config.maxReconnectDelay,
+        reconnectJitter: config.reconnectJitter,
+        ownerStaffIds: config.ownerStaffIds,
+    };
+}
+
+function buildTelegramBotOptions(assistant: AssistantConfig, userContext: string | undefined, config: TelegramBotConfig): TelegramBotOptions {
+    return {
+        ...buildAssistantRuntimeUpdates(assistant, userContext),
+        token: config.token,
+        proxy: config.proxy,
+        assistantId: assistant.id,
+        dmPolicy: config.dmPolicy,
+        groupPolicy: config.groupPolicy,
+        allowFrom: config.allowFrom,
+        requireMention: config.requireMention,
+        ownerUserIds: config.ownerUserIds,
+    };
+}
+
+function buildFeishuBotOptions(assistant: AssistantConfig, userContext: string | undefined, config: FeishuBotConfig): FeishuBotOptions {
+    return {
+        ...buildAssistantRuntimeUpdates(assistant, userContext),
+        appId: config.appId,
+        appSecret: config.appSecret,
+        domain: config.domain,
+        assistantId: assistant.id,
+        connectionMode: config.connectionMode,
+        webhookPort: config.webhookPort,
+        dmPolicy: config.dmPolicy,
+        groupPolicy: config.groupPolicy,
+        allowFrom: config.allowFrom,
+        requireMention: config.requireMention,
+        renderMode: config.renderMode,
+        ownerOpenIds: config.ownerOpenIds,
+    };
+}
+
+function buildQQBotOptions(assistant: AssistantConfig, userContext: string | undefined, config: QQBotConfig): QQBotOptions {
+    return {
+        ...buildAssistantRuntimeUpdates(assistant, userContext),
+        appId: config.appId,
+        clientSecret: config.clientSecret,
+        assistantId: assistant.id,
+        dmPolicy: config.dmPolicy,
+        groupPolicy: config.groupPolicy,
+        allowFrom: config.allowFrom,
+        ownerOpenIds: config.ownerOpenIds,
+    };
+}
+
+function hasDingtalkConnectionChanged(previous?: DingtalkBotConfig, next?: DingtalkBotConfig): boolean {
+    return !!previous?.connected
+        && !!next?.connected
+        && (
+            previous.appKey !== next.appKey
+            || previous.appSecret !== next.appSecret
+            || previous.robotCode !== next.robotCode
+            || previous.corpId !== next.corpId
+            || previous.agentId !== next.agentId
+        );
+}
+
+function hasTelegramConnectionChanged(previous?: TelegramBotConfig, next?: TelegramBotConfig): boolean {
+    return !!previous?.connected
+        && !!next?.connected
+        && (
+            previous.token !== next.token
+            || previous.proxy !== next.proxy
+        );
+}
+
+function hasFeishuConnectionChanged(previous?: FeishuBotConfig, next?: FeishuBotConfig): boolean {
+    return !!previous?.connected
+        && !!next?.connected
+        && (
+            previous.appId !== next.appId
+            || previous.appSecret !== next.appSecret
+            || previous.domain !== next.domain
+            || previous.connectionMode !== next.connectionMode
+            || previous.webhookPort !== next.webhookPort
+        );
+}
+
+function hasQQBotConnectionChanged(previous?: QQBotConfig, next?: QQBotConfig): boolean {
+    return !!previous?.connected
+        && !!next?.connected
+        && (
+            previous.appId !== next.appId
+            || previous.clientSecret !== next.clientSecret
+        );
+}
+
+async function syncAssistantBotConnections(
+    assistant: AssistantConfig,
+    userContext: string | undefined,
+    previousAssistant?: AssistantConfig,
+): Promise<void> {
+    const previousDingtalk = previousAssistant?.bots?.dingtalk as DingtalkBotConfig | undefined;
+    const dingtalk = assistant.bots?.dingtalk as DingtalkBotConfig | undefined;
+    const shouldRunDingtalk = !!(dingtalk?.connected && dingtalk.appKey && dingtalk.appSecret);
+    const dingtalkStatus = getDingtalkBotStatus(assistant.id);
+    if (!shouldRunDingtalk) {
+        if (dingtalkStatus !== "disconnected") stopDingtalkBot(assistant.id);
+    } else if (
+        hasDingtalkConnectionChanged(previousDingtalk, dingtalk)
+        || (dingtalkStatus !== "connected" && dingtalkStatus !== "connecting")
+    ) {
+        try {
+            await startDingtalkBot(buildDingtalkBotOptions(assistant, userContext, dingtalk));
+        } catch (err) {
+            console.error(`[BotSync] Failed to sync DingTalk bot for ${assistant.name}:`, err);
+        }
+    }
+
+    const previousTelegram = previousAssistant?.bots?.telegram as TelegramBotConfig | undefined;
+    const telegram = assistant.bots?.telegram as TelegramBotConfig | undefined;
+    const shouldRunTelegram = !!(telegram?.connected && telegram.token);
+    const telegramStatus = getTelegramBotStatus(assistant.id);
+    if (!shouldRunTelegram) {
+        if (telegramStatus !== "disconnected") stopTelegramBot(assistant.id);
+    } else if (
+        hasTelegramConnectionChanged(previousTelegram, telegram)
+        || (telegramStatus !== "connected" && telegramStatus !== "connecting")
+    ) {
+        try {
+            await startTelegramBot(buildTelegramBotOptions(assistant, userContext, telegram));
+        } catch (err) {
+            console.error(`[BotSync] Failed to sync Telegram bot for ${assistant.name}:`, err);
+        }
+    }
+
+    const previousFeishu = previousAssistant?.bots?.feishu as FeishuBotConfig | undefined;
+    const feishu = assistant.bots?.feishu as FeishuBotConfig | undefined;
+    const shouldRunFeishu = !!(feishu?.connected && feishu.appId && feishu.appSecret);
+    const feishuStatus = getFeishuBotStatus(assistant.id);
+    if (!shouldRunFeishu) {
+        if (feishuStatus !== "disconnected") stopFeishuBot(assistant.id);
+    } else if (
+        hasFeishuConnectionChanged(previousFeishu, feishu)
+        || (feishuStatus !== "connected" && feishuStatus !== "connecting")
+    ) {
+        try {
+            await startFeishuBot(buildFeishuBotOptions(assistant, userContext, feishu));
+        } catch (err) {
+            console.error(`[BotSync] Failed to sync Feishu bot for ${assistant.name}:`, err);
+        }
+    }
+
+    const previousQQBot = previousAssistant?.bots?.qqbot as QQBotConfig | undefined;
+    const qqbot = assistant.bots?.qqbot as QQBotConfig | undefined;
+    const shouldRunQQBot = !!(qqbot?.connected && qqbot.appId && qqbot.clientSecret);
+    const qqbotStatus = getQQBotStatus(assistant.id);
+    if (!shouldRunQQBot) {
+        if (qqbotStatus !== "disconnected") stopQQBot(assistant.id);
+    } else if (
+        hasQQBotConnectionChanged(previousQQBot, qqbot)
+        || (qqbotStatus !== "connected" && qqbotStatus !== "connecting")
+    ) {
+        try {
+            await startQQBot(buildQQBotOptions(assistant, userContext, qqbot));
+        } catch (err) {
+            console.error(`[BotSync] Failed to sync QQ Bot for ${assistant.name}:`, err);
+        }
+    }
+}
+
+function stopAllAssistantBots(assistantId: string): void {
+    stopDingtalkBot(assistantId);
+    stopTelegramBot(assistantId);
+    stopFeishuBot(assistantId);
+    stopQQBot(assistantId);
+}
+
 // ─── Auto-connect bots on startup ────────────────────────────
-async function autoConnectBots(win: BrowserWindow): Promise<void> {
+async function autoConnectBots(_win: BrowserWindow): Promise<void> {
     const config = loadAssistantsConfig();
     for (const assistant of config.assistants) {
-        // DingTalk
-        const dingtalk = assistant.bots?.dingtalk as DingtalkBotConfig | undefined;
-        if (dingtalk?.connected && dingtalk.appKey && dingtalk.appSecret) {
-            console.log(`[AutoConnect] Starting DingTalk bot for assistant: ${assistant.name}`);
-            try {
-                await startDingtalkBot({
-                    appKey: dingtalk.appKey,
-                    appSecret: dingtalk.appSecret,
-                    robotCode: dingtalk.robotCode,
-                    corpId: dingtalk.corpId,
-                    agentId: dingtalk.agentId,
-                    assistantId: assistant.id,
-                    assistantName: assistant.name,
-                    skillNames: assistant.skillNames,
-                    persona: assistant.persona,
-                    coreValues: assistant.coreValues,
-                    relationship: assistant.relationship,
-                    cognitiveStyle: assistant.cognitiveStyle,
-                    operatingGuidelines: assistant.operatingGuidelines,
-                    userContext: config.userContext,
-                    provider: assistant.provider,
-                    model: assistant.model,
-                    defaultCwd: assistant.defaultCwd,
-                    messageType: dingtalk.messageType,
-                    cardTemplateId: dingtalk.cardTemplateId,
-                    cardTemplateKey: dingtalk.cardTemplateKey,
-                    dmPolicy: dingtalk.dmPolicy,
-                    groupPolicy: dingtalk.groupPolicy,
-                    allowFrom: dingtalk.allowFrom,
-                    maxConnectionAttempts: dingtalk.maxConnectionAttempts,
-                    initialReconnectDelay: dingtalk.initialReconnectDelay,
-                    maxReconnectDelay: dingtalk.maxReconnectDelay,
-                    reconnectJitter: dingtalk.reconnectJitter,
-                    ownerStaffIds: dingtalk.ownerStaffIds,
-                });
-                console.log(`[AutoConnect] DingTalk bot connected for: ${assistant.name}`);
-            } catch (err) {
-                console.error(`[AutoConnect] Failed to connect DingTalk bot for ${assistant.name}:`, err);
-                win.webContents.send("dingtalk-bot-status", {
-                    assistantId: assistant.id,
-                    status: "error",
-                    detail: err instanceof Error ? err.message : String(err),
-                });
-            }
-        }
-
-        // Telegram
-        const telegram = assistant.bots?.telegram as TelegramBotConfig | undefined;
-        if (telegram?.connected && telegram.token) {
-            console.log(`[AutoConnect] Starting Telegram bot for assistant: ${assistant.name}`);
-            try {
-                await startTelegramBot({
-                    token: telegram.token,
-                    proxy: telegram.proxy,
-                    assistantId: assistant.id,
-                    assistantName: assistant.name,
-                    skillNames: assistant.skillNames,
-                    persona: assistant.persona,
-                    coreValues: assistant.coreValues,
-                    relationship: assistant.relationship,
-                    cognitiveStyle: assistant.cognitiveStyle,
-                    operatingGuidelines: assistant.operatingGuidelines,
-                    userContext: config.userContext,
-                    provider: assistant.provider,
-                    model: assistant.model,
-                    defaultCwd: assistant.defaultCwd,
-                    dmPolicy: telegram.dmPolicy,
-                    groupPolicy: telegram.groupPolicy,
-                    allowFrom: telegram.allowFrom,
-                    requireMention: telegram.requireMention,
-                    ownerUserIds: telegram.ownerUserIds,
-                });
-                console.log(`[AutoConnect] Telegram bot connected for: ${assistant.name}`);
-            } catch (err) {
-                console.error(`[AutoConnect] Failed to connect Telegram bot for ${assistant.name}:`, err);
-                win.webContents.send("telegram-bot-status", {
-                    assistantId: assistant.id,
-                    status: "error",
-                    detail: err instanceof Error ? err.message : String(err),
-                });
-            }
-        }
-
-        // Feishu
-        const feishu = assistant.bots?.feishu as FeishuBotConfig | undefined;
-        if (feishu?.connected && feishu.appId && feishu.appSecret) {
-            console.log(`[AutoConnect] Starting Feishu bot for assistant: ${assistant.name}`);
-            try {
-                await startFeishuBot({
-                    appId: feishu.appId,
-                    appSecret: feishu.appSecret,
-                    domain: feishu.domain,
-                    assistantId: assistant.id,
-                    assistantName: assistant.name,
-                    skillNames: assistant.skillNames,
-                    persona: assistant.persona,
-                    coreValues: assistant.coreValues,
-                    relationship: assistant.relationship,
-                    cognitiveStyle: assistant.cognitiveStyle,
-                    operatingGuidelines: assistant.operatingGuidelines,
-                    userContext: config.userContext,
-                    provider: assistant.provider,
-                    model: assistant.model,
-                    defaultCwd: assistant.defaultCwd,
-                    connectionMode: feishu.connectionMode,
-                    webhookPort: feishu.webhookPort,
-                    dmPolicy: feishu.dmPolicy,
-                    groupPolicy: feishu.groupPolicy,
-                    allowFrom: feishu.allowFrom,
-                    requireMention: feishu.requireMention,
-                    renderMode: feishu.renderMode,
-                    ownerOpenIds: feishu.ownerOpenIds,
-                });
-                console.log(`[AutoConnect] Feishu bot connected for: ${assistant.name}`);
-            } catch (err) {
-                console.error(`[AutoConnect] Failed to connect Feishu bot for ${assistant.name}:`, err);
-                win.webContents.send("feishu-bot-status", {
-                    assistantId: assistant.id,
-                    status: "error",
-                    detail: err instanceof Error ? err.message : String(err),
-                });
-            }
-        }
-
-        // QQ Bot
-        const qqbot = assistant.bots?.qqbot as QQBotConfig | undefined;
-        if (qqbot?.connected && qqbot.appId && qqbot.clientSecret) {
-            console.log(`[AutoConnect] Starting QQ bot for assistant: ${assistant.name}`);
-            try {
-                await startQQBot({
-                    appId: qqbot.appId,
-                    clientSecret: qqbot.clientSecret,
-                    assistantId: assistant.id,
-                    assistantName: assistant.name,
-                    skillNames: assistant.skillNames,
-                    persona: assistant.persona,
-                    coreValues: assistant.coreValues,
-                    relationship: assistant.relationship,
-                    cognitiveStyle: assistant.cognitiveStyle,
-                    operatingGuidelines: assistant.operatingGuidelines,
-                    userContext: config.userContext,
-                    provider: assistant.provider,
-                    model: assistant.model,
-                    defaultCwd: assistant.defaultCwd,
-                    dmPolicy: qqbot.dmPolicy,
-                    groupPolicy: qqbot.groupPolicy,
-                    allowFrom: qqbot.allowFrom,
-                    ownerOpenIds: qqbot.ownerOpenIds,
-                });
-                console.log(`[AutoConnect] QQ bot connected for: ${assistant.name}`);
-            } catch (err) {
-                console.error(`[AutoConnect] Failed to connect QQ bot for ${assistant.name}:`, err);
-                win.webContents.send("qqbot-bot-status", {
-                    assistantId: assistant.id,
-                    status: "error",
-                    detail: err instanceof Error ? err.message : String(err),
-                });
-            }
-        }
+        await syncAssistantBotConnections(assistant, config.userContext);
     }
 }
 
@@ -985,8 +1034,9 @@ app.on("ready", async () => {
         };
     });
 
-    ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
+    ipcMainHandle("save-assistants-config", async (_: any, config: AssistantsConfig) => {
         const previous = loadAssistantsConfig();
+        const previousById = new Map(previous.assistants.map((assistant) => [assistant.id, assistant]));
         const previousIds = new Set(previous.assistants.map((assistant) => assistant.id));
         const result = saveAssistantsConfig(config);
         const nextIds = new Set(result.assistants.map((assistant) => assistant.id));
@@ -1030,10 +1080,12 @@ app.on("ready", async () => {
             updateTelegramBotConfig(assistant.id, updates);
             updateFeishuBotConfig(assistant.id, updates);
             updateQQBotConfig(assistant.id, updates);
+            await syncAssistantBotConnections(assistant, result.userContext, previousById.get(assistant.id));
         }
 
         for (const assistantId of deletedIds) {
             try {
+                stopAllAssistantBots(assistantId);
                 cleanupHeartbeatData(assistantId);
                 deleteAssistantMemoryRoot(assistantId);
             } catch (err) {

@@ -11,7 +11,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { isAbsolute, join, resolve } from "path";
+import { isAbsolute, join, relative, resolve } from "path";
 import os from "os";
 import { parse as parseToml } from "smol-toml";
 import { app } from "electron";
@@ -33,6 +33,7 @@ import {
   listAssistantIds,
   ScopedMemory,
   validateMemoryEntry,
+  getAssistantContactMemoryRoot,
 } from "./memory-store.js";
 import {
   loadPlanItems,
@@ -45,7 +46,7 @@ import { sendProactiveTelegramMessage, getTelegramBotStatus, getAnyConnectedTele
 import { sendProactiveFeishuMessage, getFeishuBotStatus, getAnyConnectedFeishuAssistantId } from "./feishu-bot.js";
 import { sendProactiveQQMessage, getQQBotStatus, getAnyConnectedQQBotAssistantId } from "./qqbot-bot.js";
 import { appendNotified } from "./notification-log.js";
-import { createKnowledgeCandidate } from "./knowledge-store.js";
+import { createKnowledgeCandidate, listKnowledgeCandidates, listKnowledgeDocs } from "./knowledge-store.js";
 import { loadAssistantsConfig, resolveAssistantReference } from "./assistants-config.js";
 import { loadUserSettings } from "./user-settings.js";
 import { resolveAppAsset } from "../pathResolver.js";
@@ -152,11 +153,7 @@ const RESTRICTED_BOT_TOOL_NAMES = new Set([
   "create_scheduled_task",
   "list_scheduled_tasks",
   "delete_scheduled_task",
-  "register_sop_schedule",
-  "generate_sop",
-  "execute_sop",
   "send_notification",
-  "save_experience",
 ]);
 
 const SENSITIVE_TURN_BLOCKED_TOOL_NAMES = new Set([
@@ -182,6 +179,11 @@ function expandHomePath(filePath: string): string {
 function resolveToolPath(filePath: string, sessionCwd?: string): string {
   const expanded = expandHomePath(filePath);
   return resolve(isAbsolute(expanded) ? expanded : resolve(sessionCwd || process.cwd(), expanded));
+}
+
+function isPathInsideDir(dirPath: string, targetPath: string): boolean {
+  const rel = relative(resolve(dirPath), resolve(targetPath));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function isDotEnvLike(baseName: string): boolean {
@@ -986,6 +988,8 @@ const webFetchTool = tool(
 
 function createReadDocumentTool(
   sessionCwd?: string,
+  assistantId?: string,
+  contactKey?: string,
   isOwner?: boolean,
   sensitiveTurnState?: SharedMcpSensitiveTurnState,
 ) {
@@ -1002,11 +1006,27 @@ function createReadDocumentTool(
       if (!filePath) return ok("file_path 不能为空");
       const maxChars = Math.min(Number(input.max_chars ?? 20_000), 60_000);
       const resolvedPath = resolveToolPath(filePath, sessionCwd);
+      const knowledgeRoot = join(os.homedir(), ".vk-cowork", "knowledge");
+      const memoryRoot = join(os.homedir(), ".vk-cowork", "memory");
+      const allowedContactMemoryRoot = assistantId && contactKey
+        ? getAssistantContactMemoryRoot(assistantId, contactKey)
+        : null;
       const sensitivePath = isSensitiveLocalPath(resolvedPath, sessionCwd);
 
-      if (sensitivePath && isOwner === false) {
-        return denySensitivePathRead();
+      if (isOwner === false) {
+        const allowedKnowledgePath = isPathInsideDir(knowledgeRoot, resolvedPath);
+        const allowedContactMemoryPath = allowedContactMemoryRoot
+          ? isPathInsideDir(allowedContactMemoryRoot, resolvedPath)
+          : false;
+
+        if (isPathInsideDir(memoryRoot, resolvedPath) && !allowedContactMemoryPath) {
+          return ok("无权读取此路径");
+        }
+        if (!allowedKnowledgePath && !allowedContactMemoryPath && sensitivePath) {
+          return denySensitivePathRead();
+        }
       }
+
       if (sensitivePath && isOwner === true && sensitiveTurnState) {
         sensitiveTurnState.active = true;
         sensitiveTurnState.matchedPath = resolvedPath;
@@ -1142,7 +1162,7 @@ function createSaveExperienceTool(sourceSessionId?: string, assistantId?: string
 
 // ── Working Memory Tools (factory — uses assistantId via closure) ────────────
 
-function createSaveWorkingMemoryTool(assistantId?: string) {
+function createSaveWorkingMemoryTool(assistantId?: string, contactKey?: string) {
   return tool(
     "save_working_memory",
     "保存工作记忆检查点。在执行长任务时，定期保存关键上下文（当前任务、关键信息、操作历史），" +
@@ -1168,7 +1188,7 @@ function createSaveWorkingMemoryTool(assistantId?: string) {
         };
 
         if (assistantId) {
-          new ScopedMemory(assistantId).writeWorkingMemory(checkpoint);
+          new ScopedMemory(assistantId, contactKey).writeWorkingMemory(checkpoint);
         } else {
           writeWorkingMemory(checkpoint);
         }
@@ -1181,7 +1201,7 @@ function createSaveWorkingMemoryTool(assistantId?: string) {
   );
 }
 
-function createReadWorkingMemoryTool(assistantId?: string) {
+function createReadWorkingMemoryTool(assistantId?: string, contactKey?: string) {
   return tool(
     "read_working_memory",
     "读取当前的工作记忆检查点，查看上次保存的任务上下文和进展。",
@@ -1189,7 +1209,7 @@ function createReadWorkingMemoryTool(assistantId?: string) {
     async () => {
       try {
         const content = assistantId
-          ? new ScopedMemory(assistantId).readWorkingMemory()
+          ? new ScopedMemory(assistantId, contactKey).readWorkingMemory()
           : readWorkingMemory();
         if (!content?.trim()) return ok("暂无保存的工作记忆。");
         return ok(content);
@@ -1202,7 +1222,10 @@ function createReadWorkingMemoryTool(assistantId?: string) {
 
 // ── Save Memory (scoped — private by default) ──────────────────────────────
 
-function createSaveMemoryTool(assistantId?: string) {
+function createSaveMemoryTool(
+  assistantId?: string,
+  opts?: { contactKey?: string; isOwner?: boolean },
+) {
   return tool(
     "save_memory",
     "保存长期记忆条目。默认写入你的专属记忆（仅你可见），只有团队级信息才设 scope 为 shared。\n\n" +
@@ -1243,9 +1266,20 @@ function createSaveMemoryTool(assistantId?: string) {
         }
         content = validation.normalized;
 
+        const requestedScope = input.scope ?? "private";
+        const isContactScoped = opts?.isOwner === false && !!assistantId && !!opts.contactKey;
+
+        if (isContactScoped && requestedScope === "shared") {
+          return ok("无权写入共享记忆");
+        }
+
+        if (isContactScoped) {
+          new ScopedMemory(assistantId, opts?.contactKey).appendLongTermMemory(content);
+          return ok("已写入当前联系人/群聊的专属记忆。");
+        }
+
         const settings = loadUserSettings();
         const memoryIsolation = settings.memoryIsolationV3 !== false; // default: on
-        const requestedScope = input.scope ?? "private";
         const scope = memoryIsolation ? requestedScope : "shared";
 
         if (scope === "shared") {
@@ -1273,12 +1307,14 @@ function createSaveMemoryTool(assistantId?: string) {
 
 // ── Query Team Memory (read-only cross-assistant search) ────────────────────
 
-function createQueryTeamMemoryTool(assistantId?: string) {
+function createQueryTeamMemoryTool(opts?: { assistantId?: string; isOwner?: boolean }) {
   return tool(
     "query_team_memory",
-    "跨助理搜索记忆（只读）。搜索其他助理的专属记忆中与关键词匹配的条目。\n" +
-      "用途：当你在共享日志或索引中发现其他助理处理过相关话题时，用此工具获取详细上下文。\n" +
-      "注意：只返回匹配的条目，不会修改任何记忆。",
+    (opts?.isOwner === false
+      ? "搜索共享知识库（只读）。仅搜索 knowledge/experience 与 knowledge/docs 中和关键词匹配的内容，不会读取共享 MEMORY.md 或其他助理的专属记忆。"
+      : "跨助理搜索记忆（只读）。搜索其他助理的专属记忆中与关键词匹配的条目。\n" +
+        "用途：当你在共享日志或索引中发现其他助理处理过相关话题时，用此工具获取详细上下文。\n" +
+        "注意：只返回匹配的条目，不会修改任何记忆。"),
     {
       query: z.string().describe("搜索关键词（支持多个词，空格分隔，任一匹配即返回）"),
       target_assistant_id: z.string().optional().describe("指定搜索某个助理的记忆（可选，不指定则搜索所有其他助理）"),
@@ -1289,13 +1325,53 @@ function createQueryTeamMemoryTool(assistantId?: string) {
         if (!query) return ok("query 不能为空");
 
         const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+        const matchesTerms = (value: string) => terms.some((term) => value.toLowerCase().includes(term));
+        const collectMatchedLines = (...parts: string[]) => parts
+          .flatMap((part) => part.split("\n"))
+          .map((line) => line.trim())
+          .filter((line) => line && matchesTerms(line))
+          .slice(0, 8);
+
+        if (opts?.isOwner === false) {
+          const results: string[] = [];
+
+          for (const candidate of listKnowledgeCandidates()) {
+            const haystack = [candidate.title, candidate.scenario, candidate.steps, candidate.result, candidate.risk]
+              .join("\n")
+              .toLowerCase();
+            if (!terms.some((term) => haystack.includes(term))) continue;
+            const matchedLines = collectMatchedLines(
+              candidate.scenario,
+              candidate.steps,
+              candidate.result,
+              candidate.risk,
+            );
+            const reviewStatus = candidate.reviewStatus ? `\n状态：${candidate.reviewStatus}` : "";
+            results.push(
+              `### 经验候选｜${candidate.title}\n来源：knowledge/experience${reviewStatus}\n${matchedLines.join("\n")}`,
+            );
+          }
+
+          for (const doc of listKnowledgeDocs()) {
+            const haystack = [doc.title, doc.content].join("\n").toLowerCase();
+            if (!terms.some((term) => haystack.includes(term))) continue;
+            const matchedLines = collectMatchedLines(doc.content);
+            results.push(`### 知识文档｜${doc.title}\n来源：knowledge/docs\n${matchedLines.join("\n")}`);
+          }
+
+          if (results.length === 0) {
+            return ok(`未在知识库中找到与"${query}"相关的内容。`);
+          }
+          return ok(`**知识库搜索结果（关键词: ${query}）**\n\n${results.slice(0, 10).join("\n\n")}`);
+        }
+
         const { assistants } = loadAssistantsConfig();
         const nameMap = new Map(assistants.map(a => [a.id, a.name]));
 
         const allIds = listAssistantIds();
         const targetIds = input.target_assistant_id
           ? allIds.filter(id => id === input.target_assistant_id)
-          : allIds.filter(id => id !== assistantId);
+          : allIds.filter(id => id !== opts?.assistantId);
 
         if (targetIds.length === 0) return ok("未找到匹配的助理。");
 
@@ -1325,7 +1401,7 @@ function createQueryTeamMemoryTool(assistantId?: string) {
   );
 }
 
-function createSaveTaskTool(assistantId?: string) {
+function createSaveTaskTool(assistantId?: string, contactKey?: string) {
   return tool(
     "save_task",
     "保存或更新一条结构化待办任务。适用于用户明确要求后续跟进、提醒、推进的事项。",
@@ -1345,7 +1421,7 @@ function createSaveTaskTool(assistantId?: string) {
           title: String(input.title ?? ""),
           dueDate: input.due_date ? String(input.due_date).trim() : undefined,
           status: input.status,
-        });
+        }, { contactKey });
         const due = task.dueDate ? `\n- 截止：${task.dueDate}` : "";
         return ok(
           `任务已保存：\n- ID：${task.id}\n- 标题：${task.title}\n- 状态：${task.status}${due}`,
@@ -1357,7 +1433,7 @@ function createSaveTaskTool(assistantId?: string) {
   );
 }
 
-function createCompleteTaskTool(assistantId?: string) {
+function createCompleteTaskTool(assistantId?: string, contactKey?: string) {
   return tool(
     "complete_task",
     "将一条结构化待办任务标记为已完成。",
@@ -1369,7 +1445,7 @@ function createCompleteTaskTool(assistantId?: string) {
         return ok("标记失败：complete_task 需要 assistantId。");
       }
       try {
-        const task = completeAssistantTask(assistantId, String(input.task_id ?? "").trim());
+        const task = completeAssistantTask(assistantId, String(input.task_id ?? "").trim(), { contactKey });
         if (!task) return ok("未找到对应任务。");
         return ok(`任务已完成：${task.title} (${task.id})`);
       } catch (err) {
@@ -1379,7 +1455,7 @@ function createCompleteTaskTool(assistantId?: string) {
   );
 }
 
-function createListTasksTool(assistantId?: string) {
+function createListTasksTool(assistantId?: string, contactKey?: string) {
   return tool(
     "list_tasks",
     "读取当前助理的结构化任务列表，查看待办与完成状态。",
@@ -1394,6 +1470,7 @@ function createListTasksTool(assistantId?: string) {
       try {
         const tasks = listAssistantTasks(assistantId, {
           includeCompleted: input.include_completed === true || input.status === "completed",
+          contactKey,
         }).filter((task) => (input.status ? task.status === input.status : true));
         if (tasks.length === 0) return ok("当前没有匹配的结构化任务。");
         const lines = tasks.map((task) => {
@@ -2480,7 +2557,7 @@ export const SHARED_TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "save_working_memory", category: "记忆", description: "保存当前任务上下文的工作记忆检查点" },
   // framework injects prevOutput automatically; manual read is redundant and confusing in SOP stages
   { name: "read_working_memory", category: "记忆", description: "读取最近保存的工作记忆检查点", sopExclude: true },
-  { name: "query_team_memory",   category: "记忆", description: "跨助理只读搜索记忆，获取其他助理的历史上下文", sopExclude: true },
+  { name: "query_team_memory",   category: "记忆", description: "只读搜索团队记忆或共享知识库；非 owner 仅可查询 knowledge/ 下的内容", sopExclude: true },
   // memory management ops, not business tools
   { name: "distill_memory",      category: "记忆", description: "任务完成后触发结构化记忆蒸馏，提取值得长期保留的信息", sopExclude: true },
   // Experience documentation — writes to knowledge/experience/ as draft
@@ -2656,6 +2733,7 @@ export function createSharedMcpServer(opts?: {
   sessionCwd?: string;
   workflowSopId?: string;
   scheduledTaskId?: string;
+  contactKey?: string;
   isOwner?: boolean;
   sensitiveTurnState?: SharedMcpSensitiveTurnState;
 }) {
@@ -2664,6 +2742,7 @@ export function createSharedMcpServer(opts?: {
   const sessionCwd = opts?.sessionCwd;
   const workflowSopId = opts?.workflowSopId;
   const scheduledTaskId = opts?.scheduledTaskId;
+  const contactKey = opts?.contactKey;
   const isOwner = opts?.isOwner;
   const sensitiveTurnState = opts?.sensitiveTurnState;
 
@@ -2682,7 +2761,7 @@ export function createSharedMcpServer(opts?: {
     // Web & Documents
     webSearchTool,
     webFetchTool,
-    createReadDocumentTool(sessionCwd, isOwner, sensitiveTurnState),
+    createReadDocumentTool(sessionCwd, assistantId, contactKey, isOwner, sensitiveTurnState),
     // Screen & Desktop
     createTakeScreenshotTool(sessionCwd, assistantId),
     createScreenAnalyzeTool(sessionCwd, assistantId),
@@ -2690,15 +2769,15 @@ export function createSharedMcpServer(opts?: {
     // Experience documentation (shared across all assistants)
     createSaveExperienceTool(sessionId, assistantId),
     // Working Memory (scoped to assistant if ID provided)
-    createSaveWorkingMemoryTool(assistantId),
-    createReadWorkingMemoryTool(assistantId),
+    createSaveWorkingMemoryTool(assistantId, contactKey),
+    createReadWorkingMemoryTool(assistantId, contactKey),
     // Long-term Memory (scoped — private by default)
-    createSaveMemoryTool(assistantId),
-    createSaveTaskTool(assistantId),
-    createCompleteTaskTool(assistantId),
-    createListTasksTool(assistantId),
+    createSaveMemoryTool(assistantId, { contactKey, isOwner }),
+    createSaveTaskTool(assistantId, contactKey),
+    createCompleteTaskTool(assistantId, contactKey),
+    createListTasksTool(assistantId, contactKey),
     // Cross-assistant memory search (read-only)
-    createQueryTeamMemoryTool(assistantId),
+    createQueryTeamMemoryTool({ assistantId, isOwner }),
     // Memory Distillation
     distillMemoryTool,
     // Atomic Power Tools

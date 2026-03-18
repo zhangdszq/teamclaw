@@ -73,6 +73,7 @@ export interface TelegramBotOptions {
   provider?: "claude" | "openai";
   model?: string;
   defaultCwd?: string;
+  allowNonOwnerDm?: boolean;
   dmPolicy?: "open" | "allowlist";
   groupPolicy?: "open" | "allowlist";
   allowFrom?: string[];
@@ -103,7 +104,7 @@ const MEDIA_GROUP_WAIT_MS = 1_500;
 
 /** Telegram-specific persona wrapper: injects FILE_SEND_RULE as a built-in extra. */
 function buildStructuredPersona(
-  opts: TelegramBotOptions,
+  opts: TelegramBotOptions & { isOwner?: boolean },
   ...extras: (string | undefined | null)[]
 ): string {
   return buildStructuredPersonaBase(opts, FILE_SEND_RULE, ...extras);
@@ -936,6 +937,15 @@ class TelegramConnection {
       }
     }
 
+    const senderId = String(msg.from?.id ?? "");
+    const isOwner = !isGroup && Boolean(senderId && this.opts.ownerUserIds?.includes(senderId));
+    if (!isGroup && !isOwner && this.opts.allowNonOwnerDm === false) {
+      await ctx.reply("这个助理当前未开启非 owner 私聊。", {
+        reply_to_message_id: msg.message_id,
+      }).catch(() => {});
+      return;
+    }
+
     // Mention gating for groups
     if (isGroup && this.opts.requireMention !== false) {
       if (!isMentioned(ctx, this.botUsername)) {
@@ -1256,6 +1266,15 @@ class TelegramConnection {
     const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
     const senderId = String(ctx.message?.from?.id ?? "");
     const isOwner = !isGroup && Boolean(senderId && this.opts.ownerUserIds?.includes(senderId));
+    if (!isGroup && !isOwner && this.opts.allowNonOwnerDm === false) {
+      await ctx.reply("这个助理当前未开启非 owner 私聊。", {
+        reply_to_message_id: ctx.message?.message_id,
+      }).catch(() => {});
+      return;
+    }
+    const contactKey = isGroup
+      ? `telegram_group_${chatId}`
+      : (isOwner ? undefined : `telegram_${senderId}`);
     const sensitiveTurnState: SharedMcpSensitiveTurnState = { active: false };
     const persistedMessages: StreamMessage[] = [];
 
@@ -1272,7 +1291,12 @@ class TelegramConnection {
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = await buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
+    const memoryContext = await buildSmartMemoryContext(
+      userText,
+      this.opts.assistantId,
+      this.opts.defaultCwd,
+      { contactKey, isOwner },
+    );
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const nowStr = new Date().toLocaleString("zh-CN", { timeZone: tz, hour12: false });
@@ -1283,11 +1307,18 @@ class TelegramConnection {
     // File/image messages must run in an isolated context to avoid mixing
     // previous analyses into the current file response.
     const historySection = (!hasFiles && history.length > 1)
-      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
+      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId, false, contactKey)
       : undefined;
 
     const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection, privateWhitelistSection);
+    const system = buildStructuredPersona(
+      { ...this.opts, isOwner },
+      currentTimeContext,
+      memoryContext,
+      skillSection,
+      historySection,
+      privateWhitelistSection,
+    );
 
     // Set thinking reaction
     await this.setReaction(chatId, ctx.message!.message_id, "🤔");
@@ -1306,6 +1337,7 @@ class TelegramConnection {
         sensitiveTurnState,
         persistedMessages,
         hasFiles,
+        contactKey,
       );
     } catch (err) {
       console.error("[Telegram] AI error:", err);
@@ -1330,7 +1362,13 @@ class TelegramConnection {
     if (shouldPersistTurn) {
       scheduleBotPostResponseTasks({
         logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-        recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "Telegram" },
+        recordOpts: {
+          assistantId: this.opts.assistantId,
+          assistantName: this.opts.assistantName,
+          channel: "Telegram",
+          contactKey,
+          isOwner,
+        },
         updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[Telegram]"),
         onError: (phase, error) => {
           if (phase === "updateTitle") {
@@ -1503,12 +1541,14 @@ class TelegramConnection {
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
     hasFiles?: boolean,
+    contactKey?: string,
   ): Promise<StreamResult> {
     const sessionKey = `${this.opts.assistantId}:${chatId}`;
     const sessionMcp = this.createSessionMcp(ctx);
     const sharedMcp = createSharedMcpServer({
       assistantId: this.opts.assistantId,
       sessionCwd: this.opts.defaultCwd,
+      contactKey,
       isOwner,
       sensitiveTurnState,
     });

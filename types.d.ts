@@ -279,6 +279,7 @@ type AssistantConfig = {
     heartbeatInterval?: number;
     heartbeatRules?: string;
     defaultCwd?: string;
+    allowNonOwnerDm?: boolean;
     bots?: Partial<Record<BotPlatformType, BotPlatformConfig>>;
 }
 

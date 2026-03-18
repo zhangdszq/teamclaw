@@ -27,6 +27,7 @@ export type AssistantConfig = {
   heartbeatInterval?: number;
   heartbeatRules?: string;
   defaultCwd?: string;
+  allowNonOwnerDm?: boolean;
   bots?: Record<string, unknown>;
 };
 
@@ -126,6 +127,7 @@ function buildDefaultAssistants(): AssistantConfig[] {
       operatingGuidelines: DEFAULT_OPERATING_GUIDELINES,
       heartbeatInterval: 30,
       heartbeatRules: DEFAULT_HEARTBEAT_RULES,
+      allowNonOwnerDm: true,
     },
   ];
 }
@@ -174,6 +176,7 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
       heartbeatInterval: typeof item.heartbeatInterval === "number" ? item.heartbeatInterval : 30,
       heartbeatRules: optStr(item.heartbeatRules) ?? DEFAULT_HEARTBEAT_RULES,
       defaultCwd: optStr(item.defaultCwd),
+      allowNonOwnerDm: item.allowNonOwnerDm !== false,
       bots: item.bots && typeof item.bots === "object" ? item.bots : undefined,
     }));
 

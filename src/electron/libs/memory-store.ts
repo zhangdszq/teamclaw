@@ -137,12 +137,32 @@ function getAssistantMemoryRoot(assistantId: string): string {
   return join(ASSISTANTS_DIR, assertSafeAssistantId(assistantId));
 }
 
-function ensureAssistantDirs(assistantId: string): void {
-  const root = getAssistantMemoryRoot(assistantId);
+function sanitizeContactKey(contactKey: string): string {
+  const raw = String(contactKey ?? "").trim();
+  if (!raw) return "contact";
+  return raw.replace(/[\/\\\.]+/g, "_") || "contact";
+}
+
+export function getAssistantContactMemoryRoot(assistantId: string, contactKey: string): string {
+  return join(getAssistantMemoryRoot(assistantId), "contacts", sanitizeContactKey(contactKey));
+}
+
+function getScopedMemoryRoot(assistantId: string, contactKey?: string): string {
+  return contactKey
+    ? getAssistantContactMemoryRoot(assistantId, contactKey)
+    : getAssistantMemoryRoot(assistantId);
+}
+
+function ensureScopedMemoryDirs(assistantId: string, contactKey?: string): void {
+  const root = getScopedMemoryRoot(assistantId, contactKey);
   for (const sub of ["daily", "insights", "lessons", "archive"]) {
     const dir = join(root, sub);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
+}
+
+function ensureAssistantDirs(assistantId: string): void {
+  ensureScopedMemoryDirs(assistantId);
 }
 
 function copyDirRecursive(src: string, dest: string): void {
@@ -833,14 +853,16 @@ export type WorkingMemoryCheckpoint = {
  */
 export class ScopedMemory {
   public readonly assistantId: string;
+  public readonly contactKey?: string;
   private readonly root: string;
 
   get rootDir(): string { return this.root; }
 
-  constructor(assistantId: string) {
+  constructor(assistantId: string, contactKey?: string) {
     this.assistantId = assistantId;
-    this.root = getAssistantMemoryRoot(assistantId);
-    ensureAssistantDirs(assistantId);
+    this.contactKey = contactKey?.trim() || undefined;
+    this.root = getScopedMemoryRoot(assistantId, this.contactKey);
+    ensureScopedMemoryDirs(assistantId, this.contactKey);
   }
 
   private _dailyDir(): string { return join(this.root, "daily"); }
@@ -938,7 +960,9 @@ export class ScopedMemory {
   writeLongTermMemory(content: string): void {
     atomicWrite(this._longTermPath(), content);
     _memoryContextCache.clear();
-    try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
+    if (!this.contactKey) {
+      try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
+    }
   }
 
   appendLongTermMemory(entry: string): void {
@@ -947,7 +971,9 @@ export class ScopedMemory {
     const newContent = existing.trim() ? existing.trimEnd() + "\n" + entry : entry;
     atomicWrite(p, newContent);
     _memoryContextCache.clear();
-    try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
+    if (!this.contactKey) {
+      try { refreshRootAbstract(this.assistantId); } catch { /* non-blocking */ }
+    }
   }
 
   getMemorySummary(): { longTermSize: number; privateLongTermSize: number; dailyCount: number; totalSize: number } {
@@ -999,8 +1025,8 @@ export class ScopedMemory {
   }
 }
 
-function tasksPath(assistantId: string): string {
-  return join(getAssistantMemoryRoot(assistantId), "tasks.json");
+function tasksPath(assistantId: string, contactKey?: string): string {
+  return join(getScopedMemoryRoot(assistantId, contactKey), "tasks.json");
 }
 
 function normalizeTaskStatus(status?: string): AssistantTaskStatus {
@@ -1008,9 +1034,9 @@ function normalizeTaskStatus(status?: string): AssistantTaskStatus {
   return "pending";
 }
 
-function loadAssistantTasksRaw(assistantId: string): AssistantTask[] {
-  ensureAssistantDirs(assistantId);
-  const p = tasksPath(assistantId);
+function loadAssistantTasksRaw(assistantId: string, opts?: { contactKey?: string }): AssistantTask[] {
+  ensureScopedMemoryDirs(assistantId, opts?.contactKey);
+  const p = tasksPath(assistantId, opts?.contactKey);
   if (!existsSync(p)) return [];
   try {
     const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
@@ -1031,16 +1057,16 @@ function loadAssistantTasksRaw(assistantId: string): AssistantTask[] {
   }
 }
 
-function saveAssistantTasksRaw(assistantId: string, tasks: AssistantTask[]): void {
-  atomicWrite(tasksPath(assistantId), JSON.stringify(tasks, null, 2));
+function saveAssistantTasksRaw(assistantId: string, tasks: AssistantTask[], opts?: { contactKey?: string }): void {
+  atomicWrite(tasksPath(assistantId, opts?.contactKey), JSON.stringify(tasks, null, 2));
   _memoryContextCache.clear();
 }
 
 export function listAssistantTasks(
   assistantId: string,
-  opts?: { includeCompleted?: boolean },
+  opts?: { includeCompleted?: boolean; contactKey?: string },
 ): AssistantTask[] {
-  const tasks = loadAssistantTasksRaw(assistantId);
+  const tasks = loadAssistantTasksRaw(assistantId, opts);
   const filtered = opts?.includeCompleted
     ? tasks
     : tasks.filter((task) => task.status !== "completed");
@@ -1055,12 +1081,13 @@ export function listAssistantTasks(
 export function upsertAssistantTask(
   assistantId: string,
   input: { id?: string; title: string; status?: AssistantTaskStatus; dueDate?: string },
+  opts?: { contactKey?: string },
 ): AssistantTask {
   const title = String(input.title ?? "").trim();
   if (!title) throw new Error("title 不能为空");
 
   const now = new Date().toISOString();
-  const tasks = loadAssistantTasksRaw(assistantId);
+  const tasks = loadAssistantTasksRaw(assistantId, opts);
   const existing = input.id ? tasks.find((task) => task.id === input.id) : undefined;
 
   if (existing) {
@@ -1068,7 +1095,7 @@ export function upsertAssistantTask(
     existing.status = normalizeTaskStatus(input.status);
     existing.dueDate = input.dueDate?.trim() || undefined;
     existing.updatedAt = now;
-    saveAssistantTasksRaw(assistantId, tasks);
+    saveAssistantTasksRaw(assistantId, tasks, opts);
     return existing;
   }
 
@@ -1081,17 +1108,21 @@ export function upsertAssistantTask(
     updatedAt: now,
   };
   tasks.push(created);
-  saveAssistantTasksRaw(assistantId, tasks);
+  saveAssistantTasksRaw(assistantId, tasks, opts);
   return created;
 }
 
-export function completeAssistantTask(assistantId: string, taskId: string): AssistantTask | null {
-  const tasks = loadAssistantTasksRaw(assistantId);
+export function completeAssistantTask(
+  assistantId: string,
+  taskId: string,
+  opts?: { contactKey?: string },
+): AssistantTask | null {
+  const tasks = loadAssistantTasksRaw(assistantId, opts);
   const target = tasks.find((task) => task.id === taskId);
   if (!target) return null;
   target.status = "completed";
   target.updatedAt = new Date().toISOString();
-  saveAssistantTasksRaw(assistantId, tasks);
+  saveAssistantTasksRaw(assistantId, tasks, opts);
   return target;
 }
 
@@ -1103,14 +1134,24 @@ export function completeAssistantTask(assistantId: string, taskId: string): Assi
  */
 export function recordConversation(
   content: string,
-  opts: { assistantId?: string; assistantName?: string; channel?: string },
+  opts: {
+    assistantId?: string;
+    assistantName?: string;
+    channel?: string;
+    contactKey?: string;
+    isOwner?: boolean;
+  },
 ): void {
-  const { assistantId, assistantName, channel } = opts;
+  const { assistantId, assistantName, channel, contactKey, isOwner } = opts;
 
   // 1. Full content → assistant's private daily
   if (assistantId) {
-    const scoped = new ScopedMemory(assistantId);
+    const scoped = new ScopedMemory(assistantId, contactKey);
     scoped.appendDaily(content);
+  }
+
+  if (contactKey && isOwner === false) {
+    return;
   }
 
   // 2. One-line summary → shared daily (tagged with source)
@@ -1197,7 +1238,64 @@ export function runMemoryJanitor(): { archived: number; cleaned: string[] } {
 
 // ─── Context assembly ─────────────────────────────────────────
 
-const MEMORY_PROTOCOL = `
+type MemoryProtocolOptions = {
+  contactKey?: string;
+  isOwner?: boolean;
+};
+
+function getMemoryProtocol(opts?: MemoryProtocolOptions): string {
+  const isContactScoped = Boolean(opts?.contactKey && opts?.isOwner === false);
+  if (isContactScoped) {
+    return `
+[记忆系统规则]
+你拥有跨会话的持久记忆能力。<memory> 标签内包含当前联系人/群聊可见的索引和核心记忆。
+
+━━ 记忆架构 ━━
+
+你当前只能读写本联系人/群聊的专属记忆：
+  - ~/.vk-cowork/memory/assistants/{你的ID}/contacts/{contactKey}/MEMORY.md
+  - ~/.vk-cowork/memory/assistants/{你的ID}/contacts/{contactKey}/SESSION-STATE.md
+  - ~/.vk-cowork/memory/assistants/{你的ID}/contacts/{contactKey}/daily/*.md
+
+不要假设你能看到 owner 的共享记忆、共享日志或其他联系人/其他助理的记忆。
+
+━━ 写入规则（重要）━━
+默认使用 save_memory 工具写入当前联系人/群聊的专属记忆（scope: "private"）：
+  [P0]                    当前联系人/群聊的长期偏好、业务上下文（永久）
+  [P1|expire:YYYY-MM-DD]  项目决策、技术方案、环境配置（90天后过期）
+  [P2|expire:YYYY-MM-DD]  临时信息（30天后过期）
+
+判断标准：只对当前联系人/群聊有用 → 写这里。
+
+━━ 按需加载规则 ━━
+<memory> 中只包含索引和核心记忆。如需更多信息，根据索引摘要判断相关性，主动加载：
+- 当前联系人/群聊日志 → assistants/{ID}/contacts/{contactKey}/daily/{日期}.md
+- 知识文档 → ~/.vk-cowork/knowledge/docs/{id}.md
+执行任务前先检查索引中的知识列表。不要猜测，先读取再行动。
+
+━━ 知识库 & 经验沉淀 ━━
+<memory> 中的"相关知识（语义检索）"是系统自动检索到的经验文档。
+路径: ~/.vk-cowork/knowledge/（experience/ 候选，docs/ 已验证文档）
+完成复杂任务后用 save_experience 沉淀操作经验（前置条件、关键步骤、踩坑点、验证方法）。
+写入后可在知识库页面查看和审核。只记录经过验证的流程。
+
+━━ Working Memory 规则 ━━
+执行长任务时，用 save_working_memory 保存关键上下文到当前联系人/群聊的专属目录。
+
+━━ 执行纪律 ━━
+- 连续 5 次以上工具调用处理同一错误 → 切换策略或用 AskUserQuestion 求助
+- 禁止对同一个失败操作无脑重试超过 3 次
+- 复杂任务每完成一个关键阶段就保存进度
+
+━━ 会话结束前的责任 ━━
+完成最后一个任务后，调用 distill_memory 触发记忆蒸馏，或手动：
+1. 用 save_memory 写入当前联系人/群聊的新发现（默认写专属）
+2. 如有未完成任务，用 save_working_memory 更新工作记忆
+3. 如果解决了复杂任务，用 save_experience 沉淀操作经验
+`.trim();
+  }
+
+  return `
 [记忆系统规则]
 你拥有跨会话的持久记忆能力。<memory> 标签内包含目录索引和核心记忆。
 你有两层长期记忆：团队共享记忆（所有助理可见）和你的专属记忆（只有你能看到）。
@@ -1254,12 +1352,54 @@ const MEMORY_PROTOCOL = `
 2. 如有未完成任务，用 save_working_memory 更新工作记忆
 3. 如果解决了复杂任务，用 save_experience 沉淀操作经验
 `.trim();
+}
 
 function limitContextText(content: string, maxChars: number): string {
   const trimmed = content.trim();
   if (!trimmed || trimmed.length <= maxChars) return trimmed;
   const clipped = trimmed.slice(0, Math.max(0, maxChars - 10)).trimEnd();
   return `${clipped}\n[...已截断]`;
+}
+
+function filterAbstractForContactScope(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return "";
+
+  const lines = trimmed.split("\n");
+  const result: string[] = ["# memory index (~/.vk-cowork/memory)", "", "## 共享知识 (所有助理可见)"];
+  let inSharedKnowledge = false;
+  let keepSubsection = false;
+
+  for (const line of lines) {
+    if (line.startsWith("## ")) {
+      if (line.startsWith("## 共享知识")) {
+        inSharedKnowledge = true;
+        keepSubsection = false;
+        continue;
+      }
+      if (inSharedKnowledge) break;
+      continue;
+    }
+
+    if (!inSharedKnowledge) continue;
+
+    if (line.startsWith("### ")) {
+      keepSubsection = line.startsWith("### SOPs") || line.startsWith("### 知识文档");
+      if (keepSubsection) {
+        result.push("", line);
+      }
+      continue;
+    }
+
+    if (keepSubsection) {
+      result.push(line);
+    }
+  }
+
+  const filtered = result.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return filtered === "# memory index (~/.vk-cowork/memory)\n\n## 共享知识 (所有助理可见)"
+    ? ""
+    : filtered;
 }
 
 function createMemoryContextSection(
@@ -1281,6 +1421,7 @@ function renderMemoryContextResult(
   preamble: string[],
   sections: MemoryContextSection[],
   extraSections: string[],
+  memoryProtocol: string,
 ): string {
   const parts: string[] = [...preamble, "<memory>"];
   for (const section of sections) {
@@ -1294,7 +1435,7 @@ function renderMemoryContextResult(
   if (parts.length <= preamble.length + 1) {
     parts.push("（暂无历史记忆）");
   }
-  parts.push("</memory>", "", MEMORY_PROTOCOL);
+  parts.push("</memory>", "", memoryProtocol);
   return parts.join("\n");
 }
 
@@ -1302,6 +1443,7 @@ function fitMemoryContext(
   preamble: string[],
   sections: MemoryContextSection[],
   extraSections: string[],
+  memoryProtocol: string,
 ): string {
   const shrinkOrder: MemoryContextSectionKey[] = [
     "assistantDaily",
@@ -1311,7 +1453,7 @@ function fitMemoryContext(
     "longTerm",
   ];
 
-  let rendered = renderMemoryContextResult(preamble, sections, extraSections);
+  let rendered = renderMemoryContextResult(preamble, sections, extraSections, memoryProtocol);
   for (const key of shrinkOrder) {
     if (rendered.length <= MEMORY_CONTEXT_MAX_CHARS) break;
     const section = sections.find((item) => item.key === key);
@@ -1319,7 +1461,7 @@ function fitMemoryContext(
     while (rendered.length > MEMORY_CONTEXT_MAX_CHARS && section.limit > section.minLimit) {
       const overflow = rendered.length - MEMORY_CONTEXT_MAX_CHARS;
       section.limit = Math.max(section.minLimit, section.limit - overflow);
-      rendered = renderMemoryContextResult(preamble, sections, extraSections);
+      rendered = renderMemoryContextResult(preamble, sections, extraSections, memoryProtocol);
     }
   }
 
@@ -1617,12 +1759,17 @@ export async function buildSmartMemoryContext(
   prompt: string,
   assistantId?: string,
   sessionCwd?: string,
-  opts?: { skipDailyLog?: boolean },
+  opts?: { skipDailyLog?: boolean; contactKey?: string; isOwner?: boolean },
 ): Promise<string> {
   ensureDirs();
 
+  const contactKey = opts?.contactKey?.trim() || undefined;
+  const isContactScoped = Boolean(assistantId && contactKey && opts?.isOwner === false);
+
   const cacheKey = [
     assistantId ?? "",
+    isContactScoped ? contactKey : "",
+    opts?.isOwner === false ? "non-owner" : "owner",
     sessionCwd ?? "",
     opts?.skipDailyLog ? "skip-daily" : "with-daily",
     prompt.slice(0, 120),
@@ -1632,7 +1779,9 @@ export async function buildSmartMemoryContext(
     return cached.result;
   }
 
-  const scoped = assistantId ? new ScopedMemory(assistantId) : null;
+  const scoped = assistantId
+    ? new ScopedMemory(assistantId, isContactScoped ? contactKey : undefined)
+    : null;
 
   // Runtime guard: warn if multiple assistants configured but no ID provided
   if (!assistantId) {
@@ -1655,9 +1804,9 @@ export async function buildSmartMemoryContext(
   // Parallel async reads — avoids sequential blocking I/O
   const [abstract, longTerm, privateLongTerm, sharedToday, sessionState, assistantToday, settings] = await Promise.all([
     readFileOrEmpty(join(MEMORY_ROOT, ".abstract")),
-    readFileOrEmpty(LONG_TERM_FILE),
+    isContactScoped ? Promise.resolve("") : readFileOrEmpty(LONG_TERM_FILE),
     scoped ? scoped.readLongTermMemoryAsync() : Promise.resolve(""),
-    readFileOrEmpty(dailyPath(todayDate)),
+    isContactScoped ? Promise.resolve("") : readFileOrEmpty(dailyPath(todayDate)),
     scoped ? scoped.readSessionStateAsync() : readFileOrEmpty(SESSION_STATE_FILE),
     scoped ? scoped.readDailyAsync(todayDate) : Promise.resolve(""),
     loadUserSettingsAsync(),
@@ -1665,14 +1814,14 @@ export async function buildSmartMemoryContext(
 
   const preamble: string[] = [];
   const profileLines: string[] = [];
-  if (settings.userName?.trim()) profileLines.push(`- 姓名: ${settings.userName.trim()}`);
-  if (settings.workDescription?.trim()) {
+  if (!isContactScoped && settings.userName?.trim()) profileLines.push(`- 姓名: ${settings.userName.trim()}`);
+  if (!isContactScoped && settings.workDescription?.trim()) {
     profileLines.push(`- 工作描述: ${limitContextText(settings.workDescription.trim(), 600)}`);
   }
   if (profileLines.length) {
     preamble.push("[用户档案]", ...profileLines, "");
   }
-  if (settings.globalPrompt?.trim()) {
+  if (!isContactScoped && settings.globalPrompt?.trim()) {
     preamble.push("[全局指令]", limitContextText(settings.globalPrompt.trim(), 4_000), "");
   }
 
@@ -1681,7 +1830,7 @@ export async function buildSmartMemoryContext(
   }
 
   const sections: MemoryContextSection[] = [];
-  const abstractTrimmed = abstract.trim();
+  const abstractTrimmed = (isContactScoped ? filterAbstractForContactScope(abstract) : abstract).trim();
   if (abstractTrimmed) {
     sections.push(createMemoryContextSection("abstract", "## 记忆目录索引", abstractTrimmed));
   }
@@ -1696,10 +1845,14 @@ export async function buildSmartMemoryContext(
       ),
     );
   }
-  if (memoryIsolation) {
+  if (memoryIsolation || isContactScoped) {
     const privateLongTermTrimmed = privateLongTerm.trim();
     if (privateLongTermTrimmed) {
-      sections.push(createMemoryContextSection("privateLongTerm", "## 你的专属记忆 (private MEMORY.md)", privateLongTermTrimmed));
+      sections.push(createMemoryContextSection(
+        "privateLongTerm",
+        isContactScoped ? "## 当前联系人/群聊记忆 (MEMORY.md)" : "## 你的专属记忆 (private MEMORY.md)",
+        privateLongTermTrimmed,
+      ));
     }
   }
   const sessionStateTrimmed = sessionState.trim();
@@ -1709,13 +1862,19 @@ export async function buildSmartMemoryContext(
   // Skip daily logs for file-analysis messages — the logs contain previous file analyses
   // that pollute Claude's output with content from a different file.
   if (!opts?.skipDailyLog) {
-    const sharedTodayTrimmed = sharedToday.trim();
-    if (sharedTodayTrimmed) {
-      sections.push(createMemoryContextSection("sharedDaily", `## 今日共享日志 (${todayDate})`, sharedTodayTrimmed));
+    if (!isContactScoped) {
+      const sharedTodayTrimmed = sharedToday.trim();
+      if (sharedTodayTrimmed) {
+        sections.push(createMemoryContextSection("sharedDaily", `## 今日共享日志 (${todayDate})`, sharedTodayTrimmed));
+      }
     }
     const assistantTodayTrimmed = assistantToday.trim();
     if (assistantTodayTrimmed) {
-      sections.push(createMemoryContextSection("assistantDaily", `## 今日对话日志 (${todayDate})`, assistantTodayTrimmed));
+      sections.push(createMemoryContextSection(
+        "assistantDaily",
+        isContactScoped ? `## 当前联系人/群聊日志 (${todayDate})` : `## 今日对话日志 (${todayDate})`,
+        assistantTodayTrimmed,
+      ));
     }
   }
 
@@ -1733,7 +1892,11 @@ export async function buildSmartMemoryContext(
     }
   } catch { /* qmd unavailable, skip silently */ }
 
-  const result = fitMemoryContext(preamble, sections, extraSections);
+  const memoryProtocol = getMemoryProtocol({
+    contactKey: isContactScoped ? contactKey : undefined,
+    isOwner: opts?.isOwner,
+  });
+  const result = fitMemoryContext(preamble, sections, extraSections, memoryProtocol);
   _memoryContextCache.set(cacheKey, { result, ts: Date.now() });
   return result;
 }
@@ -1748,9 +1911,9 @@ export async function buildMemoryContext(assistantId?: string, sessionCwd?: stri
  * (each block starts with `## HH:MM:SS`). Returns a formatted string ready to
  * be injected as a system-prompt section, or an empty string when unavailable.
  */
-export function getRecentConversationBlocks(assistantId: string, n = 4): string {
+export function getRecentConversationBlocks(assistantId: string, n = 4, contactKey?: string): string {
   try {
-    const scoped = new ScopedMemory(assistantId);
+    const scoped = new ScopedMemory(assistantId, contactKey);
     const raw = scoped.readDaily(localDateStr()).trim();
     if (!raw) return "";
 

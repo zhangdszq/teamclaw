@@ -89,6 +89,7 @@ export interface DingtalkBotOptions {
   provider?: "claude" | "openai";
   model?: string;
   defaultCwd?: string;
+  allowNonOwnerDm?: boolean;
   // Reply mode
   messageType?: "markdown" | "card";
   cardTemplateId?: string;
@@ -547,8 +548,8 @@ async function downloadMediaToTempFile(
 // ─── Conversation history context (delegated to bot-base, with DingTalk file-path strip) ───
 
 /** DingTalk: enable stripUserFilePaths to clean temp paths from user message history. */
-function buildHistoryContextDt(history: ConvMessage[], assistantId?: string): string {
-  return buildHistoryContext(history, assistantId, true);
+function buildHistoryContextDt(history: ConvMessage[], assistantId?: string, contactKey?: string): string {
+  return buildHistoryContext(history, assistantId, true, contactKey);
 }
 
 // ─── Message deduplication ────────────────────────────────────────────────────
@@ -1781,6 +1782,16 @@ class DingtalkConnection {
       }
     }
 
+    const senderStaffId = msg.senderStaffId ?? msg.senderId ?? "";
+    const isOwner = !isGroup
+      && Boolean(senderStaffId && this.opts.ownerStaffIds?.includes(senderStaffId));
+    if (!isGroup && !isOwner && this.opts.allowNonOwnerDm === false) {
+      await this.sendMarkdownRaw(msg.sessionWebhook, "这个助理当前未开启非 owner 私聊。")
+        .catch((e) => console.warn("[DingTalk] Failed to send policy reply:", e));
+      if (dedupKey) this.inflight.delete(dedupKey);
+      return;
+    }
+
     // ── sessionWebhook expiry check ────────────────────────────────────────────
     if (
       msg.sessionWebhookExpiredTime &&
@@ -1890,8 +1901,6 @@ class DingtalkConnection {
     });
 
     try {
-      const isOwner = !isGroup
-        && Boolean((msg.senderStaffId ?? msg.senderId) && this.opts.ownerStaffIds?.includes(msg.senderStaffId ?? msg.senderId ?? ""));
       await this.generateAndDeliver(msg, extracted.text, hasFiles, preCreatedCard, sessionKey, isOwner);
     } catch (err) {
       console.error("[DingTalk] Reply generation error:", err);
@@ -1932,6 +1941,11 @@ class DingtalkConnection {
     const history = getHistory(sessionKey);
     const provider = this.opts.provider ?? "claude";
     const useCard = this.opts.messageType === "card" && !!this.opts.cardTemplateId && !!preCreatedCard;
+    const senderStaffId = msg.senderStaffId ?? msg.senderId ?? "";
+    const effectiveIsOwner = msg.conversationType === "2" ? false : isOwner;
+    const contactKey = msg.conversationType === "2"
+      ? `dingtalk_group_${msg.conversationId ?? sessionKey}`
+      : (effectiveIsOwner ? undefined : `dingtalk_${senderStaffId}`);
     const sensitiveTurnState: SharedMcpSensitiveTurnState = { active: false };
     const persistedMessages: StreamMessage[] = [];
 
@@ -1952,6 +1966,7 @@ class DingtalkConnection {
       effectiveUserText,
       this.opts.assistantId,
       this.opts.defaultCwd,
+      { contactKey, isOwner: effectiveIsOwner },
     );
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1961,13 +1976,13 @@ class DingtalkConnection {
 
     // File messages must not resume previous session context
     const historySection = (!hasFiles && history.length > 1)
-      ? buildHistoryContextDt(history.slice(0, -1), this.opts.assistantId)
+      ? buildHistoryContextDt(history.slice(0, -1), this.opts.assistantId, contactKey)
       : undefined;
 
     const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
-    const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
+    const privateWhitelistSection = effectiveIsOwner ? PRIVATE_WHITELIST_RULE : undefined;
     const system = buildStructuredPersona(
-      this.opts as BaseBotOptions,
+      { ...(this.opts as BaseBotOptions), isOwner: effectiveIsOwner },
       currentTimeContext,
       memoryContext,
       skillSection,
@@ -1992,10 +2007,11 @@ class DingtalkConnection {
           provider,
           sessionKey,
           sessionId,
-          isOwner,
+          effectiveIsOwner,
           sensitiveTurnState,
           persistedMessages,
           hasFiles,
+          contactKey,
         );
       } else if (useCard && preCreatedCard) {
         const result = await this.runClaudeCard(
@@ -2007,10 +2023,11 @@ class DingtalkConnection {
           provider,
           sessionKey,
           sessionId,
-          isOwner,
+          effectiveIsOwner,
           sensitiveTurnState,
           persistedMessages,
           hasFiles,
+          contactKey,
         );
         if (result === "__CARD_DELIVERED__") {
           cardDelivered = true;
@@ -2026,10 +2043,11 @@ class DingtalkConnection {
           provider,
           sessionKey,
           sessionId,
-          isOwner,
+          effectiveIsOwner,
           sensitiveTurnState,
           persistedMessages,
           hasFiles,
+          contactKey,
         );
       }
 
@@ -2056,7 +2074,13 @@ class DingtalkConnection {
       if (shouldPersistTurn) {
         scheduleBotPostResponseTasks({
           logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${logUserText}\n**${this.opts.assistantName}**: ${finalReplyText}\n`,
-          recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },
+          recordOpts: {
+            assistantId: this.opts.assistantId,
+            assistantName: this.opts.assistantName,
+            channel: "钉钉",
+            contactKey,
+            isOwner: effectiveIsOwner,
+          },
           updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, `[钉钉]`),
           onError: (phase, error) => {
             if (phase === "updateTitle") {
@@ -2084,11 +2108,13 @@ class DingtalkConnection {
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
     hasFiles?: boolean,
+    contactKey?: string,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
     const sharedMcp = createSharedMcpServer({
       assistantId: this.opts.assistantId,
       sessionCwd: this.opts.defaultCwd,
+      contactKey,
       isOwner,
       sensitiveTurnState,
     });
@@ -2183,11 +2209,13 @@ class DingtalkConnection {
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
     hasFiles?: boolean,
+    contactKey?: string,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
     const sharedMcp = createSharedMcpServer({
       assistantId: this.opts.assistantId,
       sessionCwd: this.opts.defaultCwd,
+      contactKey,
       isOwner,
       sensitiveTurnState,
     });

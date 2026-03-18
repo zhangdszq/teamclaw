@@ -35,6 +35,8 @@ export interface BaseBotOptions {
   userContext?: string;
   /** Skill names to advertise in the system prompt (e.g. for Telegram /commands). */
   skillNames?: string[];
+  /** Per-message identity context; only set while building a prompt. */
+  isOwner?: boolean;
 }
 
 export interface OpenAIOverrides {
@@ -101,16 +103,25 @@ export function buildStructuredPersona(
   ...extras: (string | undefined | null)[]
 ): string {
   const sections: string[] = [];
+  const isOwner = opts.isOwner !== false;
   const nameLine = `你的名字是「${opts.assistantName}」。`;
   const p = opts.persona?.trim();
   if (p) sections.push(`## 你的身份\n${nameLine}\n${p}`);
   else sections.push(`## 你的身份\n${nameLine}\n你是一个智能助手，请简洁有用地回答问题。`);
 
   if (opts.coreValues?.trim()) sections.push(`## 核心价值观\n${opts.coreValues.trim()}`);
-  if (opts.relationship?.trim()) sections.push(`## 与用户的关系\n${opts.relationship.trim()}`);
+  if (!isOwner) {
+    sections.push(
+      "## 对话身份提示\n当前对话对象不是软件 owner。不要暴露或假设 owner 的个人信息、历史偏好、共享长期记忆或其他联系人/群聊的上下文，只能基于当前会话和当前联系人/群聊的专属记忆回答。",
+    );
+  }
+  const relationshipText = isOwner
+    ? opts.relationship?.trim()
+    : "你正在与外部联系人或群成员对话。保持礼貌、专业和有边界感，只根据当前对话中可见的信息协助对方。";
+  if (relationshipText) sections.push(`## 与用户的关系\n${relationshipText}`);
   if (opts.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${opts.cognitiveStyle.trim()}`);
   if (opts.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${opts.operatingGuidelines.trim()}`);
-  if (opts.userContext?.trim()) sections.push(`## 关于用户\n${opts.userContext.trim()}`);
+  if (isOwner && opts.userContext?.trim()) sections.push(`## 关于用户\n${opts.userContext.trim()}`);
 
   const normalized = (opts.skillNames ?? []).map((s) => s.trim()).filter(Boolean);
   if (normalized.length > 0) {
@@ -309,10 +320,11 @@ export function buildHistoryContext(
   history: ConvMessage[],
   assistantId?: string,
   stripUserFilePaths = false,
+  contactKey?: string,
 ): string {
   // Primary: parse today's daily log for full Q&A pairs (persists across restarts).
   if (assistantId) {
-    const fromLog = getRecentConversationBlocks(assistantId, 4);
+    const fromLog = getRecentConversationBlocks(assistantId, 4, contactKey);
     if (fromLog) return fromLog;
   }
 
@@ -340,7 +352,13 @@ export function buildHistoryContext(
 
 export type BotPostResponseTasks = {
   logEntry: string;
-  recordOpts: { assistantId?: string; assistantName?: string; channel?: string };
+  recordOpts: {
+    assistantId?: string;
+    assistantName?: string;
+    channel?: string;
+    contactKey?: string;
+    isOwner?: boolean;
+  };
   updateTitle?: () => Promise<void> | void;
   onError?: (phase: "recordConversation" | "updateTitle", error: unknown) => void;
 };

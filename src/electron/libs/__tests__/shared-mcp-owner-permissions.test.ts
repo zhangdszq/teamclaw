@@ -10,6 +10,18 @@ const mockState = vi.hoisted(() => ({
   delegateToCursor: vi.fn(async (task: string, cwd: string) => `delegated:${task}:${cwd}`),
 }));
 
+const knowledgeState = vi.hoisted(() => ({
+  candidates: [] as Array<{
+    title: string;
+    scenario: string;
+    steps: string;
+    result: string;
+    risk: string;
+    reviewStatus?: string;
+  }>,
+  docs: [] as Array<{ title: string; content: string }>,
+}));
+
 vi.mock("electron", () => ({
   app: {
     getPath: () => "/mock/user-data",
@@ -51,6 +63,9 @@ vi.mock("../memory-store.js", () => ({
     readWorkingMemory() { return ""; }
     readLongTermMemory() { return ""; }
   },
+  getAssistantContactMemoryRoot: vi.fn((assistantId: string, contactKey: string) =>
+    join(tempHome, ".vk-cowork", "memory", "assistants", assistantId, "contacts", contactKey),
+  ),
   validateMemoryEntry: vi.fn((content: string) => ({ ok: true, normalized: content })),
 }));
 
@@ -90,6 +105,8 @@ vi.mock("../notification-log.js", () => ({
 
 vi.mock("../knowledge-store.js", () => ({
   createKnowledgeCandidate: vi.fn(() => ({ id: "knowledge-1", title: "经验" })),
+  listKnowledgeCandidates: vi.fn(() => knowledgeState.candidates),
+  listKnowledgeDocs: vi.fn(() => knowledgeState.docs),
 }));
 
 vi.mock("../assistants-config.js", () => ({
@@ -152,6 +169,8 @@ describe("shared MCP bot whitelist access", () => {
     rmSync(tempHome, { recursive: true, force: true });
     mkdirSync(tempHome, { recursive: true });
     mockState.delegateToCursor.mockClear();
+    knowledgeState.candidates = [];
+    knowledgeState.docs = [];
     vi.mocked(addScheduledTask).mockClear();
     vi.mocked(addScheduledTask).mockResolvedValue({
       id: "task-1",
@@ -237,6 +256,79 @@ describe("shared MCP bot whitelist access", () => {
     expect(sensitiveTurnState.active).toBe(true);
     expect(sensitiveTurnState.matchedPath).toBe(sensitivePath);
     expect(toolText(saveMemoryResult)).toContain("已禁用 save_memory");
+  });
+
+  it("blocks shared memory writes for non-owner contact sessions", async () => {
+    const server = createSharedMcpServer({
+      assistantId: "assistant-1",
+      sessionCwd: tempHome,
+      isOwner: false,
+      contactKey: "telegram_123",
+    }) as any;
+
+    const result = await getTool(server, "save_memory").handler({
+      content: "- [P0] 共享一下",
+      scope: "shared",
+    });
+
+    expect(toolText(result)).toContain("无权写入共享记忆");
+  });
+
+  it("allows non-owner reads inside its own contact memory but blocks other memory paths", async () => {
+    const contactRoot = join(tempHome, ".vk-cowork", "memory", "assistants", "assistant-1", "contacts", "telegram_123");
+    const ownerMemoryPath = join(tempHome, ".vk-cowork", "memory", "assistants", "assistant-1", "MEMORY.md");
+    mkdirSync(contactRoot, { recursive: true });
+    writeFileSync(join(contactRoot, "MEMORY.md"), "当前联系人专属记忆", "utf8");
+    writeFileSync(ownerMemoryPath, "owner 私有记忆", "utf8");
+
+    const server = createSharedMcpServer({
+      assistantId: "assistant-1",
+      sessionCwd: tempHome,
+      isOwner: false,
+      contactKey: "telegram_123",
+    }) as any;
+
+    const allowed = await getTool(server, "read_document").handler({
+      file_path: join(contactRoot, "MEMORY.md"),
+    });
+    const blocked = await getTool(server, "read_document").handler({
+      file_path: ownerMemoryPath,
+    });
+
+    expect(toolText(allowed)).toContain("当前联系人专属记忆");
+    expect(toolText(blocked)).toContain("无权读取此路径");
+  });
+
+  it("limits non-owner team memory queries to knowledge documents", async () => {
+    knowledgeState.candidates = [
+      {
+        title: "部署经验",
+        scenario: "部署前检查环境变量",
+        steps: "执行发布脚本",
+        result: "发布成功",
+        risk: "注意权限",
+        reviewStatus: "verified",
+      },
+    ];
+    knowledgeState.docs = [
+      {
+        title: "发布手册",
+        content: "部署步骤\n检查环境变量\n执行回滚预案",
+      },
+    ];
+
+    const server = createSharedMcpServer({
+      assistantId: "assistant-1",
+      sessionCwd: tempHome,
+      isOwner: false,
+      contactKey: "telegram_123",
+    }) as any;
+
+    const result = await getTool(server, "query_team_memory").handler({ query: "部署" });
+
+    expect(toolText(result)).toContain("知识库搜索结果");
+    expect(toolText(result)).toContain("部署经验");
+    expect(toolText(result)).toContain("发布手册");
   });
 
   it("defaults scheduled tasks to the current assistant in bot sessions", async () => {

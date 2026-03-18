@@ -57,6 +57,7 @@ export interface QQBotOptions extends BaseBotOptions {
   provider?: "claude" | "openai";
   model?: string;
   defaultCwd?: string;
+  allowNonOwnerDm?: boolean;
   dmPolicy?: "open" | "allowlist";
   groupPolicy?: "open" | "allowlist";
   allowFrom?: string[];
@@ -772,6 +773,13 @@ class QQBotConnection {
         }
       }
 
+      const isOwner = Boolean(userOpenId && this.opts.ownerOpenIds?.includes(userOpenId));
+      if (!isOwner && this.opts.allowNonOwnerDm === false) {
+        const token = await getAccessToken(this.opts.appId, this.opts.clientSecret);
+        await sendC2CMessage(token, userOpenId, "这个助理当前未开启非 owner 私聊。", msgId);
+        return;
+      }
+
       // /myid command
       if (content === "/myid" || content === "/我的id" || content === "/我的ID") {
         const token = await getAccessToken(this.opts.appId, this.opts.clientSecret);
@@ -854,6 +862,9 @@ class QQBotConnection {
     const history = getHistory(historyKey);
     const provider = this.opts.provider ?? "claude";
     const isOwner = !isGroup && Boolean(c2cOpenId && this.opts.ownerOpenIds?.includes(c2cOpenId));
+    const contactKey = isGroup
+      ? `qqbot_group_${groupOpenId ?? chatKey}`
+      : (isOwner ? undefined : `qqbot_${c2cOpenId ?? chatKey}`);
     const sensitiveTurnState: SharedMcpSensitiveTurnState = { active: false };
     const persistedMessages: StreamMessage[] = [];
 
@@ -874,6 +885,7 @@ class QQBotConnection {
       effectiveUserText,
       this.opts.assistantId,
       this.opts.defaultCwd,
+      { contactKey, isOwner },
     );
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -881,12 +893,19 @@ class QQBotConnection {
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）`;
 
     const historySection = history.length > 1
-      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
+      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId, false, contactKey)
       : undefined;
 
     const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
     const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection, privateWhitelistSection);
+    const system = buildStructuredPersona(
+      { ...this.opts, isOwner },
+      currentTimeContext,
+      memoryContext,
+      skillSection,
+      historySection,
+      privateWhitelistSection,
+    );
 
     let replyText: string;
     try {
@@ -903,6 +922,7 @@ class QQBotConnection {
         c2cOpenId,
         groupOpenId,
         msgId,
+        contactKey,
       );
     } catch (err) {
       console.error("[QQBot] AI error:", err);
@@ -927,7 +947,13 @@ class QQBotConnection {
     if (shouldPersistTurn) {
       scheduleBotPostResponseTasks({
         logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${replyText}\n`,
-        recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "QQ" },
+        recordOpts: {
+          assistantId: this.opts.assistantId,
+          assistantName: this.opts.assistantName,
+          channel: "QQ",
+          contactKey,
+          isOwner,
+        },
         updateTitle: () => updateBotSessionTitle(sessionId, historySnapshot, "[QQ]"),
         onError: (phase, error) => {
           if (phase === "updateTitle") {
@@ -953,6 +979,7 @@ class QQBotConnection {
     c2cOpenId?: string,
     groupOpenId?: string,
     msgId?: string,
+    contactKey?: string,
   ): Promise<string> {
     const historyKey = `${this.opts.assistantId}:${chatKey}`;
     const claudeSessionId = getBotClaudeSessionId(historyKey);
@@ -966,6 +993,7 @@ class QQBotConnection {
     const sharedMcp = createSharedMcpServer({
       assistantId: this.opts.assistantId,
       sessionCwd: this.opts.defaultCwd,
+      contactKey,
       isOwner,
       sensitiveTurnState,
     });

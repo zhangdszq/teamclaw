@@ -58,6 +58,12 @@ import {
   releaseFeishuInboundKeys,
   shouldSkipFeishuFinalReply,
 } from "./feishu-bot-utils.js";
+import {
+  bufferFromFeishuDownloadResponse,
+  buildRecentFeishuAttachmentContext,
+  parseFeishuPostContent,
+  type RecentFeishuAttachment,
+} from "./feishu-media.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -87,6 +93,7 @@ export interface FeishuBotOptions {
   provider?: "claude" | "openai";
   model?: string;
   defaultCwd?: string;
+  allowNonOwnerDm?: boolean;
   /** Max reconnect attempts (default: 10) */
   maxConnectionAttempts?: number;
   /** Connection mode: "websocket" (default) or "webhook" */
@@ -123,6 +130,7 @@ const FEISHU_FILE_UPLOAD_LIMIT = 30 * 1024 * 1024;
 const pairingCodes = new Map<string, { openId: string; assistantId: string; ts: number }>();
 /** Approved DM users per assistant */
 const approvedUsers = new Map<string, Set<string>>(); // assistantId → Set<openId>
+const recentInboundAttachments = new Map<string, RecentFeishuAttachment>(); // sessionKey -> latest file/video
 
 function generatePairingCode(): string {
   return Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -223,6 +231,7 @@ export function stopFeishuBot(assistantId: string): void {
   for (const key of keysToClean) {
     histories.delete(key);
     botSessionIds.delete(key);
+    recentInboundAttachments.delete(key);
   }
   emit(assistantId, "disconnected");
 }
@@ -386,17 +395,15 @@ async function downloadMedia(
       path: { message_id: messageId, file_key: fileKey },
       params: { type },
     });
-    if (!resp) return null;
-    // resp is a readable stream or buffer depending on SDK version
-    if (Buffer.isBuffer(resp)) return resp;
-    if (resp && typeof (resp as any).pipe === "function") {
-      return await new Promise<Buffer>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        (resp as any).on("data", (c: Buffer) => chunks.push(c));
-        (resp as any).on("end", () => resolve(Buffer.concat(chunks)));
-        (resp as any).on("error", reject);
-      });
-    }
+    const buffer = await bufferFromFeishuDownloadResponse(resp);
+    if (buffer) return buffer;
+    console.warn("[Feishu] Media download returned unsupported payload:", {
+      messageId,
+      fileKey,
+      type,
+      responseType: typeof resp,
+      responseKeys: resp && typeof resp === "object" ? Object.keys(resp as Record<string, unknown>).slice(0, 8) : [],
+    });
     return null;
   } catch (err) {
     console.error("[Feishu] Media download error:", err);
@@ -817,6 +824,15 @@ class FeishuConnection {
         }
       }
 
+      const isOwner = chatType === "p2p" && Boolean(senderId && this.opts.ownerOpenIds?.includes(senderId));
+      if (chatType === "p2p" && !isOwner && this.opts.allowNonOwnerDm === false) {
+        await this.sendReply(messageId, chatId, "这个助理当前未开启非 owner 私聊。", "policy");
+        return;
+      }
+      const contactKey = chatType === "group"
+        ? `feishu_group_${chatId}`
+        : (isOwner ? undefined : `feishu_${senderId}`);
+
       // ── Group @mention filter ────────────────────────────────────────────────
       const requireMention = this.opts.requireMention ?? (chatType === "group");
       if (chatType === "group" && requireMention) {
@@ -833,7 +849,7 @@ class FeishuConnection {
       const extracted = await this.extractContent(message, msgType, messageId);
       if (!extracted) return;
 
-      const { text, mediaInfo } = extracted;
+      const { text, mediaInfo, attachment } = extracted;
       console.log(`[Feishu] Message (${msgType}): ${text.slice(0, 100)}`);
 
       // ── Quoted/reply context ───────────────────────────────────────────────
@@ -845,9 +861,22 @@ class FeishuConnection {
 
       // ── Session key for per-user isolation in groups ───────────────────────
       const sessionKey = `${this.opts.assistantId}:${chatType === "group" ? chatId : senderId}`;
+      if (attachment?.filePath) {
+        recentInboundAttachments.set(sessionKey, attachment);
+      }
       const releaseSessionLock = await this.acquireSessionLock(sessionKey);
       try {
-        await this.generateAndDeliver(finalText, senderId, chatId, chatType, messageId, sessionKey, mediaInfo, forwardMentions);
+        await this.generateAndDeliver(
+          finalText,
+          chatId,
+          messageId,
+          sessionKey,
+          isOwner,
+          contactKey,
+          mediaInfo,
+          attachment,
+          forwardMentions,
+        );
       } finally {
         releaseSessionLock();
       }
@@ -862,7 +891,11 @@ class FeishuConnection {
     message: Record<string, unknown>,
     msgType: string,
     messageId: string,
-  ): Promise<{ text: string; mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string; text?: string } } | null> {
+  ): Promise<{
+    text: string;
+    mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string; text?: string };
+    attachment?: RecentFeishuAttachment;
+  } | null> {
     try {
       const contentRaw = String(message.content ?? "{}");
       const content = JSON.parse(contentRaw) as Record<string, unknown>;
@@ -873,21 +906,29 @@ class FeishuConnection {
       }
 
       if (msgType === "post") {
-        const parts: string[] = [];
-        const imageKeys: string[] = [];
-        const postContent = content as { content?: Array<Array<{ tag?: string; text?: string; image_key?: string; href?: { url?: { link?: string } }; file_key?: string }>> };
-        for (const line of postContent.content ?? []) {
-          for (const node of line) {
-            if (node.tag === "text" && node.text) {
-              parts.push(node.text.replace(/@[^\s]+\s*/g, "").trim());
-            } else if (node.tag === "a" && node.href?.url?.link) {
-              parts.push(`[链接: ${node.href.url.link}]`);
-            } else if (node.tag === "img" && node.image_key) {
-              imageKeys.push(node.image_key);
-            }
+        const { text: textPart, imageKeys, attachments } = parseFeishuPostContent(content);
+        if (attachments.length > 0) {
+          const firstAttachment = attachments[0];
+          const embeddedAttachment = await this.extractContent(
+            {
+              content: JSON.stringify({
+                file_key: firstAttachment.fileKey,
+                file_name: firstAttachment.fileName,
+                name: firstAttachment.fileName,
+              }),
+            },
+            firstAttachment.kind === "file" ? "file" : "media",
+            messageId,
+          );
+          if (embeddedAttachment) {
+            const prefix = textPart !== "[富文本消息]" ? `${textPart}\n\n` : "";
+            const suffix =
+              attachments.length > 1
+                ? `\n（富文本中还包含 ${attachments.length - 1} 个附件，当前仅处理第 1 个）`
+                : "";
+            return { ...embeddedAttachment, text: `${prefix}${embeddedAttachment.text}${suffix}` };
           }
         }
-        const textPart = parts.join("").trim() || "[富文本消息]";
         // Download first embedded image if present
         if (imageKeys.length > 0) {
           const buf = await downloadMedia(this.feishuClient, messageId, imageKeys[0], "image");
@@ -933,6 +974,7 @@ class FeishuConnection {
             if (tmpPath) {
               return {
                 text: `[文件: ${fileName}]\n文件路径: ${tmpPath}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`,
+                attachment: { kind: "file", fileName, filePath: tmpPath, sourceMessageId: messageId, receivedAt: Date.now() },
               };
             }
             return { text: `[文件: ${fileName}]`, mediaInfo: { type: "file", fileName, base64: buf.toString("base64") } };
@@ -964,6 +1006,7 @@ class FeishuConnection {
             if (tmpPath) {
               return {
                 text: `[视频消息: ${fileName}]\n文件路径: ${tmpPath}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`,
+                attachment: { kind: "video", fileName, filePath: tmpPath, sourceMessageId: messageId, receivedAt: Date.now() },
               };
             }
           }
@@ -1005,19 +1048,19 @@ class FeishuConnection {
 
   private async generateAndDeliver(
     userText: string,
-    senderId: string,
     chatId: string,
-    chatType: string,
     messageId: string,
     sessionKey: string,
+    isOwner: boolean,
+    contactKey?: string,
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
+    currentAttachment?: RecentFeishuAttachment,
     forwardMentions?: Array<{ id: Record<string, string>; name?: string }>,
   ): Promise<void> {
     const skillContext = resolveSkillPromptContext(userText, this.opts.skillNames);
     const effectiveUserText = skillContext?.userText ?? userText;
     const history = getHistory(sessionKey);
     const provider = this.opts.provider ?? "claude";
-    const isOwner = chatType === "p2p" && Boolean(senderId && this.opts.ownerOpenIds?.includes(senderId));
     const sensitiveTurnState: SharedMcpSensitiveTurnState = { active: false };
     const persistedMessages: StreamMessage[] = [];
     const deliveryState: FeishuDeliveryState = {
@@ -1044,13 +1087,24 @@ class FeishuConnection {
       effectiveUserText,
       this.opts.assistantId,
       this.opts.defaultCwd,
+      { contactKey, isOwner },
     );
     const historySection = history.length > 1
-      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
+      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId, false, contactKey)
       : undefined;
+    const recentAttachmentSection = currentAttachment
+      ? undefined
+      : buildRecentFeishuAttachmentContext(recentInboundAttachments.get(sessionKey), effectiveUserText);
     const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
     const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
-    const system = buildStructuredPersona(this.opts, memoryContext, skillSection, historySection, privateWhitelistSection);
+    const system = buildStructuredPersona(
+      { ...this.opts, isOwner },
+      memoryContext,
+      skillSection,
+      historySection,
+      recentAttachmentSection,
+      privateWhitelistSection,
+    );
 
     // Add typing indicator (emoji reaction)
     await this.addTypingReaction(messageId).catch(() => {});
@@ -1072,6 +1126,7 @@ class FeishuConnection {
         sensitiveTurnState,
         persistedMessages,
         mediaInfo,
+        contactKey,
       );
       replyText = result.text;
       streamedFinalText = result.streamedText;
@@ -1121,7 +1176,13 @@ class FeishuConnection {
     if (shouldPersistTurn) {
       scheduleBotPostResponseTasks({
         logEntry: `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${effectiveUserText}\n**${this.opts.assistantName}**: ${persistText}\n`,
-        recordOpts: { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
+        recordOpts: {
+          assistantId: this.opts.assistantId,
+          assistantName: this.opts.assistantName,
+          channel: "飞书",
+          contactKey,
+          isOwner,
+        },
         updateTitle: () => updateBotSessionTitle(sessionId, effectiveUserText),
         onError: (_phase, error) => {
           console.warn("[Feishu] Failed to persist conversation:", error);
@@ -1180,12 +1241,14 @@ class FeishuConnection {
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
     mediaInfo?: { type: "image" | "file"; base64?: string; mimeType?: string; fileName?: string },
+    contactKey?: string,
   ): Promise<{ text: string; streamedText: string }> {
     const sessionMcp = this.createSessionMcp(messageId, chatId, deliveryState);
     const feishuMcp = this.createFeishuEcosystemMcp();
     const sharedMcp = createSharedMcpServer({
       assistantId: this.opts.assistantId,
       sessionCwd: this.opts.defaultCwd,
+      contactKey,
       isOwner,
       sensitiveTurnState,
     });

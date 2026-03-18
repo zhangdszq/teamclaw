@@ -31,6 +31,7 @@ type EditingAssistant = {
   operatingGuidelines: string;
   heartbeatInterval: number;
   heartbeatRules: string;
+  allowNonOwnerDm: boolean;
 };
 
 type HeartbeatSnapshot = {
@@ -58,6 +59,7 @@ function emptyAssistant(defaults?: AssistantDefaults): EditingAssistant {
     operatingGuidelines: defaults?.operatingGuidelines ?? "",
     heartbeatInterval: 30,
     heartbeatRules: defaults?.heartbeatRules ?? "",
+    allowNonOwnerDm: true,
   };
 }
 
@@ -148,6 +150,7 @@ export function AssistantManagerModal({
       operatingGuidelines: editing.operatingGuidelines.trim() || undefined,
       heartbeatInterval: editing.heartbeatInterval,
       heartbeatRules: editing.heartbeatRules.trim() || undefined,
+      allowNonOwnerDm: editing.allowNonOwnerDm,
     };
 
     let nextList: AssistantConfig[];
@@ -256,6 +259,7 @@ export function AssistantManagerModal({
       operatingGuidelines: assistant.operatingGuidelines ?? "",
       heartbeatInterval: assistant.heartbeatInterval ?? 30,
       heartbeatRules: assistant.heartbeatRules ?? "",
+      allowNonOwnerDm: assistant.allowNonOwnerDm !== false,
     });
     setIsNew(false);
     setSaveError(null);
@@ -525,6 +529,21 @@ export function AssistantManagerModal({
                   <div className="border-t border-ink-900/6 pt-3 mt-1">
                     <span className="text-xs font-semibold text-ink-700 tracking-wide">人格设定</span>
                   </div>
+
+                  <label className="flex items-start gap-3 rounded-xl border border-ink-900/8 bg-surface-secondary/60 px-3.5 py-3">
+                    <input
+                      type="checkbox"
+                      checked={editing.allowNonOwnerDm}
+                      onChange={(e) => setEditing({ ...editing, allowNonOwnerDm: e.target.checked })}
+                      className="mt-0.5 h-4 w-4 rounded border-ink-900/20 text-accent focus:ring-accent/30"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-xs font-medium text-ink-800">允许非 owner 私聊</span>
+                      <span className="mt-1 block text-[11px] leading-relaxed text-muted">
+                        开启后，非 owner 联系人也能私聊这个助理，但会使用独立记忆目录，不会读到 owner 记忆。
+                      </span>
+                    </span>
+                  </label>
 
                   <div className="flex flex-col gap-1">
                     <span className="text-xs font-medium text-muted">身份角色</span>

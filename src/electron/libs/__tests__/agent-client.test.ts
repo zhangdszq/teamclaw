@@ -91,7 +91,7 @@ describe("buildOpenAIProviderEnv", () => {
 });
 
 describe("runAgent openai provider env", () => {
-  it("uses proxy-only settings and keeps process env untouched", async () => {
+  it("uses proxy-only env, preserves default setting sources, and keeps process env untouched", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://api.minimaxi.com/anthropic";
     mockState.query.mockImplementation(async () => (async function* () {})());
 
@@ -101,7 +101,7 @@ describe("runAgent openai provider env", () => {
     const [{ options }] = mockState.query.mock.calls[0] as Array<{ options: Record<string, unknown> }>;
     const env = options.env as Record<string, string>;
 
-    expect(options.settingSources).toEqual([]);
+    expect(options.settingSources).toEqual(["user", "project", "local"]);
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("openai-proxy-dummy");
     expect(env.ANTHROPIC_API_KEY).toBe("openai-proxy-dummy");
     expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:63150/session/test");

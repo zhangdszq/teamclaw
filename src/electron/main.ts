@@ -174,6 +174,7 @@ function buildAssistantRuntimeUpdates(assistant: AssistantConfig, userContext?: 
         provider: assistant.provider,
         model: assistant.model,
         defaultCwd: assistant.defaultCwd,
+        allowNonOwnerDm: assistant.allowNonOwnerDm,
     };
 }
 
@@ -1121,7 +1122,11 @@ app.on("ready", async () => {
     // DingTalk bot lifecycle handlers
     ipcMainHandle("start-dingtalk-bot", async (_: any, input: DingtalkBotOptions) => {
         try {
-            await startDingtalkBot(input);
+            const assistant = loadAssistantsConfig().assistants.find((item) => item.id === input.assistantId);
+            await startDingtalkBot({
+                ...input,
+                allowNonOwnerDm: assistant?.allowNonOwnerDm !== false,
+            });
             return { status: getDingtalkBotStatus(input.assistantId) as DingtalkBotStatus };
         } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);
@@ -1182,7 +1187,11 @@ app.on("ready", async () => {
     // Feishu bot lifecycle handlers
     ipcMainHandle("start-feishu-bot", async (_: any, input: FeishuBotOptions) => {
         try {
-            await startFeishuBot(input);
+            const assistant = loadAssistantsConfig().assistants.find((item) => item.id === input.assistantId);
+            await startFeishuBot({
+                ...input,
+                allowNonOwnerDm: assistant?.allowNonOwnerDm !== false,
+            });
             return { status: getFeishuBotStatus(input.assistantId) as FeishuBotStatus };
         } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);
@@ -1201,7 +1210,11 @@ app.on("ready", async () => {
     // Telegram bot lifecycle handlers
     ipcMainHandle("start-telegram-bot", async (_: any, input: TelegramBotOptions) => {
         try {
-            await startTelegramBot(input);
+            const assistant = loadAssistantsConfig().assistants.find((item) => item.id === input.assistantId);
+            await startTelegramBot({
+                ...input,
+                allowNonOwnerDm: assistant?.allowNonOwnerDm !== false,
+            });
             return { status: getTelegramBotStatus(input.assistantId) as TelegramBotStatus };
         } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);
@@ -1251,7 +1264,11 @@ app.on("ready", async () => {
     // QQ Bot lifecycle handlers
     ipcMainHandle("start-qqbot", async (_: any, input: QQBotOptions) => {
         try {
-            await startQQBot(input);
+            const assistant = loadAssistantsConfig().assistants.find((item) => item.id === input.assistantId);
+            await startQQBot({
+                ...input,
+                allowNonOwnerDm: assistant?.allowNonOwnerDm !== false,
+            });
             return { status: getQQBotStatus(input.assistantId) as QQBotStatus };
         } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);

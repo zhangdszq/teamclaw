@@ -134,6 +134,25 @@ describe("memory-store enhancements", () => {
     expect(listAssistantTasks("assistant-1", { includeCompleted: true })[0]?.id).toBe(created.id);
   });
 
+  it("isolates structured tasks by contact scope", () => {
+    const ownerTask = upsertAssistantTask("assistant-1", {
+      title: "owner 任务",
+    });
+    const contactTask = upsertAssistantTask("assistant-1", {
+      title: "联系人任务",
+    }, { contactKey: "telegram_123" });
+
+    expect(listAssistantTasks("assistant-1")).toHaveLength(1);
+    expect(listAssistantTasks("assistant-1")[0]?.id).toBe(ownerTask.id);
+    expect(listAssistantTasks("assistant-1", { contactKey: "telegram_123" })).toHaveLength(1);
+    expect(listAssistantTasks("assistant-1", { contactKey: "telegram_123" })[0]?.id).toBe(contactTask.id);
+
+    const completed = completeAssistantTask("assistant-1", contactTask.id, { contactKey: "telegram_123" });
+    expect(completed?.status).toBe("completed");
+    expect(listAssistantTasks("assistant-1", { contactKey: "telegram_123" })).toHaveLength(0);
+    expect(listAssistantTasks("assistant-1", { includeCompleted: true, contactKey: "telegram_123" })[0]?.id).toBe(contactTask.id);
+  });
+
   it("caps oversized memory context and marks truncation", async () => {
     const memoryRoot = join(tempHome, ".vk-cowork", "memory");
     const assistantRoot = join(memoryRoot, "assistants", "assistant-1");

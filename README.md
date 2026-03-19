@@ -2,11 +2,11 @@
 
 # Teamclaw
 
-**Your desktop AI team that never sleeps.**
+**An open-source desktop AI team that never sleeps.**
 
 [![Release](https://img.shields.io/github/v/release/zhangdszq/teamclaw?style=flat-square)](https://github.com/zhangdszq/teamclaw/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](#quick-start)
-[![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [简体中文](README_ZH.md)
 
@@ -16,18 +16,50 @@
 
 ---
 
-Teamclaw is a desktop application that lets you build a team of AI assistants. Each assistant has its own persona, memory, skills, and can be connected to messaging platforms like DingTalk, Telegram, and Feishu — operating autonomously around the clock.
+Teamclaw is an open-source desktop application for building, coordinating, and operating a team of AI assistants on your own machine. Each assistant has its own persona, memory, skills, tools, and IM bot bindings, so you can run specialized agents around the clock instead of squeezing everything into a single chat.
 
-It is fully compatible with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration and supports both **Anthropic Claude** and **OpenAI Codex** as AI providers.
+It is compatible with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration and supports both **Anthropic Claude** and **OpenAI Codex** as AI providers.
+
+Teamclaw reuses Claude Code's local auth, settings, and tool configuration, which is why installing Claude Code is the recommended starting point.
 
 ## Quick Start
 
-**Download a release:**
-[github.com/zhangdszq/teamclaw/releases](https://github.com/zhangdszq/teamclaw/releases)
+### Use a release build
 
-Prerequisites: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed.
+1. Download the latest package from [Releases](https://github.com/zhangdszq/teamclaw/releases).
+2. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+3. Launch Teamclaw and finish the onboarding flow.
 
----
+### Run from source
+
+Prerequisites:
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- [Bun](https://bun.sh/)
+- Node.js 20+ recommended for packaging and sidecar builds
+- `npm` only if you want to package the app or build the `src-api` sidecar
+
+For everyday local development, Bun is enough:
+
+```bash
+bun install
+bun run dev
+```
+
+Useful verification commands:
+
+```bash
+bun run test
+bun run build
+```
+
+Release packaging commands also build the bundled sidecar API and CLI:
+
+```bash
+bun run dist:mac
+bun run dist:win
+bun run dist:linux
+```
 
 ## Features
 
@@ -35,18 +67,18 @@ Prerequisites: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) ins
 
 Create multiple AI assistants, each with its own identity:
 
-- Custom persona — name, avatar, personality, core values, cognitive style
-- Per-assistant skills and MCP servers
-- Independent provider choice — Claude or Codex per assistant
-- Scoped memory — each assistant maintains isolated memory
-- Heartbeat — periodic self-check with adaptive intervals
+- Custom persona: name, avatar, personality, core values, cognitive style
+- Per-assistant skills and MCP servers (Model Context Protocol tool servers)
+- Independent provider choice: Claude or Codex per assistant
+- Scoped memory: each assistant keeps isolated memory
+- Heartbeat: periodic self-check with adaptive intervals
 
 ### Conversational AI
 
 - Streaming output with reasoning visualization
 - Markdown rendering with syntax-highlighted code
 - Collapsible tool call process groups
-- Permission control — approve or deny sensitive tool calls
+- Permission control for sensitive tool calls
 - Image and file input via paste, select, or drag-and-drop
 - Session management with SQLite persistence
 
@@ -58,11 +90,11 @@ Connect any assistant to your team's messaging platform:
 
 | Platform | Capabilities |
 |----------|-------------|
-| **DingTalk** | Private & group chat, AI streaming cards, media messages, proactive push, allowlist policies |
-| **Telegram** | Private & group chat, @mention control, proactive push, proxy support |
+| **DingTalk** | Private and group chat, AI streaming cards, media messages, proactive push, allowlist policies |
+| **Telegram** | Private and group chat, @mention control, proactive push, proxy support |
 | **Feishu / Lark** | Group chat, proactive push, auto-reconnect |
 
-Each bot inherits the assistant's persona, skills, and memory. Supports DM/group policies and owner-based proactive notifications.
+Each bot inherits the assistant's persona, skills, and memory. DM/group policies and owner-based proactive notifications are supported.
 
 ### Memory System
 
@@ -70,9 +102,9 @@ Multi-layer structured memory:
 
 | Layer | Purpose |
 |-------|---------|
-| L0 — Abstract | Root index for fast context retrieval |
-| L1 — Insights | Monthly distilled insights and structured lessons |
-| L2 — Daily | Raw daily logs and session records |
+| L0 - Abstract | Root index for fast context retrieval |
+| L1 - Insights | Monthly distilled insights and structured lessons |
+| L2 - Daily | Raw daily logs and session records |
 | MEMORY.md | Long-term memory with P0/P1/P2 lifecycle |
 | SESSION-STATE.md | Cross-session working buffer |
 | SOPs | Self-growing standard operating procedures |
@@ -81,18 +113,18 @@ Multi-layer structured memory:
 ### Knowledge Base
 
 - Auto-extraction of experience candidates from completed sessions
-- Review workflow: draft → verified → archived
+- Review workflow: `draft -> verified -> archived`
 - Manual knowledge documents
-- AI-powered structured refinement (scenario, steps, result, risk)
+- AI-powered structured refinement for scenario, steps, result, and risk
 
-### Scheduler & Automation
+### Scheduler and Automation
 
 ![Scheduler & Automation](assets/splash-5.jpg)
 
 | Type | Description |
 |------|-------------|
 | Once | Run at a specific time |
-| Interval | Repeat every N minutes/hours/days/weeks |
+| Interval | Repeat every N minutes, hours, days, or weeks |
 | Daily | Fixed time, configurable days of week |
 | Heartbeat | Periodic self-check with adaptive intervals |
 | Hook | Triggered by `startup` or `session.complete` events |
@@ -106,16 +138,16 @@ Define persistent objectives pursued across multiple sessions:
 - Configurable retry interval and max runs
 - Session-linked progress log with summaries and next steps
 - Auto-pause after consecutive failures
-- Completion notification via events
+- Completion notifications via events
 
 ### SOP / Hands Workflow
 
-Structured multi-stage workflows defined in HAND.toml:
+Structured multi-stage workflows defined in `HAND.toml`:
 
 - ReactFlow-based visual workflow editor
 - Per-stage goals, checklist items, tools, and MCP servers
 - AI generation from natural language descriptions
-- Plan table with pending/in_progress/completed/failed states
+- Plan table with `pending`, `in_progress`, `completed`, and `failed` states
 
 ### Built-in MCP Tools
 
@@ -135,7 +167,7 @@ Every assistant has access to shared MCP tools:
 | Plan | `upsert_plan_item`, `complete_plan_item`, `fail_plan_item` |
 | Notification | `send_notification` (DingTalk / Telegram / Feishu) |
 
-### Skills & MCP Management
+### Skills and MCP Management
 
 - Skill catalog with categories and tags
 - GUI for adding, configuring, and removing MCP servers
@@ -144,20 +176,18 @@ Every assistant has access to shared MCP tools:
 
 ### Quick Window
 
-- Global shortcut (default `Alt+Space`) — floating input from anywhere
+- Global shortcut (default `Alt+Space`) for floating input anywhere
 - Assistant and skill picker
-- Seamless handoff to main window
+- Seamless handoff to the main window
 
 ### Desktop Experience
 
-- Native Electron app — macOS, Windows, Linux
+- Native Electron app for macOS, Windows, and Linux
 - System tray with click-to-restore
 - Platform-adaptive title bar
 - Built-in auto-updater
 - Onboarding wizard for provider setup
-- Environment validation (Claude CLI, Node.js, API connectivity)
-
----
+- Environment validation for Claude CLI, Node.js, and API connectivity
 
 ## Configuration
 
@@ -167,9 +197,13 @@ Teamclaw shares configuration with Claude Code:
 ~/.claude/settings.json
 ```
 
-Same API keys, base URL, models, MCP servers, and skills. Also supports OpenAI Codex OAuth and Google OAuth.
+The same API keys, base URL, models, MCP servers, and skills can be reused. It also supports OpenAI Codex OAuth and Google OAuth.
 
----
+## Contributing
+
+Issues and pull requests are welcome.
+
+For larger changes, please open an issue or discussion first so the direction stays aligned. As the project is being opened up, you will still see some legacy names such as `vk-cowork` and `AI Team` in parts of the codebase and packaging. They are historical internal identifiers and will be cleaned up incrementally.
 
 ## Architecture
 
@@ -183,10 +217,6 @@ Same API keys, base URL, models, MCP servers, and skills. Also supports OpenAI C
 | API | Hono (embedded) |
 | Build | Vite, electron-builder |
 
----
-
 ## License
 
-Copyright (c) 2025 Teamclaw. All Rights Reserved.
-
-This software is proprietary and confidential. See [LICENSE](LICENSE) for details.
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE).

@@ -1,6 +1,7 @@
 {
   "name": "vk-cowork-api",
   "version": "0.0.2",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "node --import tsx --watch src/index.ts",

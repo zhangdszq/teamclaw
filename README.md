@@ -18,26 +18,24 @@
 
 Teamclaw is an open-source desktop application for building, coordinating, and operating a team of AI assistants on your own machine. Each assistant has its own persona, memory, skills, tools, and IM bot bindings, so you can run specialized agents around the clock instead of squeezing everything into a single chat.
 
-It is compatible with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration and supports both **Anthropic Claude** and **OpenAI Codex** as AI providers.
-
-Teamclaw reuses Claude Code's local auth, settings, and tool configuration, which is why installing Claude Code is the recommended starting point.
+It is built around **Anthropic Claude**. If you already use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Teamclaw can reuse its local configuration and MCP setup, but Claude Code is optional rather than required.
 
 ## Quick Start
 
 ### Use a release build
 
 1. Download the latest package from [Releases](https://github.com/zhangdszq/teamclaw/releases).
-2. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
-3. Launch Teamclaw and finish the onboarding flow.
+2. Launch Teamclaw and finish the onboarding flow.
+3. Configure Anthropic access inside Teamclaw, or optionally reuse an existing Claude Code setup.
 
 ### Run from source
 
 Prerequisites:
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - [Bun](https://bun.sh/)
 - Node.js 20+ recommended for packaging and sidecar builds
 - `npm` only if you want to package the app or build the `src-api` sidecar
+- Optional: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) if you want Teamclaw to reuse its local configuration and MCP servers
 
 For everyday local development, Bun is enough:
 
@@ -69,7 +67,6 @@ Create multiple AI assistants, each with its own identity:
 
 - Custom persona: name, avatar, personality, core values, cognitive style
 - Per-assistant skills and MCP servers (Model Context Protocol tool servers)
-- Independent provider choice: Claude or Codex per assistant
 - Scoped memory: each assistant keeps isolated memory
 - Heartbeat: periodic self-check with adaptive intervals
 
@@ -186,18 +183,18 @@ Every assistant has access to shared MCP tools:
 - System tray with click-to-restore
 - Platform-adaptive title bar
 - Built-in auto-updater
-- Onboarding wizard for provider setup
-- Environment validation for Claude CLI, Node.js, and API connectivity
+- Onboarding wizard for first-run setup
+- Environment validation and connectivity checks
 
 ## Configuration
 
-Teamclaw shares configuration with Claude Code:
+Teamclaw can reuse configuration from Claude Code when it is present:
 
 ```
 ~/.claude/settings.json
 ```
 
-The same API keys, base URL, models, MCP servers, and skills can be reused. It also supports OpenAI Codex OAuth and Google OAuth.
+This reuse is optional. Anthropic credentials configured inside Teamclaw take priority over `~/.claude/settings.json`, and MCP servers plus related settings from Claude Code can also be reused when available.
 
 ## Contributing
 
@@ -213,7 +210,7 @@ For larger changes, please open an issue or discussion first so the direction st
 | Frontend | React 19, Tailwind CSS 4 |
 | State | Zustand |
 | Database | better-sqlite3 (WAL mode) |
-| AI | Claude Agent SDK, OpenAI Codex SDK |
+| AI | Claude Agent SDK |
 | API | Hono (embedded) |
 | Build | Vite, electron-builder |
 

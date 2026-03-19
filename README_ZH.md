@@ -18,26 +18,24 @@
 
 Teamclaw 是一个开源桌面应用，让你在本地组建、协作和运营一支 AI 助理团队。每个助理都有独立的人设、记忆、技能、工具和 IM 机器人绑定，你不必把所有事情都塞进一个对话里，而是可以让多个专长不同的代理 7x24 持续工作。
 
-它兼容 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 配置，同时支持 **Anthropic Claude** 和 **OpenAI Codex** 两种 AI 提供方。
-
-Teamclaw 会复用 Claude Code 的本地认证、设置和工具配置，所以安装 Claude Code 是最省事的起点。
+它当前基于 **Anthropic Claude**。如果你已经在用 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)，Teamclaw 可以复用它的本地配置和 MCP 设置；但 Claude Code 是可选项，不是硬性前置。
 
 ## 快速开始
 
 ### 使用发布版
 
 1. 从 [Releases](https://github.com/zhangdszq/teamclaw/releases) 下载最新安装包。
-2. 安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)。
-3. 启动 Teamclaw 并完成引导配置。
+2. 启动 Teamclaw 并完成引导配置。
+3. 在 Teamclaw 内配置 Anthropic API Token，或可选复用现有 Claude Code 配置。
 
 ### 从源码运行
 
 前置要求：
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - [Bun](https://bun.sh/)
 - 推荐 Node.js 20+，用于打包和 sidecar 构建
 - `npm`，仅在打包应用或构建 `src-api` sidecar 时需要
+- 可选：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)，仅当你希望 Teamclaw 复用其本地配置和 MCP 服务时需要
 
 日常本地开发只需要 Bun：
 
@@ -69,7 +67,6 @@ bun run dist:linux
 
 - 自定义人设：名称、头像、性格、核心价值观、认知风格
 - 按助理分配技能和 MCP 服务器（Model Context Protocol 工具服务）
-- 独立选择引擎：每个助理可选 Claude 或 Codex
 - 隔离记忆：每个助理拥有独立记忆空间
 - 心跳巡检：定期自检，自适应间隔
 
@@ -186,18 +183,18 @@ Hook 任务支持按助理、标题模式和仅错误触发过滤。
 - 系统托盘，点击恢复
 - 平台自适应标题栏
 - 内置自动更新
-- 提供引导向导完成模型配置
-- 环境检查覆盖 Claude CLI、Node.js 和 API 连通性
+- 提供首次启动引导
+- 提供环境检查和连通性校验
 
 ## 配置
 
-Teamclaw 与 Claude Code 共享配置：
+当本机存在 Claude Code 配置时，Teamclaw 可以直接复用：
 
 ```
 ~/.claude/settings.json
 ```
 
-同一套 API 密钥、Base URL、模型、MCP 服务器和技能都可以复用。同时支持 OpenAI Codex OAuth 与 Google OAuth。
+这种复用是可选的，不是必需的。你直接在 Teamclaw 里填写的 Anthropic 凭证会优先于 `~/.claude/settings.json`；如果本机已有 Claude Code 的 MCP 配置，也可以一并复用。
 
 ## 参与贡献
 
@@ -213,7 +210,7 @@ Teamclaw 与 Claude Code 共享配置：
 | 前端 | React 19, Tailwind CSS 4 |
 | 状态管理 | Zustand |
 | 数据库 | better-sqlite3（WAL 模式） |
-| AI | Claude Agent SDK, OpenAI Codex SDK |
+| AI | Claude Agent SDK |
 | API | Hono（内嵌） |
 | 构建 | Vite, electron-builder |
 

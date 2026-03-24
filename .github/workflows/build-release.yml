@@ -230,10 +230,12 @@ jobs:
           ALIYUN_OSS_UPDATE_URL: ${{ secrets.ALIYUN_OSS_UPDATE_URL }}
 
       - name: Install OSS uploader dependencies
+        if: ${{ secrets.ALIYUN_OSS_KEY_ID != '' && secrets.ALIYUN_OSS_KEY_SECRET != '' }}
         shell: bash
         run: python -m pip install --upgrade pip oss2
 
       - name: Upload release assets to Aliyun OSS
+        if: ${{ secrets.ALIYUN_OSS_KEY_ID != '' && secrets.ALIYUN_OSS_KEY_SECRET != '' }}
         shell: bash
         env:
           ALIYUN_OSS_KEY_ID: ${{ secrets.ALIYUN_OSS_KEY_ID }}

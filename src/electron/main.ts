@@ -1353,7 +1353,6 @@ app.on("ready", async () => {
             const assistant = loadAssistantsConfig().assistants.find((item) => item.id === input.assistantId);
             await startFeishuBot({
                 ...input,
-                allowNonOwnerDm: assistant?.allowNonOwnerDm !== false,
             });
             return { status: getFeishuBotStatus(input.assistantId) as FeishuBotStatus };
         } catch (err) {

@@ -1,5 +1,9 @@
 const arch = process.env.BUILD_ARCH; // 'arm64' | 'x64'
 const updateUrl = (process.env.ALIYUN_OSS_UPDATE_URL || "").replace(/\/+$/, "");
+/** When no Aliyun generic URL, publish to GitHub Releases (CI sets GITHUB_TOKEN). */
+const publish = updateUrl
+  ? [{ provider: "generic", url: updateUrl }]
+  : [{ provider: "github", owner: "zhangdszq", repo: "teamclaw" }];
 const enableNotarize = Boolean(
   process.env.APPLE_ID &&
   process.env.APPLE_APP_SPECIFIC_PASSWORD &&
@@ -15,16 +19,7 @@ const macSidecar =
 module.exports = {
   appId: 'com.aiteam.app',
   productName: 'AI Team',
-  ...(updateUrl
-    ? {
-        publish: [
-          {
-            provider: 'generic',
-            url: updateUrl,
-          },
-        ],
-      }
-    : {}),
+  publish,
   files: [
     'package.json',
     { from: 'dist-electron', to: 'dist-electron', filter: ['**/*'] },

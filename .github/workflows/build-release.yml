@@ -104,6 +104,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # GitHub does not reliably evaluate `if: secrets.* != ''`; use env + step output instead.
+      - name: Detect Aliyun OSS upload
+        id: aliyun
+        shell: bash
+        run: |
+          if [ -n "${ALIYUN_KEY_ID}" ] && [ -n "${ALIYUN_KEY_SECRET}" ]; then
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          ALIYUN_KEY_ID: ${{ secrets.ALIYUN_OSS_KEY_ID }}
+          ALIYUN_KEY_SECRET: ${{ secrets.ALIYUN_OSS_KEY_SECRET }}
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -189,6 +203,10 @@ jobs:
         shell: bash
         run: |
           base="${ALIYUN_OSS_UPDATE_URL%/}"
+          if [ -z "$base" ]; then
+            echo "No ALIYUN_OSS_UPDATE_URL; using GitHub publish (electron-builder.cjs)."
+            exit 0
+          fi
           if [ "${{ matrix.platform }}" = "mac-arm64" ]; then
             echo "ALIYUN_OSS_UPDATE_URL=${base}/mac-arm64" >> "$GITHUB_ENV"
           else
@@ -230,12 +248,12 @@ jobs:
           ALIYUN_OSS_UPDATE_URL: ${{ secrets.ALIYUN_OSS_UPDATE_URL }}
 
       - name: Install OSS uploader dependencies
-        if: ${{ secrets.ALIYUN_OSS_KEY_ID != '' && secrets.ALIYUN_OSS_KEY_SECRET != '' }}
+        if: steps.aliyun.outputs.upload == 'true'
         shell: bash
         run: python -m pip install --upgrade pip oss2
 
       - name: Upload release assets to Aliyun OSS
-        if: ${{ secrets.ALIYUN_OSS_KEY_ID != '' && secrets.ALIYUN_OSS_KEY_SECRET != '' }}
+        if: steps.aliyun.outputs.upload == 'true'
         shell: bash
         env:
           ALIYUN_OSS_KEY_ID: ${{ secrets.ALIYUN_OSS_KEY_ID }}

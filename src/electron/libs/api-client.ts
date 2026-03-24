@@ -4,6 +4,7 @@
 import { getApiBaseUrl, isEmbeddedApiRunning, startEmbeddedApi } from '../api/server.js';
 import type { ServerEvent } from '../types.js';
 import { fetch as undiciFetch, Agent } from 'undici';
+import { errorAnalytics, trackAnalytics } from './analytics.js';
 
 // Use undici directly for SSE requests to disable body timeout (prevents UND_ERR_BODY_TIMEOUT
 // during long-running Claude agent tasks where the stream may be idle for minutes).
@@ -118,7 +119,10 @@ export async function startSession(
     assistantDiscoverySkillNames?: string[];
     assistantPersona?: string;
     assistantActivatedSkillContent?: string;
+    includeCursorDelegation?: boolean;
     background?: boolean;
+    sourceType?: string;
+    sourceChannel?: string;
   },
   onEvent: StreamCallback
 ): Promise<void> {
@@ -131,6 +135,21 @@ export async function startSession(
   if (options.externalSessionId) {
     activeStreams.set(options.externalSessionId, abortController);
   }
+
+  // src-api events keep both their own layer identity and the upstream trigger source
+  // so later analysis can answer "which入口最终落到了 embedded API".
+  trackAnalytics('src_api_run_start', {
+    source_type: 'src_api',
+    source_channel: 'embedded_api',
+    upstream_source_type: options.sourceType,
+    upstream_source_channel: options.sourceChannel,
+    entry: 'start',
+    session_id: options.externalSessionId,
+    assistant_id: options.assistantId,
+    provider: options.provider,
+    model: options.model,
+    cwd: options.cwd,
+  });
 
   try {
     const response = await sseFetch(url, {
@@ -150,6 +169,18 @@ export async function startSession(
     await handleSSEStream(response, onEvent, abortController.signal);
   } catch (error) {
     if ((error as Error)?.name !== 'AbortError') {
+      errorAnalytics('src_api_run_error', {
+        source_type: 'src_api',
+        source_channel: 'embedded_api',
+        upstream_source_type: options.sourceType,
+        upstream_source_channel: options.sourceChannel,
+        entry: 'start',
+        session_id: options.externalSessionId,
+        assistant_id: options.assistantId,
+        provider: options.provider,
+        model: options.model,
+        error_message: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
     // AbortError means the user explicitly stopped the session — not an error
@@ -174,6 +205,9 @@ export async function continueSession(
     assistantSkillNames?: string[];
     assistantDiscoverySkillNames?: string[];
     assistantActivatedSkillContent?: string;
+    includeCursorDelegation?: boolean;
+    sourceType?: string;
+    sourceChannel?: string;
   }
 ): Promise<void> {
   await ensureEmbeddedApi();
@@ -185,6 +219,21 @@ export async function continueSession(
   if (options?.externalSessionId) {
     activeStreams.set(options.externalSessionId, abortController);
   }
+
+  // Continue uses the same event name as start and distinguishes phase with `entry`,
+  // which keeps downstream dashboards simpler while preserving stage detail.
+  trackAnalytics('src_api_run_start', {
+    source_type: 'src_api',
+    source_channel: 'embedded_api',
+    upstream_source_type: options?.sourceType,
+    upstream_source_channel: options?.sourceChannel,
+    entry: 'continue',
+    session_id: options?.externalSessionId,
+    assistant_id: options?.assistantId,
+    provider: options?.provider,
+    model: options?.model,
+    cwd: options?.cwd,
+  });
   
   try {
     const response = await sseFetch(url, {
@@ -204,6 +253,9 @@ export async function continueSession(
         assistantSkillNames: options?.assistantSkillNames,
         assistantDiscoverySkillNames: options?.assistantDiscoverySkillNames,
         assistantActivatedSkillContent: options?.assistantActivatedSkillContent,
+        includeCursorDelegation: options?.includeCursorDelegation,
+        sourceType: options?.sourceType,
+        sourceChannel: options?.sourceChannel,
       }),
       signal: abortController.signal,
     }, abortController.signal);
@@ -215,6 +267,22 @@ export async function continueSession(
 
     // Handle SSE stream
     await handleSSEStream(response, onEvent, abortController.signal);
+  } catch (error) {
+    if ((error as Error)?.name !== 'AbortError') {
+      errorAnalytics('src_api_run_error', {
+        source_type: 'src_api',
+        source_channel: 'embedded_api',
+        upstream_source_type: options?.sourceType,
+        upstream_source_channel: options?.sourceChannel,
+        entry: 'continue',
+        session_id: options?.externalSessionId,
+        assistant_id: options?.assistantId,
+        provider: options?.provider,
+        model: options?.model,
+        error_message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   } finally {
     if (options?.externalSessionId) {
       activeStreams.delete(options.externalSessionId);

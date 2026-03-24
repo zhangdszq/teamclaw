@@ -1,6 +1,5 @@
 import Database from "better-sqlite3";
-import { app } from "electron";
-import { join } from "path";
+import { resolveSessionDbPath } from "./session-db-path.js";
 
 export type UsageProvider = "anthropic" | "openai";
 export type UsageStatus = "ok" | "error";
@@ -65,7 +64,7 @@ let db: Database.Database | null = null;
 let initializedPath: string | null = null;
 
 function resolveDefaultDbPath(): string {
-  return join(app.getPath("userData"), "sessions.db");
+  return resolveSessionDbPath();
 }
 
 function normalizeTimestamp(input?: number | Date | string): number {

@@ -81,6 +81,7 @@ agent.post('/start', async (c) => {
     assistantSkillNames?: string[];
     assistantPersona?: string;
     assistantActivatedSkillContent?: string;
+    includeCursorDelegation?: boolean;
     background?: boolean;
   }>();
 
@@ -132,6 +133,10 @@ agent.post('/start', async (c) => {
     typeof body.assistantActivatedSkillContent !== 'string'
   ) {
     return c.json({ error: 'assistantActivatedSkillContent must be a string' }, 400);
+  }
+
+  if (body.includeCursorDelegation !== undefined && typeof body.includeCursorDelegation !== 'boolean') {
+    return c.json({ error: 'includeCursorDelegation must be a boolean' }, 400);
   }
 
   if (body.background !== undefined && typeof body.background !== 'boolean') {
@@ -230,6 +235,7 @@ agent.post('/start', async (c) => {
       prompt: effectivePrompt,
       session,
       model: body.model,
+      includeCursorDelegation: body.includeCursorDelegation,
       onSessionUpdate: (updates: Partial<typeof session>) => {
         updateSession(session.id, updates);
       },
@@ -255,6 +261,9 @@ agent.post('/continue', async (c) => {
     assistantId?: string;
     assistantSkillNames?: string[];
     assistantActivatedSkillContent?: string;
+    includeCursorDelegation?: boolean;
+    sourceType?: string;
+    sourceChannel?: string;
   }>();
 
   if (!body.sessionId) {
@@ -305,6 +314,18 @@ agent.post('/continue', async (c) => {
     typeof body.assistantActivatedSkillContent !== 'string'
   ) {
     return c.json({ error: 'assistantActivatedSkillContent must be a string' }, 400);
+  }
+
+  if (body.includeCursorDelegation !== undefined && typeof body.includeCursorDelegation !== 'boolean') {
+    return c.json({ error: 'includeCursorDelegation must be a boolean' }, 400);
+  }
+
+  if (body.sourceType !== undefined && typeof body.sourceType !== 'string') {
+    return c.json({ error: 'sourceType must be a string' }, 400);
+  }
+
+  if (body.sourceChannel !== undefined && typeof body.sourceChannel !== 'string') {
+    return c.json({ error: 'sourceChannel must be a string' }, 400);
   }
 
   const continueProvider: AgentProvider = body.provider ?? 'claude';
@@ -401,6 +422,7 @@ agent.post('/continue', async (c) => {
       session: tempSession,
       resumeSessionId: body.sessionId,
       model: body.model,
+      includeCursorDelegation: body.includeCursorDelegation,
       onSessionUpdate: (updates: Partial<typeof tempSession>) => {
         updateSession(tempSession.id, updates);
       },

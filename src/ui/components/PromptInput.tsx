@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientEvent } from "../types";
 import { useAppStore } from "../store/useAppStore";
+import { clickTrack } from "../lib/analytics";
 
 const DEFAULT_ALLOWED_TOOLS = "Read,Edit,Bash";
 const MAX_ROWS = 12;
@@ -428,6 +429,19 @@ export function usePromptActions(
     const activeAssistantId = activeSession?.assistantId;
     const assistantChanged = Boolean(selectedAssistantId) && activeAssistantId !== selectedAssistantId;
     const needNewSession = !activeSessionId || (activeProvider !== provider) || assistantChanged;
+    const analyticsParams = {
+      source_type: "ui",
+      source_channel: "main_window",
+      assistant_id: selectedAssistantId,
+      active_session_id: activeSessionId,
+      trigger_mode: needNewSession ? "start" : "continue",
+      provider,
+      prompt_length: finalPrompt.length,
+      attachment_count: attachments.length,
+      has_skill: Boolean(resolvedSkillName),
+    };
+
+    clickTrack("main_input_claw_trigger", analyticsParams);
 
     if (needNewSession) {
       const resolvedSkillNames = resolvedSkillName
@@ -454,6 +468,8 @@ export function usePromptActions(
           cwd: cwd.trim() || undefined,
           allowedTools: DEFAULT_ALLOWED_TOOLS,
           provider,
+          sourceType: "ui",
+          sourceChannel: "main_window",
           ...(assistantModel ? { model: assistantModel } : {}),
           ...(selectedAssistantId ? { assistantId: selectedAssistantId } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),
@@ -475,6 +491,8 @@ export function usePromptActions(
         payload: {
           sessionId: activeSessionId,
           prompt: finalPrompt,
+          sourceType: "ui",
+          sourceChannel: "main_window",
           ...(continueSkillNames ? { assistantSkillNames: continueSkillNames } : {}),
         },
       });
@@ -507,6 +525,12 @@ export function usePromptActions(
       }
     }
 
+    clickTrack("session_stop_click", {
+      source_type: "ui",
+      source_channel: "main_window",
+      session_id: activeSessionId,
+      assistant_id: session?.assistantId,
+    });
     sendEvent({ type: "session.stop", payload: { sessionId: activeSessionId } });
   }, [activeSessionId, sendEvent, revertSessionToBeforeLastPrompt, setPrompt]);
 
@@ -539,6 +563,8 @@ export function usePromptActions(
           cwd: effectiveCwd, 
           allowedTools: DEFAULT_ALLOWED_TOOLS,
           provider,
+          sourceType: "ui",
+          sourceChannel: "main_window",
           ...(assistantModel ? { model: assistantModel } : {}),
           ...(effectiveAssistantId ? { assistantId: effectiveAssistantId } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),

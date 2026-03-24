@@ -2,22 +2,31 @@ import { app } from "electron";
 import { join } from "path";
 import { homedir, tmpdir } from "os";
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from "fs";
+import { getClaudeCliSearchDirs, resolveClaudeCodePath } from "./claude-cli-resolver.js";
+
+function getAppPathSafe(): string | undefined {
+  try {
+    return typeof (app as Partial<typeof app>).getAppPath === "function"
+      ? app.getAppPath()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPackagedSafe(): boolean {
+  return Boolean((app as Partial<typeof app>).isPackaged);
+}
 
 // Get Claude Code CLI path for packaged app
 export function getClaudeCodePath(): string | undefined {
-  if (app.isPackaged) {
-    // Use claude.mjs from cli-bundle for SDK compatibility
-    const cliBundlePath = join(process.resourcesPath, 'cli-bundle', 'claude.mjs');
-    if (existsSync(cliBundlePath)) {
-      return cliBundlePath;
-    }
-    // Fallback to unpacked SDK
-    return join(
-      process.resourcesPath,
-      'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/cli.js'
-    );
-  }
-  return undefined;
+  return resolveClaudeCodePath({
+    packaged: isPackagedSafe(),
+    resourcesPath: process.resourcesPath,
+    appPath: getAppPathSafe(),
+    cwd: process.cwd(),
+    env: process.env,
+  });
 }
 
 /**
@@ -52,34 +61,15 @@ exec /usr/bin/security "$@"
 
 // Build enhanced PATH for packaged environment
 export function getEnhancedEnv(): Record<string, string | undefined> {
-  const home = homedir();
   const isWindows = process.platform === 'win32';
   const pathSeparator = isWindows ? ';' : ':';
-  
-  const additionalPaths = isWindows ? [
-    `${home}\\AppData\\Roaming\\npm`,
-    `${home}\\.bun\\bin`,
-    `${home}\\.volta\\bin`,
-  ] : [
-    '/usr/local/bin',
-    '/opt/homebrew/bin',
-    `${home}/.bun/bin`,
-    `${home}/.nvm/versions/node/v20.0.0/bin`,
-    `${home}/.nvm/versions/node/v22.0.0/bin`,
-    `${home}/.nvm/versions/node/v18.0.0/bin`,
-    `${home}/.volta/bin`,
-    `${home}/.fnm/aliases/default/bin`,
-    '/usr/bin',
-    '/bin',
-  ];
-
-  // Add cli-bundle to PATH if packaged
-  if (app.isPackaged) {
-    const cliBundlePath = join(process.resourcesPath, 'cli-bundle');
-    if (existsSync(cliBundlePath)) {
-      additionalPaths.unshift(cliBundlePath);
-    }
-  }
+  const additionalPaths = getClaudeCliSearchDirs({
+    packaged: isPackagedSafe(),
+    resourcesPath: process.resourcesPath,
+    appPath: getAppPathSafe(),
+    cwd: process.cwd(),
+    env: process.env,
+  });
 
   // Suppress macOS Keychain dialog from Claude Code CLI
   const shimDir = ensureSecurityShim();
@@ -93,7 +83,4 @@ export function getEnhancedEnv(): Record<string, string | undefined> {
     PATH: newPath,
   };
 }
-
-export const claudeCodePath = getClaudeCodePath();
-export const enhancedEnv = getEnhancedEnv();
 

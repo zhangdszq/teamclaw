@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import {
-  defaultAssistantUsesProvider,
-  maybeSwitchDefaultAssistantToOpenAI,
-} from "../lib/openai-default-assistant";
-
 interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onShowSplash?: () => void;
   darkMode?: boolean;
   onDarkModeChange?: (enabled: boolean) => void;
+  onDingtalkLogout?: () => void;
 }
 
 type SectionId = "personalize" | "models" | "usage" | "proxy" | "google" | "memory" | "shortcut" | "alert" | "debug";
@@ -182,8 +178,6 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
   const [openaiModel, setOpenaiModel] = useState("");
   const [showOpenaiApiKey, setShowOpenaiApiKey] = useState(false);
-  const [openaiDefaultAssistantReady, setOpenaiDefaultAssistantReady] = useState(false);
-
   // Google auth state
   const [googleLoggedIn, setGoogleLoggedIn] = useState(false);
   const [googleEmail, setGoogleEmail] = useState<string | undefined>();
@@ -227,15 +221,6 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
       setOpenaiNeedsReauth(false);
       setOpenaiMissingScopes([]);
       setOpenaiStatusError(null);
-    }
-  };
-
-  const loadOpenAIRoutingStatus = async () => {
-    try {
-      const config = await window.electron.getAssistantsConfig();
-      setOpenaiDefaultAssistantReady(defaultAssistantUsesProvider(config, "openai"));
-    } catch {
-      setOpenaiDefaultAssistantReady(false);
     }
   };
 
@@ -319,7 +304,6 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
         setUserContext(config.userContext ?? "");
       });
       loadOpenAIStatus();
-      loadOpenAIRoutingStatus();
       loadGoogleStatus();
       loadMemoryDir();
       window.electron.getKnowledgeBasePath().then(setKbPath).catch(() => {});
@@ -778,18 +762,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                                       setOpenaiMissingScopes([]);
                                       setOpenaiStatusError(null);
                                       setOpenaiEmail(result.email);
-                                      const [settings, assistantsConfig] = await Promise.all([
-                                        window.electron.getUserSettings(),
-                                        window.electron.getAssistantsConfig(),
-                                      ]);
-                                      const migration = maybeSwitchDefaultAssistantToOpenAI(assistantsConfig, {
-                                        hasClaudeAuth: !!settings.anthropicAuthToken?.trim(),
-                                      });
-                                      if (migration.changed) {
-                                        await window.electron.saveAssistantsConfig(migration.config);
-                                      }
                                       await loadOpenAIStatus();
-                                      setOpenaiDefaultAssistantReady(defaultAssistantUsesProvider(migration.config, "openai"));
                                     } else {
                                       setOpenaiError(result.error || "重新登录失败");
                                     }
@@ -861,30 +834,22 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
 
                               <div className="rounded-xl border border-ink-900/8 bg-surface/60 p-4 grid gap-3">
                                 <p className="text-[13px] font-semibold text-ink-800">
-                                  {openaiDefaultAssistantReady ? "当前已可直接开始 Codex 对话" : "如何让 Claude Agent 使用 OpenAI API"}
+                                  如何让 Claude Agent 使用 OpenAI API
                                 </p>
-                                {openaiDefaultAssistantReady ? (
-                                  <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3">
-                                    <p className="text-[13px] text-success leading-relaxed">
-                                      当前默认助手已经使用 OpenAI。直接开始一个新对话，请求就会通过本地代理转发到 OpenAI，并使用当前登录的 ChatGPT 令牌。
-                                    </p>
-                                  </div>
-                                ) : (
-                                  <ol className="grid gap-2 list-none">
-                                    {[
-                                      { n: "1", text: "前往「助手管理」，新建或编辑一个助手" },
-                                      { n: "2", text: "将 Provider 下拉改为「OpenAI」" },
-                                      { n: "3", text: "保存后，该助手的所有对话将通过本地代理转发至 OpenAI API，使用当前登录的 ChatGPT 令牌" },
-                                    ].map((step) => (
-                                      <li key={step.n} className="flex items-start gap-2.5">
-                                        <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-bold text-accent mt-0.5">{step.n}</span>
-                                        <span className="text-[13px] text-ink-500 leading-relaxed">{step.text}</span>
-                                      </li>
-                                    ))}
-                                  </ol>
-                                )}
+                                <ol className="grid gap-2 list-none">
+                                  {[
+                                    { n: "1", text: "前往「助手管理」，新建或编辑一个助手" },
+                                    { n: "2", text: "将 Provider 下拉改为「OpenAI」" },
+                                    { n: "3", text: "保存后，该助手的所有对话将通过本地代理转发到 OpenAI，并使用当前登录的 ChatGPT 令牌" },
+                                  ].map((step) => (
+                                    <li key={step.n} className="flex items-start gap-2.5">
+                                      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-bold text-accent mt-0.5">{step.n}</span>
+                                      <span className="text-[13px] text-ink-500 leading-relaxed">{step.text}</span>
+                                    </li>
+                                  ))}
+                                </ol>
                                 <p className="text-[12px] text-ink-400 pt-2 border-t border-ink-900/5">
-                                  无需额外 API Key，请求由本地 HTTP 代理（Anthropic → OpenAI 格式翻译）自动处理。
+                                  登录只会完成认证，不会自动修改默认助手或 Provider。模型与 Provider 仍由你在助手管理里手动设置。
                                 </p>
                               </div>
                             </>
@@ -903,7 +868,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                                   </div>
                                 </div>
                                 <p className="text-[13px] text-ink-500 leading-relaxed">
-                                  通过 ChatGPT 账号 OAuth 授权，使用与 OpenAI CLI 相同的认证流程。需要有效的 ChatGPT Plus 或 Pro 订阅。若当前仍是唯一的内置默认助手且未配置 Claude，登录后会自动切换到 OpenAI。
+                                  通过 ChatGPT 账号 OAuth 授权，使用与 OpenAI CLI 相同的认证流程。需要有效的 ChatGPT Plus 或 Pro 订阅。登录只负责提供认证，不会自动修改你的模型或助手设置。
                                 </p>
                               </div>
 
@@ -917,18 +882,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash, darkMode, onDa
                                     if (result.success) {
                                       setOpenaiLoggedIn(true);
                                       setOpenaiEmail(result.email);
-                                      const [settings, assistantsConfig] = await Promise.all([
-                                        window.electron.getUserSettings(),
-                                        window.electron.getAssistantsConfig(),
-                                      ]);
-                                      const migration = maybeSwitchDefaultAssistantToOpenAI(assistantsConfig, {
-                                        hasClaudeAuth: !!settings.anthropicAuthToken?.trim(),
-                                      });
-                                      if (migration.changed) {
-                                        await window.electron.saveAssistantsConfig(migration.config);
-                                      }
                                       await loadOpenAIStatus();
-                                      setOpenaiDefaultAssistantReady(defaultAssistantUsesProvider(migration.config, "openai"));
                                     } else {
                                       setOpenaiError(result.error || "登录失败");
                                     }

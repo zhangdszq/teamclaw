@@ -10,6 +10,7 @@ import { getMissingOpenAIScopes, getValidOpenAIToken } from "./openai-auth.js";
 import { loadUserSettings } from "./user-settings.js";
 import crypto from "crypto";
 import { recordUsage } from "./usage-tracker.js";
+import { resolveOpenAIApiKey, resolveOpenAIBaseUrl, resolveOpenAIModel } from "./embedded-openai-config.js";
 
 let proxyServer: Server | null = null;
 let proxyPort: number | null = null;
@@ -569,6 +570,9 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
 
   // Resolve auth: session override API key > global API key > OAuth token
   const settings = loadUserSettings();
+  const resolvedGlobalApiKey = resolveOpenAIApiKey(settings);
+  const resolvedGlobalBaseUrl = resolveOpenAIBaseUrl(settings);
+  const resolvedGlobalModel = resolveOpenAIModel(settings);
   let token: string | null = null;
   let upstreamBase = "https://api.openai.com";
   let upstreamPath = "/v1/responses";
@@ -579,13 +583,13 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
 
   if (routeApiKey) {
     token = routeApiKey;
-    const base = routeBaseUrl || settings.openaiBaseUrl;
+    const base = routeBaseUrl || resolvedGlobalBaseUrl;
     if (base) {
       upstreamBase = base.replace(/\/+$/, "").replace(/\/v1$/, "");
     }
-  } else if (settings.openaiApiKey) {
-    token = settings.openaiApiKey;
-    const base = routeBaseUrl || settings.openaiBaseUrl;
+  } else if (resolvedGlobalApiKey) {
+    token = resolvedGlobalApiKey;
+    const base = routeBaseUrl || resolvedGlobalBaseUrl;
     if (base) {
       upstreamBase = base.replace(/\/+$/, "").replace(/\/v1$/, "");
     }
@@ -602,7 +606,7 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
   }
 
   if (!token) {
-    const missingScopes = !routeApiKey && !settings.openaiApiKey
+    const missingScopes = !routeApiKey && !resolvedGlobalApiKey
       ? getMissingOpenAIScopes(settings.openaiTokens?.accessToken)
       : [];
     const message = missingScopes.length > 0
@@ -628,11 +632,11 @@ async function handleProxyRequest(req: IncomingMessage, res: ServerResponse): Pr
   const openAIPayload = convertAnthropicToResponsesAPI(anthropicReq);
   if (routeModel) {
     openAIPayload.model = routeModel;
-  } else if (settings.openaiModel) {
-    openAIPayload.model = settings.openaiModel;
+  } else if (resolvedGlobalModel) {
+    openAIPayload.model = resolvedGlobalModel;
   }
   const mappedModel = openAIPayload.model as string;
-  const authMethod = routeApiKey ? "assistant-api-key" : (settings.openaiApiKey ? "global-api-key" : "oauth");
+  const authMethod = routeApiKey ? "assistant-api-key" : (resolvedGlobalApiKey ? "global-api-key" : "oauth");
   console.log(`[openai-proxy] → ${upstreamBase}${upstreamPath} model=${mappedModel} auth=${authMethod} route=${routeId ?? "default"}`);
   let finalUsage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
 

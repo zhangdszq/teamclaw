@@ -27,7 +27,7 @@ app.route('/session', sessionRoutes);
 // Root endpoint
 app.get('/', (c) => {
   return c.json({
-    name: 'AI Team API',
+    name: 'DinoClaw API',
     version: '0.0.2',
     endpoints: {
       health: '/health',
@@ -78,7 +78,7 @@ process.on('SIGINT', () => cleanup());
 
 // Initialize and start server
 async function start() {
-  console.log(`🚀 AI Team API starting...`);
+  console.log(`🚀 DinoClaw API starting...`);
 
   // Initialize session store with data directory from env or default
   const dataDir = process.env.DATA_DIR || process.env.HOME + '/.vk-cowork';

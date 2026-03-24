@@ -151,7 +151,7 @@ const OPENAI_SUCCESS_HTML = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>登录成功</title></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:32px;line-height:1.6;">
   <h2 style="margin:0 0 8px;color:#2C5F2F;">OpenAI 登录成功</h2>
-  <p style="margin:0;color:#444;">请返回 AI Team 应用继续使用。</p>
+  <p style="margin:0;color:#444;">请返回 DinoClaw 应用继续使用。</p>
   <script>setTimeout(() => window.close(), 2500);</script>
 </body></html>`;
 

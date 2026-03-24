@@ -59,8 +59,8 @@ export type AgentProvider = "claude" | "openai";
 
 // Client -> Server events
 export type ClientEvent =
-  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantDiscoverySkillNames?: string[]; assistantPersona?: string } }
-  | { type: "session.continue"; payload: { sessionId: string; prompt: string; assistantSkillNames?: string[]; assistantDiscoverySkillNames?: string[] } }
+  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantDiscoverySkillNames?: string[]; assistantPersona?: string; background?: boolean; workflowSopId?: string; scheduledTaskId?: string; sourceType?: string; sourceChannel?: string } }
+  | { type: "session.continue"; payload: { sessionId: string; prompt: string; assistantSkillNames?: string[]; assistantDiscoverySkillNames?: string[]; sourceType?: string; sourceChannel?: string } }
   | { type: "session.stop"; payload: { sessionId: string } }
   | { type: "session.delete"; payload: { sessionId: string } }
   | { type: "session.list" }

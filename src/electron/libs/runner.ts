@@ -24,6 +24,7 @@ export type RunnerOptions = {
   session: Session;
   resumeSessionId?: string;
   provider?: "claude" | "openai";
+  includeCursorDelegation?: boolean;
   onEvent: (event: ServerEvent) => void;
   onSessionUpdate?: (updates: Partial<Session>) => void;
   onContinueMissingConversation?: () => void | Promise<void>;
@@ -119,6 +120,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
     session,
     resumeSessionId,
     provider,
+    includeCursorDelegation,
     onEvent,
     onSessionUpdate,
     onContinueMissingConversation,
@@ -190,7 +192,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
         ...(effectiveProvider === "claude" && { env: enhancedEnv }),
         ...(effectiveProvider === "openai" && { openaiOverrides: providerOverrides }),
         provider: effectiveProvider,
-        mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId }), ...loadMcporterServers() },
+        mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, workflowSopId: session.workflowSopId, scheduledTaskId: session.scheduledTaskId, includeCursorDelegation }), ...loadMcporterServers() },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
           if (toolName === "AskUserQuestion") {
             if (isNonInteractiveBackgroundSession) {

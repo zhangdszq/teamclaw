@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { EventEmitter } from "events";
-import { loadUserSettings } from "./user-settings.js";
+import { loadUserSettings, type UserSettings } from "./user-settings.js";
+import { hasAvailableOpenAIAuth } from "./embedded-openai-config.js";
 
 // Emits "bot-owner-ids-changed" with { assistantId, platform } when auto-populated
 export const assistantConfigEvents = new EventEmitter();
@@ -44,34 +45,51 @@ export type AssistantReferenceResolution =
 const VK_COWORK_DIR = join(homedir(), ".vk-cowork");
 const ASSISTANTS_FILE = join(VK_COWORK_DIR, "assistants-config.json");
 
+function hasConfiguredOpenAI(
+  settings: Pick<UserSettings, "openaiTokens" | "openaiApiKey">,
+): boolean {
+  return !!settings.openaiTokens?.accessToken || !!settings.openaiApiKey?.trim();
+}
+
 /**
  * Determine which provider to use for the default assistant based on what has
- * been configured.  Claude takes priority when both are available, because
- * it is the primary agent framework and users who have also logged into
- * OpenAI still expect Claude to be the default.
+ * been configured. Claude takes priority when both are available, because
+ * it is the primary agent framework and users who have also configured
+ * OpenAI still expect Claude to remain the default.
  *
- * - Claude: anthropicAuthToken in user-settings  OR  ANTHROPIC_AUTH_TOKEN env var
- * - OpenAI: openaiTokens in user-settings
+ * - Claude: anthropicAuthToken in user-settings OR ANTHROPIC_AUTH_TOKEN env var
+ * - OpenAI: ChatGPT OAuth token OR API key in user-settings
  *
  * Falls back to "claude" when neither is configured.
  */
-export function resolveDefaultProvider(): "claude" | "openai" {
-  const settings = loadUserSettings();
-
+export function resolveDefaultProviderFromSettings(
+  settings: Pick<UserSettings, "anthropicAuthToken" | "openaiTokens" | "openaiApiKey">,
+  envAnthropicAuthToken = process.env.ANTHROPIC_AUTH_TOKEN,
+): "claude" | "openai" {
   const hasClaude =
-    !!settings.anthropicAuthToken ||
-    !!process.env.ANTHROPIC_AUTH_TOKEN;
+    !!settings.anthropicAuthToken?.trim() ||
+    !!envAnthropicAuthToken;
 
-  const hasOpenAI = !!settings.openaiTokens?.accessToken;
+  const hasOpenAI = hasConfiguredOpenAI(settings);
 
   if (hasClaude) return "claude";
   if (hasOpenAI) return "openai";
   return "claude";
 }
 
+export function resolveDefaultProvider(): "claude" | "openai" {
+  const settings = loadUserSettings();
+  const hasClaude =
+    !!settings.anthropicAuthToken?.trim() ||
+    !!process.env.ANTHROPIC_AUTH_TOKEN;
+  if (hasClaude) return "claude";
+  if (hasAvailableOpenAIAuth(settings)) return "openai";
+  return "claude";
+}
+
 // ─── Per-assistant defaults (backfilled on upgrade) ─────────────────────────
 
-export const DEFAULT_PERSONA = `你是小助理，用户的私人 AI 伙伴。
+export const DEFAULT_PERSONA = `你是 Dino 小助理，用户的私人 AI 伙伴。
 - 有温度但不啰嗦，像一个靠谱的老同事
 - 你有自己的判断力和性格，不是一个无条件顺从的工具
 - 你记得和用户之间发生过的事情，会基于共同经历调整自己的行为`;
@@ -117,7 +135,8 @@ function buildDefaultAssistants(): AssistantConfig[] {
   return [
     {
       id: "default-assistant",
-      name: "小助理",
+      name: "Dino 小助理",
+      avatar: "builtin:app-icon",
       provider: resolveDefaultProvider(),
       skillNames: [],
       persona: DEFAULT_PERSONA,
@@ -195,6 +214,32 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
   };
 }
 
+function maybeUpgradeBuiltInDefaultAssistant(config: AssistantsConfig): AssistantsConfig {
+  const settings = loadUserSettings();
+  const hasClaude =
+    !!settings.anthropicAuthToken?.trim() ||
+    !!process.env.ANTHROPIC_AUTH_TOKEN;
+
+  if (hasClaude || !hasAvailableOpenAIAuth(settings)) return config;
+  if (config.assistants.length !== 1) return config;
+
+  const defaultId = config.defaultAssistantId ?? config.assistants[0]?.id;
+  const defaultAssistant = config.assistants.find((assistant) => assistant.id === defaultId);
+  if (!defaultAssistant) return config;
+  if (defaultAssistant.id !== "default-assistant") return config;
+  if (defaultAssistant.provider === "openai") return config;
+  if (defaultAssistant.provider !== "claude") return config;
+
+  return {
+    ...config,
+    assistants: config.assistants.map((assistant) =>
+      assistant.id === defaultAssistant.id
+        ? { ...assistant, provider: "openai" }
+        : assistant,
+    ),
+  };
+}
+
 export function resolveAssistantReference(
   reference: string | undefined | null,
   config: AssistantsConfig = loadAssistantsConfig(),
@@ -221,10 +266,11 @@ export function loadAssistantsConfig(): AssistantsConfig {
     const raw = readFileSync(ASSISTANTS_FILE, "utf8");
     const parsed = JSON.parse(raw) as Partial<AssistantsConfig>;
     const normalized = normalizeConfig(parsed);
-    if (JSON.stringify(normalized) !== JSON.stringify(parsed)) {
-      saveAssistantsConfig(normalized);
+    const upgraded = maybeUpgradeBuiltInDefaultAssistant(normalized);
+    if (JSON.stringify(upgraded) !== JSON.stringify(parsed)) {
+      saveAssistantsConfig(upgraded);
     }
-    return normalized;
+    return upgraded;
   } catch {
     return buildDefaultConfig();
   }
@@ -244,7 +290,7 @@ export function saveAssistantsConfig(config: AssistantsConfig): AssistantsConfig
  */
 export function patchAssistantBotOwnerIds(
   assistantId: string,
-  platform: "telegram" | "dingtalk" | "feishu" | "qqbot",
+  platform: "telegram" | "dingtalk" | "feishu" | "qqbot" | "weixin",
   userId: string,
 ): boolean {
   const config = loadAssistantsConfig();
@@ -257,6 +303,7 @@ export function patchAssistantBotOwnerIds(
 
   const field =
     platform === "telegram" ? "ownerUserIds" :
+    platform === "weixin"   ? "ownerUserIds" :
     platform === "feishu"   ? "ownerOpenIds" :
     platform === "qqbot"    ? "ownerOpenIds" :
                               "ownerStaffIds";

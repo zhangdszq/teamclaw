@@ -2736,6 +2736,7 @@ export function createSharedMcpServer(opts?: {
   contactKey?: string;
   isOwner?: boolean;
   sensitiveTurnState?: SharedMcpSensitiveTurnState;
+  includeCursorDelegation?: boolean;
 }) {
   const assistantId = opts?.assistantId;
   const sessionId = opts?.sessionId;
@@ -2781,7 +2782,7 @@ export function createSharedMcpServer(opts?: {
     // Memory Distillation
     distillMemoryTool,
     // Atomic Power Tools
-    createDelegateToCursorTool(sessionCwd),
+    ...(opts?.includeCursorDelegation === false ? [] : [createDelegateToCursorTool(sessionCwd)]),
     createRunScriptTool(sessionCwd),
     processControlTool,
     clipboardTool,

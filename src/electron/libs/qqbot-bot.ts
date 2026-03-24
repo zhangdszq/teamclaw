@@ -24,6 +24,7 @@ import type { SessionStore } from "./session-store.js";
 import type { StreamMessage } from "../types.js";
 import { createSharedMcpServer, type SharedMcpSensitiveTurnState } from "./shared-mcp.js";
 import { loadMcporterServers } from "./mcporter-loader.js";
+import { trackAnalytics } from "./analytics.js";
 import {
   type ConvMessage,
   type BaseBotOptions,
@@ -45,6 +46,7 @@ import {
 import {
   buildActivatedSkillSection,
   resolveSkillPromptContext,
+  shouldIncludeCursorDelegation,
 } from "./skill-context.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -877,6 +879,16 @@ class QQBotConnection {
       this.opts.defaultCwd,
       this.opts.skillNames,
     );
+    trackAnalytics("bot_claw_trigger", {
+      source_type: "bot",
+      source_channel: "qqbot",
+      assistant_id: this.opts.assistantId,
+      session_id: sessionId,
+      provider,
+      prompt_length: effectiveUserText.length,
+      is_group: isGroup,
+      is_owner: isOwner,
+    });
     const historyLengthBeforeTurn = history.length;
     history.push({ role: "user", content: effectiveUserText });
     while (history.length > MAX_TURNS * 2) history.shift();
@@ -898,6 +910,10 @@ class QQBotConnection {
 
     const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
     const privateWhitelistSection = isOwner ? PRIVATE_WHITELIST_RULE : undefined;
+    const includeCursorDelegation = shouldIncludeCursorDelegation(
+      effectiveUserText,
+      skillContext?.skillName,
+    );
     const system = buildStructuredPersona(
       { ...this.opts, isOwner },
       currentTimeContext,
@@ -919,6 +935,7 @@ class QQBotConnection {
         isOwner,
         sensitiveTurnState,
         persistedMessages,
+        includeCursorDelegation,
         c2cOpenId,
         groupOpenId,
         msgId,
@@ -976,6 +993,7 @@ class QQBotConnection {
     isOwner: boolean,
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
+    includeCursorDelegation: boolean,
     c2cOpenId?: string,
     groupOpenId?: string,
     msgId?: string,
@@ -996,6 +1014,7 @@ class QQBotConnection {
       contactKey,
       isOwner,
       sensitiveTurnState,
+      includeCursorDelegation,
     });
 
     // Per-session MCP with send_file tool

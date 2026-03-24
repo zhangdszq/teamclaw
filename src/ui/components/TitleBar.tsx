@@ -29,8 +29,8 @@ export function TitleBar() {
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       <div className="flex items-center gap-2 pl-3">
-        <img src={appIconUrl} alt="AI Team" className="h-4 w-4 rounded-sm" />
-        <span className="text-xs font-medium text-ink-500 tracking-wide">AI Team</span>
+        <img src={appIconUrl} alt="DinoClaw" className="h-4 w-4 rounded-sm" />
+        <span className="text-xs font-medium text-ink-500 tracking-wide">DinoClaw</span>
       </div>
 
       <div

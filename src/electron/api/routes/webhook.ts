@@ -77,6 +77,8 @@ webhook.post('/:assistantId', async (c) => {
         assistantPersona: assistant?.persona,
         provider: assistant?.provider ?? 'claude',
         model: assistant?.model,
+        sourceType: 'system',
+        sourceChannel: 'webhook',
       },
     });
 

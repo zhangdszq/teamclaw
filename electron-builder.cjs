@@ -1,4 +1,10 @@
 const arch = process.env.BUILD_ARCH; // 'arm64' | 'x64'
+const updateUrl = (process.env.ALIYUN_OSS_UPDATE_URL || "").replace(/\/+$/, "");
+const enableNotarize = Boolean(
+  process.env.APPLE_ID &&
+  process.env.APPLE_APP_SPECIFIC_PASSWORD &&
+  process.env.APPLE_TEAM_ID
+);
 
 const macSidecar =
   arch === 'x64'
@@ -9,6 +15,16 @@ const macSidecar =
 module.exports = {
   appId: 'com.aiteam.app',
   productName: 'AI Team',
+  ...(updateUrl
+    ? {
+        publish: [
+          {
+            provider: 'generic',
+            url: updateUrl,
+          },
+        ],
+      }
+    : {}),
   files: [
     'package.json',
     { from: 'dist-electron', to: 'dist-electron', filter: ['**/*'] },
@@ -27,12 +43,12 @@ module.exports = {
   ],
   icon: './app-icon.png',
   mac: {
-    target: 'dmg',
+    target: ['dmg', 'zip'],
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
     hardenedRuntime: true,
     gatekeeperAssess: false,
-    notarize: false,
+    notarize: enableNotarize,
     extraResources: [
       macSidecar,
       { from: 'cli-bundle', to: 'cli-bundle', filter: ['**/*', '!.git'] },

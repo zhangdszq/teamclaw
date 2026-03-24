@@ -8,6 +8,7 @@ import type { StreamMessage } from "../types";
 import MDContent, { ImagePreviewOverlay, normalizeImageSrc } from "../render/markdown";
 import { RichMessageContent } from "../render/rich-message";
 import { copyMessageAsCompositeImage, copyWidgetsAsImage } from "../render/WidgetRenderer";
+import { extractPathFromError, isPermissionError } from "../lib/permission-errors";
 
 type MessageContent = SDKAssistantMessage["message"]["content"][number];
 type ToolResultContent = SDKUserMessage["message"]["content"][number];
@@ -75,17 +76,6 @@ function extractTagContent(input: string, tag: string): string | null {
   return match ? match[1] : null;
 }
 
-// Check if error is a macOS permission error
-const isPermissionError = (content: string): boolean => {
-  const permissionPatterns = [
-    /Operation not permitted/i,
-    /EPERM/i,
-    /Permission denied/i,
-    /access denied/i,
-  ];
-  return permissionPatterns.some(pattern => pattern.test(content));
-};
-
 // Check if error is a file size limit error (Claude SDK built-in limit)
 const isFileSizeLimitError = (content: string): boolean => {
   return /exceeds maximum allowed size/i.test(content);
@@ -100,25 +90,9 @@ const extractFileSizeInfo = (content: string): { actualSize: string; maxSize: st
   return null;
 };
 
-// Extract path from permission error
-const extractPathFromError = (content: string): string | null => {
-  // Match patterns like "/Users/will/Downloads" or "ls: /path: Operation not permitted"
-  const patterns = [
-    /(?:ls|cat|cd|rm|cp|mv|open|read|write):\s*([\/~][^\s:]+)/i,
-    /(?:accessing|reading|writing|opening)\s+['"]?([\/~][^\s'"]+)/i,
-    /(\/Users\/[^\s:]+)/,
-  ];
-  for (const pattern of patterns) {
-    const match = content.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
-};
 
 const ToolResult = ({ messageContent }: { messageContent: ToolResultContent }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [granting, setGranting] = useState(false);
-  const [accessGranted, setAccessGranted] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const isFirstRender = useRef(true);
   let lines: string[] = [];
@@ -158,29 +132,6 @@ const ToolResult = ({ messageContent }: { messageContent: ToolResultContent }) =
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [hasMoreLines, isExpanded]);
 
-  const handleGrantAccess = async () => {
-    setGranting(true);
-    try {
-      // First try to request folder access via dialog
-      const result = await window.electron.requestFolderAccess(errorPath || undefined);
-      if (result.granted) {
-        setAccessGranted(true);
-      } else {
-        // If user cancelled, open system preferences
-        await window.electron.openPrivacySettings();
-        // Assume user will grant access in system preferences
-        setAccessGranted(true);
-      }
-    } catch (error) {
-      console.error("Failed to request access:", error);
-      // Fallback to opening system preferences
-      await window.electron.openPrivacySettings();
-      setAccessGranted(true);
-    } finally {
-      setGranting(false);
-    }
-  };
-
   return (
     <div className="flex flex-col mt-4">
       <div className="text-[13px] font-semibold text-accent">Output</div>
@@ -194,8 +145,7 @@ const ToolResult = ({ messageContent }: { messageContent: ToolResultContent }) =
             <span>{isExpanded ? "Collapse" : `Show ${lines.length - MAX_VISIBLE_LINES} more lines`}</span>
           </button>
         )}
-        {/* Permission error - show grant access button or success message */}
-        {hasPermissionError && !accessGranted && (
+        {hasPermissionError && (
           <div className="mt-3 pt-3 border-t border-ink-900/10">
             <div className="flex items-start gap-2 text-warning text-sm mb-2">
               <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2">
@@ -203,35 +153,10 @@ const ToolResult = ({ messageContent }: { messageContent: ToolResultContent }) =
                 <line x1="12" y1="9" x2="12" y2="13" />
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
-              <span>macOS 需要授权访问此文件夹{errorPath ? `：${errorPath}` : ""}</span>
-            </div>
-            <button
-              onClick={handleGrantAccess}
-              disabled={granting}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
-            >
-              {granting ? (
-                <span className="flex items-center gap-1.5">
-                  <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
-                    <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                  授权中...
-                </span>
-              ) : (
-                "授予文件夹访问权限"
-              )}
-            </button>
-          </div>
-        )}
-        {hasPermissionError && accessGranted && (
-          <div className="mt-3 pt-3 border-t border-ink-900/10">
-            <div className="flex items-center gap-2 text-success text-sm">
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                <polyline points="22 4 12 14.01 9 11.01" />
-              </svg>
-              <span>已授权，请重新执行任务</span>
+              <div>
+                <div>macOS 需要授权访问此文件夹{errorPath ? `：${errorPath}` : ""}</div>
+                <div className="mt-1 text-xs text-ink-500">请在下方授权后继续当前任务。</div>
+              </div>
             </div>
           </div>
         )}

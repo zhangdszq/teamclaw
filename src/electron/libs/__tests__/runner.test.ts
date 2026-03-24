@@ -66,6 +66,8 @@ describe("runClaude continue fallback", () => {
   beforeEach(() => {
     mockState.runAgent.mockReset();
     mockState.buildSmartMemoryContext.mockReset();
+    mockState.createSharedMcpServer.mockReset();
+    mockState.createSharedMcpServer.mockReturnValue({});
     mockState.buildSmartMemoryContext.mockResolvedValue(null);
   });
 
@@ -170,6 +172,22 @@ describe("runClaude continue fallback", () => {
     });
     expect(onEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "permission.request" }),
+    );
+  });
+
+  it("passes includeCursorDelegation through to shared MCP creation", async () => {
+    mockState.runAgent.mockResolvedValue((async function* () {})());
+
+    await runClaude({
+      prompt: "执行任务",
+      session: createSession() as any,
+      includeCursorDelegation: false,
+      onEvent: vi.fn(),
+    });
+    await flushAsyncWork();
+
+    expect(mockState.createSharedMcpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ includeCursorDelegation: false }),
     );
   });
 });

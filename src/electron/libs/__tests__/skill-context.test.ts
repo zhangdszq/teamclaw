@@ -15,6 +15,7 @@ import {
   partitionInstalledSkillNames,
   resolveSkillCommand,
   resolveSkillPromptContext,
+  shouldIncludeCursorDelegation,
 } from "../skill-context.js";
 
 const assistantSkills: SkillMatchCandidate[] = [
@@ -323,5 +324,16 @@ version: 0.1.0
       availableSkillNames: ["adjust-report"],
       missingSkillNames: ["missing-skill"],
     });
+  });
+
+  it("only includes Cursor delegation when the skill is installed and intent is explicit", () => {
+    const installedSkills = new Map([
+      ["operate-coding-tools", { name: "operate-coding-tools", label: "操控编程工具", description: "Cursor 工作流" }],
+    ]);
+
+    expect(shouldIncludeCursorDelegation("请用 Cursor 看一下这个仓库", undefined, installedSkills)).toBe(true);
+    expect(shouldIncludeCursorDelegation("继续处理这个问题", "operate-coding-tools", installedSkills)).toBe(true);
+    expect(shouldIncludeCursorDelegation("继续处理这个问题", undefined, installedSkills)).toBe(false);
+    expect(shouldIncludeCursorDelegation("请用 Cursor 看一下这个仓库", undefined, new Map())).toBe(false);
   });
 });

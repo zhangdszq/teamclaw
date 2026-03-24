@@ -29,6 +29,7 @@ import type { SessionStore } from "./session-store.js";
 import type { StreamMessage } from "../types.js";
 import { createSharedMcpServer, type SharedMcpSensitiveTurnState } from "./shared-mcp.js";
 import { loadMcporterServers } from "./mcporter-loader.js";
+import { trackAnalytics } from "./analytics.js";
 import {
   type ConvMessage,
   type BaseBotOptions,
@@ -51,6 +52,7 @@ import { savePendingTask, removePendingTask, loadPendingTasks } from "./pending-
 import {
   buildActivatedSkillSection,
   resolveSkillPromptContext,
+  shouldIncludeCursorDelegation,
 } from "./skill-context.js";
 
 function getLocalIp(): string {
@@ -1870,6 +1872,34 @@ class DingtalkConnection {
       return;
     }
 
+    // ── 群ID 查询命令（仅群聊生效）─────────────────────────────────────────
+    const isGroupIdQuery =
+      cmdText === "群ID" ||
+      cmdText === "群id" ||
+      cmdText === "群Id" ||
+      cmdText === "获取群ID" ||
+      cmdText === "获取群id" ||
+      cmdText === "/groupid" ||
+      cmdText === "/群id";
+    if (isGroupIdQuery) {
+      const isGroupCmd = msg.conversationType === "2";
+      const convId = msg.conversationId ?? "（未知）";
+      const reply = isGroupCmd
+        ? [
+            "**本群 ID（openConversationId）**",
+            "",
+            `\`${convId}\``,
+            "",
+            "可将此 ID 填入群推送白名单（groupPolicy=allowlist → allowFrom），或用于主动发送消息到本群。",
+          ].join("\n")
+        : "此命令仅在群聊中有效，请在群里 @我 并发送「群ID」。";
+      await this.sendMarkdown(msg.sessionWebhook, reply, msg).catch((e) =>
+        console.warn("[DingTalk] Failed to send group ID reply:", e),
+      );
+      if (dedupKey) this.inflight.delete(dedupKey);
+      return;
+    }
+
     // In markdown mode there is no "thinking" card, so send an immediate ack
     // to let the user know the bot has received the message.
     if (!useCardMode) {
@@ -1958,6 +1988,16 @@ class DingtalkConnection {
       this.opts.defaultCwd,
       this.opts.skillNames,
     );
+    trackAnalytics("bot_claw_trigger", {
+      source_type: "bot",
+      source_channel: "dingtalk",
+      assistant_id: this.opts.assistantId,
+      session_id: sessionId,
+      provider,
+      prompt_length: effectiveUserText.length,
+      has_files: hasFiles,
+      is_owner: isOwner,
+    });
     const historyLengthBeforeTurn = history.length;
     history.push({ role: "user", content: effectiveUserText });
     while (history.length > MAX_TURNS * 2) history.shift();
@@ -1981,6 +2021,10 @@ class DingtalkConnection {
 
     const skillSection = buildActivatedSkillSection(skillContext?.skillContent);
     const privateWhitelistSection = effectiveIsOwner ? PRIVATE_WHITELIST_RULE : undefined;
+    const includeCursorDelegation = shouldIncludeCursorDelegation(
+      effectiveUserText,
+      skillContext?.skillName,
+    );
     const system = buildStructuredPersona(
       { ...(this.opts as BaseBotOptions), isOwner: effectiveIsOwner },
       currentTimeContext,
@@ -2010,6 +2054,7 @@ class DingtalkConnection {
           effectiveIsOwner,
           sensitiveTurnState,
           persistedMessages,
+          includeCursorDelegation,
           hasFiles,
           contactKey,
         );
@@ -2026,6 +2071,7 @@ class DingtalkConnection {
           effectiveIsOwner,
           sensitiveTurnState,
           persistedMessages,
+          includeCursorDelegation,
           hasFiles,
           contactKey,
         );
@@ -2046,6 +2092,7 @@ class DingtalkConnection {
           effectiveIsOwner,
           sensitiveTurnState,
           persistedMessages,
+          includeCursorDelegation,
           hasFiles,
           contactKey,
         );
@@ -2107,6 +2154,7 @@ class DingtalkConnection {
     isOwner: boolean,
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
+    includeCursorDelegation: boolean,
     hasFiles?: boolean,
     contactKey?: string,
   ): Promise<string> {
@@ -2117,6 +2165,7 @@ class DingtalkConnection {
       contactKey,
       isOwner,
       sensitiveTurnState,
+      includeCursorDelegation,
     });
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();
@@ -2208,6 +2257,7 @@ class DingtalkConnection {
     isOwner: boolean,
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
+    includeCursorDelegation: boolean,
     hasFiles?: boolean,
     contactKey?: string,
   ): Promise<string> {
@@ -2218,6 +2268,7 @@ class DingtalkConnection {
       contactKey,
       isOwner,
       sensitiveTurnState,
+      includeCursorDelegation,
     });
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();

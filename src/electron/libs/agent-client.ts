@@ -153,7 +153,7 @@ export async function promptOnce(prompt: string, opts?: PromptOnceOpts): Promise
 export async function runAgent(prompt: string, opts: RunAgentOpts = {}): Promise<AsyncIterable<SDKMessage>> {
   const { env, cleanup } = await getEnvForProvider(opts.provider, opts.env, opts.openaiOverrides);
   console.log("[agent-client] runAgent called, provider:", opts.provider ?? "claude", "cwd:", opts.cwd, "resume:", opts.resume ?? "none");
-  const settingSources = opts.settingSources ?? getSettingSources();
+  const settingSources = opts.settingSources ?? (opts.provider === "openai" ? [] : getSettingSources());
 
   if (opts.provider === "openai") {
     console.log(

@@ -8,6 +8,7 @@ import { buildSmartMemoryContext } from '../../libs/memory-store.js';
 import { loadAssistantsConfig } from '../../libs/assistants-config.js';
 import { loadUserSettings } from '../../libs/user-settings.js';
 import { WIDGET_SYSTEM_PROMPT } from '../../libs/widget-guidelines.js';
+import { getClaudeCliSearchDirs, resolveClaudeCodePath } from '../../libs/claude-cli-resolver.js';
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -30,6 +31,7 @@ export type RunnerOptions = {
   resumeSessionId?: string;
   model?: string;
   provider?: AgentProvider;
+  includeCursorDelegation?: boolean;
   onSessionUpdate?: (updates: Partial<Session>) => void;
 };
 
@@ -38,66 +40,18 @@ const activeControllers = new Map<string, AbortController>();
 
 // Get Claude Code CLI path
 function getClaudeCodePath(): string | undefined {
-  // Check for bundled CLI first
-  const bundledPath = process.env.CLAUDE_CLI_PATH;
-  if (bundledPath && existsSync(bundledPath)) {
-    return bundledPath;
-  }
-
-  // On Windows, don't return .cmd path - let SDK handle it via PATH
-  // The SDK has issues spawning .cmd files directly
-  if (process.platform === 'win32') {
-    // Check if claude is in PATH by looking for the actual executable
-    const npmPath = join(process.env.APPDATA || '', 'npm');
-    const claudeJs = join(npmPath, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
-    if (existsSync(claudeJs)) {
-      return claudeJs;
-    }
-    // Return undefined to let SDK find it via PATH
-    return undefined;
-  }
-
-  // Check for system-installed Claude Code on Unix
-  const systemPaths = [
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-    join(homedir(), '.npm-global/bin/claude'),
-  ];
-
-  for (const p of systemPaths) {
-    if (existsSync(p)) {
-      return p;
-    }
-  }
-
-  return undefined;
+  return resolveClaudeCodePath({
+    cwd: process.cwd(),
+    env: process.env,
+  });
 }
 
 // Build enhanced environment
 function getEnhancedEnv(assistantId?: string): Record<string, string | undefined> {
-  const home = homedir();
-  
-  let additionalPaths: string[];
-  if (process.platform === 'win32') {
-    additionalPaths = [
-      join(process.env.APPDATA || '', 'npm'),
-      join(process.env.LOCALAPPDATA || '', 'npm'),
-      join(home, '.bun', 'bin'),
-    ];
-  } else {
-    additionalPaths = [
-      '/usr/local/bin',
-      '/opt/homebrew/bin',
-      `${home}/.bun/bin`,
-      `${home}/.nvm/versions/node/v20.0.0/bin`,
-      `${home}/.nvm/versions/node/v22.0.0/bin`,
-      `${home}/.nvm/versions/node/v18.0.0/bin`,
-      `${home}/.volta/bin`,
-      `${home}/.fnm/aliases/default/bin`,
-      '/usr/bin',
-      '/bin',
-    ];
-  }
+  const additionalPaths = getClaudeCliSearchDirs({
+    cwd: process.cwd(),
+    env: process.env,
+  });
 
   // Add cli-bundle directory to PATH if CLAUDE_CLI_PATH is set
   const cliPath = process.env.CLAUDE_CLI_PATH;
@@ -187,7 +141,7 @@ export function stopSession(sessionId: string): boolean {
 
 // Run Claude query (supports both claude and openai providers via proxy)
 export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerEvent> {
-  const { prompt, session, resumeSessionId, model, provider, onSessionUpdate } = options;
+  const { prompt, session, resumeSessionId, model, provider, includeCursorDelegation, onSessionUpdate } = options;
   const abortController = new AbortController();
   const effectiveProvider = provider ?? session.provider ?? 'claude';
 
@@ -241,7 +195,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
       pathToClaudeCodeExecutable: claudeCodePath,
       provider: effectiveProvider,
       systemPrompt: WIDGET_SYSTEM_PROMPT,
-      mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd }), ...loadMcporterServers() },
+      mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionId: session.id, sessionCwd: session.cwd, includeCursorDelegation }), ...loadMcporterServers() },
       canUseTool: async (toolName, input, { signal, toolUseID }) => {
         if (toolName === 'AskUserQuestion') {
           if (isNonInteractiveBackgroundSession) {
@@ -444,9 +398,10 @@ export async function generateSkillTags(
   assistantName: string,
 ): Promise<string[]> {
   const { loadUserSettings } = await import('../../libs/user-settings.js');
+  const { hasAvailableOpenAIAuth } = await import('../../libs/embedded-openai-config.js');
   const settings = loadUserSettings();
 
-  const hasOpenAI = !!settings.openaiTokens?.accessToken;
+  const hasOpenAI = hasAvailableOpenAIAuth(settings);
   const hasClaude =
     !!settings.anthropicAuthToken ||
     !!process.env.ANTHROPIC_AUTH_TOKEN;

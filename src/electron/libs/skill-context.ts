@@ -583,6 +583,16 @@ export function resolveSkillPromptContext(
   };
 }
 
+export function shouldIncludeCursorDelegation(
+  prompt: string,
+  activatedSkillName?: string,
+  installedSkills: Map<string, SkillInfo> = loadInstalledSkills(),
+): boolean {
+  if (!installedSkills.has("operate-coding-tools")) return false;
+  if (prompt.toLowerCase().includes("cursor")) return true;
+  return activatedSkillName === "operate-coding-tools";
+}
+
 export function buildActivatedSkillSection(
   skillContent?: string | null,
   options?: {

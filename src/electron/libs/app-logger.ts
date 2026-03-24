@@ -47,7 +47,7 @@ function buildAlertMarkdown(kind: string, err: unknown, settings?: UserInfo): st
     : "";
 
   const lines: string[] = [
-    `### AI Team 崩溃告警`,
+    `### DinoClaw 崩溃告警`,
     ``,
     `**类型**: ${kind}`,
     ``,
@@ -75,7 +75,7 @@ export async function sendDingtalkAlert(text: string): Promise<void> {
 
   const body = JSON.stringify({
     msgtype: "markdown",
-    markdown: { title: "AI Team 崩溃告警", text },
+    markdown: { title: "DinoClaw 崩溃告警", text },
   });
 
   await fetch(url, {
@@ -104,7 +104,7 @@ export async function sendTestDingtalkAlert(
   const now = new Date().toLocaleString("zh-CN", { hour12: false });
 
   const lines: string[] = [
-    `### AI Team 测试告警`,
+    `### DinoClaw 测试告警`,
     ``,
     `**状态**: 告警配置验证成功`,
     ``,
@@ -123,7 +123,7 @@ export async function sendTestDingtalkAlert(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         msgtype: "markdown",
-        markdown: { title: "AI Team 测试告警", text },
+        markdown: { title: "DinoClaw 测试告警", text },
       }),
     });
     if (!resp.ok) {

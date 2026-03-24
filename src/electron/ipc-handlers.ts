@@ -5,6 +5,7 @@
 import { BrowserWindow } from 'electron';
 import type { ClientEvent, ServerEvent } from './types.js';
 import { SessionStore, type Session } from './libs/session-store.js';
+import { resolveSessionDbPath } from './libs/session-db-path.js';
 import { runClaude, type RunnerHandle } from './libs/runner.js';
 import { isEmbeddedApiRunning } from './api/server.js';
 import {
@@ -34,6 +35,7 @@ import {
   normalizeSkillNames,
   partitionInstalledSkillNames,
   resolveSkillPromptContext,
+  shouldIncludeCursorDelegation,
 } from './libs/skill-context.js';
 import {
   buildContinuePrompt,
@@ -41,9 +43,11 @@ import {
   isResumeReadyMessage,
   shouldFallbackFromContinueError,
 } from './libs/session-resume.js';
+import { trackAnalytics, errorAnalytics, perfAnalytics } from './libs/analytics.js';
+import { getUsageSummary, type UsageSummary } from './libs/usage-tracker.js';
 
 // Local session store for persistence (SQLite)
-const DB_PATH = join(app.getPath('userData'), 'sessions.db');
+const DB_PATH = resolveSessionDbPath();
 const sessions = new SessionStore(DB_PATH);
 
 function areSkillNamesEqual(a?: string[], b?: string[]): boolean {
@@ -102,6 +106,103 @@ const runnerHandles = new Map<string, RunnerHandle>();
 
 // Track active sessions
 const activeSessions = new Set<string>();
+
+type SessionMetrics = {
+  startedAt: number;
+  firstResponseAt?: number;
+  usageStart: UsageSummary;
+  sourceType?: string;
+  sourceChannel?: string;
+};
+
+const sessionMetrics = new Map<string, SessionMetrics>();
+
+function getUsageSnapshot(): UsageSummary {
+  return getUsageSummary({ range: 'all' });
+}
+
+function diffUsage(current: UsageSummary, base: UsageSummary): UsageSummary {
+  // Usage tracker stores global request rows, so session-level token attribution
+  // here is computed as a best-effort delta between start/end snapshots.
+  const inputTokens = Math.max(0, current.inputTokens - base.inputTokens);
+  const outputTokens = Math.max(0, current.outputTokens - base.outputTokens);
+  const cacheReadTokens = Math.max(0, current.cacheReadTokens - base.cacheReadTokens);
+  const cacheCreationTokens = Math.max(0, current.cacheCreationTokens - base.cacheCreationTokens);
+  return {
+    totalRequests: Math.max(0, current.totalRequests - base.totalRequests),
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+  };
+}
+
+function beginSessionMetrics(
+  sessionId: string,
+  context: { sourceType?: string; sourceChannel?: string } = {},
+): void {
+  const existing = sessionMetrics.get(sessionId);
+  if (existing) {
+    existing.sourceType = context.sourceType ?? existing.sourceType;
+    existing.sourceChannel = context.sourceChannel ?? existing.sourceChannel;
+    return;
+  }
+
+  sessionMetrics.set(sessionId, {
+    startedAt: Date.now(),
+    // Capture the global usage baseline once so completion can recover this session's token delta.
+    usageStart: getUsageSnapshot(),
+    sourceType: context.sourceType,
+    sourceChannel: context.sourceChannel,
+  });
+}
+
+function markFirstResponse(sessionId: string): void {
+  const metrics = sessionMetrics.get(sessionId);
+  if (!metrics || metrics.firstResponseAt) return;
+  metrics.firstResponseAt = Date.now();
+}
+
+function finalizeSessionMetrics(session: Session | undefined, status: string, error?: string): void {
+  if (!session) return;
+  const metrics = sessionMetrics.get(session.id);
+  if (!metrics) return;
+
+  const usage = diffUsage(getUsageSnapshot(), metrics.usageStart);
+  const durationMs = Math.max(0, Date.now() - metrics.startedAt);
+  const baseParams = {
+    session_id: session.id,
+    assistant_id: session.assistantId,
+    provider: session.provider,
+    cwd: session.cwd,
+    status,
+    source_type: metrics.sourceType,
+    source_channel: metrics.sourceChannel,
+    token_input: usage.inputTokens,
+    token_output: usage.outputTokens,
+    token_total: usage.totalTokens,
+    cache_read_tokens: usage.cacheReadTokens,
+    cache_creation_tokens: usage.cacheCreationTokens,
+    usage_requests: usage.totalRequests,
+  };
+
+  if (metrics.firstResponseAt) {
+    // First visible assistant output is used as the user-facing latency marker.
+    perfAnalytics('session_first_response_perf', metrics.firstResponseAt - metrics.startedAt, baseParams);
+  }
+
+  perfAnalytics('session_complete_perf', durationMs, baseParams);
+
+  if (status === 'error') {
+    errorAnalytics('session_run_error', {
+      ...baseParams,
+      error_message: error,
+    });
+  }
+
+  sessionMetrics.delete(session.id);
+}
 
 function extractTextParts(content: unknown): string {
   if (!Array.isArray(content)) return "";
@@ -178,6 +279,29 @@ function broadcast(event: ServerEvent) {
 }
 
 function emit(event: ServerEvent) {
+  if (event.type === 'stream.message') {
+    const { sessionId, message } = event.payload as { sessionId: string; message: any };
+    if (message?.type === 'result') {
+      markFirstResponse(sessionId);
+    }
+    if (message?.type === 'assistant') {
+      const content = Array.isArray(message.message?.content) ? message.message.content : [];
+      const hasVisibleText = content.some((part: any) => part?.type === 'text' && String(part.text ?? '').trim());
+      if (hasVisibleText) {
+        markFirstResponse(sessionId);
+      }
+    }
+  }
+
+  if (event.type === 'permission.request') {
+    trackAnalytics('permission_request_trigger', {
+      source_type: 'session',
+      session_id: event.payload.sessionId,
+      tool_use_id: event.payload.toolUseId,
+      tool_name: event.payload.toolName,
+    });
+  }
+
   // Persist relevant events to local store
   if (event.type === 'session.status' && 'payload' in event) {
     const { sessionId, status } = event.payload as { sessionId: string; status: string };
@@ -193,6 +317,7 @@ function emit(event: ServerEvent) {
     if (isTerminalStatus) {
       sessions.flushQueuedMessages();
       const session = sessions.getSession(sessionId);
+      finalizeSessionMetrics(session, status, (event.payload as { error?: string }).error);
 
       // ── Compaction completion: persist key only on success (BUG 1 fix) ──
       if (session?.title?.startsWith('[记忆压缩]')) {
@@ -487,6 +612,7 @@ async function continueWithLocalHistoryFallback(
   session: Session,
   prompt: string,
   activatedSkillContent?: string,
+  includeCursorDelegation?: boolean,
 ): Promise<void> {
   const history = sessions.getSessionHistory(session.id);
   const fallbackPrompt = buildResumeFallbackPrompt(
@@ -524,6 +650,7 @@ async function continueWithLocalHistoryFallback(
           assistantSkillNames: session.assistantSkillNames,
           assistantDiscoverySkillNames: session.assistantDiscoverySkillNames,
           assistantActivatedSkillContent: activatedSkillContent,
+          includeCursorDelegation,
         },
         (apiEvent) => {
           if ('payload' in apiEvent && 'sessionId' in (apiEvent.payload as any)) {
@@ -564,6 +691,7 @@ async function continueWithLocalHistoryFallback(
       prompt: effectiveFallbackPrompt,
       session,
       provider: toRunnerProvider(sessionProvider),
+      includeCursorDelegation,
       onEvent: emit,
       onSessionUpdate: (updates) => {
         sessions.updateSession(session.id, updates);
@@ -673,6 +801,11 @@ export async function handleClientEvent(event: ClientEvent) {
       assistantId: event.payload.assistantId,
       activatedSkillContent: startSkillContext?.skillContent,
     });
+    const includeCursorDelegation = shouldIncludeCursorDelegation(
+      event.payload.prompt,
+      startSkillContext?.skillName,
+      installedSkills,
+    );
     const session = sessions.createSession({
       cwd: event.payload.cwd,
       title: event.payload.title,
@@ -692,6 +825,21 @@ export async function handleClientEvent(event: ClientEvent) {
 
     sessions.updateSession(session.id, {
       lastPrompt: event.payload.prompt,
+    });
+
+    beginSessionMetrics(session.id, {
+      sourceType: event.payload.sourceType,
+      sourceChannel: event.payload.sourceChannel,
+    });
+    trackAnalytics('session_start_trigger', {
+      session_id: session.id,
+      assistant_id: session.assistantId,
+      provider,
+      cwd: session.cwd,
+      source_type: event.payload.sourceType,
+      source_channel: event.payload.sourceChannel,
+      prompt_length: event.payload.prompt.length,
+      background: Boolean(session.background),
     });
 
     emit({
@@ -725,7 +873,10 @@ export async function handleClientEvent(event: ClientEvent) {
             assistantDiscoverySkillNames: effectiveDiscoverySkillNames,
             assistantPersona: event.payload.assistantPersona,
             assistantActivatedSkillContent: startSkillContext?.skillContent,
+            includeCursorDelegation,
             background: session.background,
+            sourceType: event.payload.sourceType,
+            sourceChannel: event.payload.sourceChannel,
           },
           (apiEvent) => {
             // Map API session ID to local session ID
@@ -772,6 +923,7 @@ export async function handleClientEvent(event: ClientEvent) {
           session,
           resumeSessionId: session.claudeSessionId,
           provider: toRunnerProvider(provider),
+          includeCursorDelegation,
           onEvent: emit,
           onSessionUpdate: (updates) => {
             sessions.updateSession(session.id, updates);
@@ -841,6 +993,20 @@ export async function handleClientEvent(event: ClientEvent) {
       lastPrompt: event.payload.prompt,
     });
 
+    beginSessionMetrics(session.id, {
+      sourceType: event.payload.sourceType,
+      sourceChannel: event.payload.sourceChannel,
+    });
+    trackAnalytics('session_continue_trigger', {
+      session_id: session.id,
+      assistant_id: session.assistantId,
+      provider: session.provider,
+      cwd: session.cwd,
+      source_type: event.payload.sourceType,
+      source_channel: event.payload.sourceChannel,
+      prompt_length: event.payload.prompt.length,
+    });
+
     emit({
       type: 'session.status',
       payload: {
@@ -889,6 +1055,11 @@ export async function handleClientEvent(event: ClientEvent) {
     });
     session.activatedSkillName = continueSkillContext?.skillName ?? session.activatedSkillName;
     session.activatedSkillContent = continueActivatedContent;
+    const includeCursorDelegation = shouldIncludeCursorDelegation(
+      event.payload.prompt,
+      session.activatedSkillName,
+      installedSkills,
+    );
     const canResumeRemotely = Boolean(session.claudeSessionId && session.resumeReady);
 
     if (!canResumeRemotely || shouldSwitchConfiguredSkills) {
@@ -896,6 +1067,7 @@ export async function handleClientEvent(event: ClientEvent) {
         session,
         resolvedContinuePrompt,
         continueActivatedContent,
+        includeCursorDelegation,
       );
       return;
     }
@@ -936,6 +1108,9 @@ export async function handleClientEvent(event: ClientEvent) {
             assistantSkillNames: session.assistantSkillNames,
             assistantDiscoverySkillNames: session.assistantDiscoverySkillNames,
             assistantActivatedSkillContent: continueActivatedContent,
+            includeCursorDelegation,
+            sourceType: event.payload.sourceType,
+            sourceChannel: event.payload.sourceChannel,
           }
         );
         if (shouldFallback) {
@@ -944,6 +1119,7 @@ export async function handleClientEvent(event: ClientEvent) {
             session,
             resolvedContinuePrompt,
             continueActivatedContent,
+            includeCursorDelegation,
           );
         }
       } catch (error) {
@@ -953,6 +1129,7 @@ export async function handleClientEvent(event: ClientEvent) {
             session,
             resolvedContinuePrompt,
             continueActivatedContent,
+            includeCursorDelegation,
           );
           return;
         }
@@ -991,6 +1168,7 @@ export async function handleClientEvent(event: ClientEvent) {
           session,
           resumeSessionId: session.claudeSessionId,
           provider: toRunnerProvider(sessionProvider),
+          includeCursorDelegation,
           onEvent: emit,
           onSessionUpdate: (updates) => {
             sessions.updateSession(session.id, updates);
@@ -1003,6 +1181,7 @@ export async function handleClientEvent(event: ClientEvent) {
               session,
               resolvedContinuePrompt,
               continueActivatedContent,
+              includeCursorDelegation,
             );
           },
         })
@@ -1024,6 +1203,16 @@ export async function handleClientEvent(event: ClientEvent) {
   if (event.type === 'session.stop') {
     const session = sessions.getSession(event.payload.sessionId);
     if (!session) return;
+
+    const metrics = sessionMetrics.get(session.id);
+    trackAnalytics('session_stop_trigger', {
+      session_id: session.id,
+      assistant_id: session.assistantId,
+      provider: session.provider,
+      cwd: session.cwd,
+      source_type: metrics?.sourceType,
+      source_channel: metrics?.sourceChannel,
+    });
 
     if (useEmbeddedApi()) {
       try {
@@ -1083,6 +1272,12 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === 'permission.response') {
+    trackAnalytics('permission_response_trigger', {
+      source_type: 'session',
+      session_id: event.payload.sessionId,
+      tool_use_id: event.payload.toolUseId,
+      behavior: event.payload.result.behavior,
+    });
     if (useEmbeddedApi()) {
       try {
         await apiSendPermissionResponse(

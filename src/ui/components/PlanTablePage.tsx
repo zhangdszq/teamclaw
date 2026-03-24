@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { StreamMessage } from "../types";
 import { useAppStore, type SessionView } from "../store/useAppStore";
+import { resolveAvatarSrc } from "../lib/avatar";
 
 interface PlanTablePageProps {
   onClose: () => void;
@@ -401,8 +402,8 @@ function PlanCard({
 
       <div className="flex items-center justify-between gap-2 mt-1">
         <div className="flex items-center gap-1.5 min-w-0">
-          {assistant?.avatar ? (
-            <img src={assistant.avatar} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover border border-ink-900/10" />
+          {resolveAvatarSrc(assistant?.avatar) ? (
+            <img src={resolveAvatarSrc(assistant?.avatar)} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover border border-ink-900/10" />
           ) : (
             <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-ink-900/10 bg-surface-tertiary text-[8px] font-semibold text-ink-600">
               {assistant?.name?.slice(0, 1).toUpperCase() ?? "?"}
@@ -611,8 +612,8 @@ function StageCard({
 
       <div className="flex items-center justify-between gap-2 mt-1">
         <div className="flex items-center gap-1.5 min-w-0">
-          {assistant?.avatar ? (
-            <img src={assistant.avatar} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover border border-ink-900/10" />
+          {resolveAvatarSrc(assistant?.avatar) ? (
+            <img src={resolveAvatarSrc(assistant?.avatar)} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover border border-ink-900/10" />
           ) : (
             <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-ink-900/10 bg-surface-tertiary text-[8px] font-semibold text-ink-600">
               {assistant?.name?.slice(0, 1).toUpperCase() ?? "?"}

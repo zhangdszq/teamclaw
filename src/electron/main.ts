@@ -11,11 +11,12 @@ setSessionStore(sessions);
 setFeishuSessionStore(sessions);
 setTelegramSessionStore(sessions);
 setQQBotSessionStore(sessions);
+setWeixinSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
 import { loadAssistantsConfig, saveAssistantsConfig, assistantConfigEvents, resolveDefaultProvider, type AssistantConfig, type AssistantsConfig, DEFAULT_PERSONA, DEFAULT_CORE_VALUES, DEFAULT_RELATIONSHIP, DEFAULT_COGNITIVE_STYLE, DEFAULT_OPERATING_GUIDELINES, DEFAULT_HEARTBEAT_RULES } from "./libs/assistants-config.js";
-import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type FeishuBotConfig, type TelegramBotConfig, type QQBotConfig } from "./libs/bot-config.js";
+import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type FeishuBotConfig, type TelegramBotConfig, type QQBotConfig, type WeixinBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
   stopDingtalkBot,
@@ -59,6 +60,24 @@ import {
   sendProactiveQQMessage,
   type QQBotOptions,
 } from "./libs/qqbot-bot.js";
+import {
+  startWeixinBot,
+  stopWeixinBot,
+  getWeixinBotStatus,
+  updateWeixinBotConfig,
+  onWeixinBotStatusChange,
+  onWeixinSessionUpdate,
+  setWeixinSessionStore,
+  beginWeixinQrLogin,
+  waitWeixinQrLogin,
+  abortWeixinQrLogin,
+  type WeixinBotOptions,
+} from "./libs/weixin-bot.js";
+import {
+  listWeixinAccounts,
+  deleteWeixinAccount,
+  setWeixinAccountEnabled,
+} from "./libs/weixin-db.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { ensureBuiltinMcpServers } from "./libs/builtin-mcps.js";
 import { invalidateMcporterCache, getMcporterConfigPath } from "./libs/mcporter-loader.js";
@@ -132,6 +151,19 @@ import {
 } from "./libs/knowledge-store.js";
 import { SHARED_TOOL_CATALOG, type ToolCatalogEntry, registerSopEngineCallbacks } from "./libs/shared-mcp.js";
 import { initUsageTracker, getUsageLogs, getUsageSummary, getProviderStats, clearUsageLogs } from "./libs/usage-tracker.js";
+import { resolveSessionDbPath } from "./libs/session-db-path.js";
+import { setupAutoUpdater } from "./libs/auto-updater.js";
+import {
+    initAnalytics,
+    syncAnalyticsUserContext,
+    setRuntimeContext as setAnalyticsRuntimeContext,
+    track as analyticsTrack,
+    click as analyticsClick,
+    view as analyticsView,
+    log as analyticsLog,
+    error as analyticsError,
+    perf as analyticsPerf,
+} from "./libs/analytics.js";
 
 // ─── Memory janitor: run on startup + every 24 h ─────────────
 function startMemoryJanitor(): void {
@@ -246,6 +278,18 @@ function buildQQBotOptions(assistant: AssistantConfig, userContext: string | und
     };
 }
 
+function buildWeixinBotOptions(assistant: AssistantConfig, userContext: string | undefined, config: WeixinBotConfig): WeixinBotOptions {
+    return {
+        ...buildAssistantRuntimeUpdates(assistant, userContext),
+        accountId: config.accountId,
+        assistantId: assistant.id,
+        dmPolicy: config.dmPolicy,
+        allowFrom: config.allowFrom,
+        ownerUserIds: config.ownerUserIds,
+        mediaEnabled: config.mediaEnabled !== false,
+    };
+}
+
 function hasDingtalkConnectionChanged(previous?: DingtalkBotConfig, next?: DingtalkBotConfig): boolean {
     return !!previous?.connected
         && !!next?.connected
@@ -285,6 +329,18 @@ function hasQQBotConnectionChanged(previous?: QQBotConfig, next?: QQBotConfig): 
         && (
             previous.appId !== next.appId
             || previous.clientSecret !== next.clientSecret
+        );
+}
+
+function hasWeixinConnectionChanged(previous?: WeixinBotConfig, next?: WeixinBotConfig): boolean {
+    return !!previous?.connected
+        && !!next?.connected
+        && (
+            previous.accountId !== next.accountId
+            || previous.dmPolicy !== next.dmPolicy
+            || JSON.stringify(previous.allowFrom ?? []) !== JSON.stringify(next.allowFrom ?? [])
+            || JSON.stringify(previous.ownerUserIds ?? []) !== JSON.stringify(next.ownerUserIds ?? [])
+            || (previous.mediaEnabled !== false) !== (next.mediaEnabled !== false)
         );
 }
 
@@ -360,6 +416,23 @@ async function syncAssistantBotConnections(
             console.error(`[BotSync] Failed to sync QQ Bot for ${assistant.name}:`, err);
         }
     }
+
+    const previousWeixin = previousAssistant?.bots?.weixin as WeixinBotConfig | undefined;
+    const weixin = assistant.bots?.weixin as WeixinBotConfig | undefined;
+    const shouldRunWeixin = !!(weixin?.connected && weixin.accountId);
+    const weixinStatus = getWeixinBotStatus(assistant.id);
+    if (!shouldRunWeixin) {
+        if (weixinStatus !== "disconnected") stopWeixinBot(assistant.id);
+    } else if (
+        hasWeixinConnectionChanged(previousWeixin, weixin)
+        || (weixinStatus !== "connected" && weixinStatus !== "connecting")
+    ) {
+        try {
+            await startWeixinBot(buildWeixinBotOptions(assistant, userContext, weixin));
+        } catch (err) {
+            console.error(`[BotSync] Failed to sync WeChat bot for ${assistant.name}:`, err);
+        }
+    }
 }
 
 function stopAllAssistantBots(assistantId: string): void {
@@ -367,6 +440,7 @@ function stopAllAssistantBots(assistantId: string): void {
     stopTelegramBot(assistantId);
     stopFeishuBot(assistantId);
     stopQQBot(assistantId);
+    stopWeixinBot(assistantId);
 }
 
 // ─── Auto-connect bots on startup ────────────────────────────
@@ -411,6 +485,7 @@ app.on("ready", async () => {
 
     // Ensure app name shows correctly in dev mode (overrides the default "Electron")
     app.setName("AI Team");
+    initAnalytics();
 
     // Set Dock icon on macOS (required in dev mode; production uses .icns from app bundle)
     if (process.platform === "darwin" && app.dock) {
@@ -421,45 +496,7 @@ app.on("ready", async () => {
         }
     }
 
-    // Run memory janitor once on startup, then every 24 h
-    startMemoryJanitor();
-    setInterval(startMemoryJanitor, JANITOR_INTERVAL_MS);
-    refreshAllMemoryAbstracts();
-    setInterval(refreshAllMemoryAbstracts, ABSTRACT_REFRESH_INTERVAL_MS);
-
-    // Verify stored OpenAI tokens
-    ensureOpenAIAuthSync();
-
-    // Seed built-in MCP servers (opennews, opentwitter) into ~/.claude/settings.json
-    ensureBuiltinMcpServers();
-
-    // Watch mcporter.json for changes — new sessions auto-pick-up added/removed HTTP MCP servers
-    try {
-        const mcporterPath = getMcporterConfigPath();
-        if (existsSync(mcporterPath)) {
-            const { watchFile } = await import("fs");
-            watchFile(mcporterPath, { interval: 2000 }, () => {
-                invalidateMcporterCache();
-                console.log("[main] mcporter.json changed — new sessions will use updated MCP servers");
-            });
-        }
-    } catch (err) {
-        console.warn("[main] Failed to watch mcporter.json:", err);
-    }
-
-    // Deploy built-in skills (skill-creator, etc.) to ~/.claude/skills/ and ~/.codex/skills/
-    seedBuiltinSkills();
-
-    // Start the embedded API server
-    console.log("Starting embedded API server...");
-    const started = await startEmbeddedApi();
-    if (started) {
-        console.log("Embedded API server started successfully");
-        // Wire webhook route to the same session handler
-        setWebhookSessionRunner(handleClientEvent);
-    } else {
-        console.error("Failed to start embedded API server");
-    }
+    // ─── Create main window ASAP so the renderer starts loading in parallel ───
     function createMainWindow(): BrowserWindow {
         const isMac = process.platform === "darwin";
         const win = new BrowserWindow({
@@ -467,6 +504,7 @@ app.on("ready", async () => {
             height: 800,
             minWidth: 900,
             minHeight: 600,
+            show: false,
             webPreferences: {
                 preload: getPreloadPath(),
             },
@@ -475,6 +513,10 @@ app.on("ready", async () => {
                 ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 15, y: 18 } }
                 : { frame: false }),
             backgroundColor: "#FAF9F6",
+        });
+
+        win.once("ready-to-show", () => {
+            win.show();
         });
 
         const devServerUrl = getRendererDevUrl();
@@ -497,6 +539,89 @@ app.on("ready", async () => {
 
     let mainWindow = createMainWindow();
 
+    function revealMainWindow(options: { stealFocus?: boolean } = {}): void {
+        const { stealFocus = true } = options;
+
+        if (mainWindow.isDestroyed()) {
+            mainWindow = createMainWindow();
+        }
+
+        if (process.platform === "darwin") {
+            app.dock?.show();
+        }
+
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+
+        mainWindow.setAlwaysOnTop(true, "screen-saver");
+        mainWindow.moveTop();
+
+        setTimeout(() => {
+            if (mainWindow.isDestroyed()) return;
+
+            if (stealFocus) {
+                app.focus({ steal: true });
+            } else {
+                app.focus();
+            }
+            mainWindow.focus();
+
+            setTimeout(() => {
+                if (!mainWindow.isDestroyed()) {
+                    mainWindow.setAlwaysOnTop(false);
+                }
+            }, 1200);
+        }, 80);
+    }
+
+    // ─── Non-blocking init: these run while the renderer loads ─────────
+    // Start API server in parallel with window loading
+    console.log("Starting embedded API server...");
+    const apiPromise = startEmbeddedApi();
+
+    // Lightweight sync checks (fast, ~5ms each)
+    ensureOpenAIAuthSync();
+    ensureBuiltinMcpServers();
+
+    // Watch mcporter.json for changes — new sessions auto-pick-up added/removed HTTP MCP servers
+    try {
+        const mcporterPath = getMcporterConfigPath();
+        if (existsSync(mcporterPath)) {
+            const { watchFile } = await import("fs");
+            watchFile(mcporterPath, { interval: 2000 }, () => {
+                invalidateMcporterCache();
+                console.log("[main] mcporter.json changed — new sessions will use updated MCP servers");
+            });
+        }
+    } catch (err) {
+        console.warn("[main] Failed to watch mcporter.json:", err);
+    }
+
+    // Defer heavier disk-I/O work so it doesn't block window paint
+    setTimeout(() => {
+        seedBuiltinSkills();
+        startMemoryJanitor();
+        setInterval(startMemoryJanitor, JANITOR_INTERVAL_MS);
+        refreshAllMemoryAbstracts();
+        setInterval(refreshAllMemoryAbstracts, ABSTRACT_REFRESH_INTERVAL_MS);
+    }, 0);
+
+    // Await API server (likely already done by now since window load takes longer)
+    const started = await apiPromise;
+    if (started) {
+        console.log("Embedded API server started successfully");
+        setWebhookSessionRunner(handleClientEvent);
+    } else {
+        console.error("Failed to start embedded API server");
+    }
+
+    setupAutoUpdater({
+        enabled: app.isPackaged && !isDev(),
+        onBeforeInstall: () => {
+            isQuitting = true;
+        },
+    });
+
     // ─── System tray ─────────────────────────────────────────────────
     try {
         let trayIcon: Electron.NativeImage;
@@ -513,12 +638,7 @@ app.on("ready", async () => {
         const tray = new Tray(trayIcon);
         tray.setToolTip("VK Cowork");
         tray.on("click", () => {
-            if (mainWindow.isDestroyed()) {
-                mainWindow = createMainWindow();
-            }
-            if (mainWindow.isMinimized()) mainWindow.restore();
-            if (!mainWindow.isVisible()) mainWindow.show();
-            mainWindow.focus();
+            revealMainWindow({ stealFocus: false });
         });
         tray.setContextMenu(Menu.buildFromTemplate([
             { label: "打开主窗口", click: () => tray.emit("click") },
@@ -834,6 +954,41 @@ app.on("ready", async () => {
         return getStaticData();
     });
 
+    ipcMainHandle("analytics-set-context", (_: any, context: Record<string, unknown>) => {
+        setAnalyticsRuntimeContext(context ?? {});
+        return true;
+    });
+
+    ipcMainHandle("analytics-track", (_: any, eventId: string, params?: Record<string, unknown>) => {
+        analyticsTrack(eventId, params ?? {});
+        return true;
+    });
+
+    ipcMainHandle("analytics-click", (_: any, eventId: string, params?: Record<string, unknown>) => {
+        analyticsClick(eventId, params ?? {});
+        return true;
+    });
+
+    ipcMainHandle("analytics-view", (_: any, eventId: string, params?: Record<string, unknown>) => {
+        analyticsView(eventId, params ?? {});
+        return true;
+    });
+
+    ipcMainHandle("analytics-log", (_: any, data: string | Record<string, unknown>, params?: Record<string, unknown>) => {
+        analyticsLog(data as any, params ?? {});
+        return true;
+    });
+
+    ipcMainHandle("analytics-error", (_: any, data: string | Record<string, unknown>, params?: Record<string, unknown>) => {
+        analyticsError(data as any, params ?? {});
+        return true;
+    });
+
+    ipcMainHandle("analytics-perf", (_: any, data: string | Record<string, unknown>, params?: Record<string, unknown>) => {
+        analyticsPerf(data as any, params ?? {});
+        return true;
+    });
+
     // Handle client events
     ipcMain.on("client-event", (ipcEvent, event: ClientEvent) => {
         if (event.type === "session.start") {
@@ -919,6 +1074,7 @@ app.on("ready", async () => {
         const existing = loadUserSettings();
         const merged = { ...existing, ...settings };
         saveUserSettings(merged);
+        syncAnalyticsUserContext(merged);
         reloadClaudeSettings();
         return true;
     });
@@ -1081,6 +1237,13 @@ app.on("ready", async () => {
             updateTelegramBotConfig(assistant.id, updates);
             updateFeishuBotConfig(assistant.id, updates);
             updateQQBotConfig(assistant.id, updates);
+            const weixin = assistant.bots?.weixin as WeixinBotConfig | undefined;
+            updateWeixinBotConfig(assistant.id, {
+                ...updates,
+                dmPolicy: weixin?.dmPolicy,
+                allowFrom: weixin?.allowFrom,
+                ownerUserIds: weixin?.ownerUserIds,
+            });
             await syncAssistantBotConnections(assistant, result.userContext, previousById.get(assistant.id));
         }
 
@@ -1290,12 +1453,98 @@ app.on("ready", async () => {
         });
     });
 
+    // WeChat bot lifecycle handlers
+    ipcMainHandle("start-weixin-bot", async (_: any, input: WeixinBotOptions) => {
+        try {
+            await startWeixinBot(input);
+            return { status: getWeixinBotStatus(input.assistantId) as WeixinBotStatus };
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            return { status: "error" as WeixinBotStatus, detail };
+        }
+    });
+
+    ipcMainHandle("stop-weixin-bot", (_: any, assistantId: string) => {
+        stopWeixinBot(assistantId);
+    });
+
+    ipcMainHandle("get-weixin-bot-status", (_: any, assistantId: string) => {
+        return { status: getWeixinBotStatus(assistantId) as WeixinBotStatus };
+    });
+
+    ipcMainHandle("weixin-start-qr-login", async () => {
+        return await beginWeixinQrLogin();
+    });
+
+    ipcMainHandle("weixin-poll-qr-login", async (_: any, sessionId: string) => {
+        const result = await waitWeixinQrLogin(sessionId);
+        return {
+            status: result.status,
+            qrImage: result.qrImage,
+            accountId: result.accountId,
+            error: result.error,
+        };
+    });
+
+    ipcMainHandle("weixin-cancel-qr-login", (_: any, sessionId: string) => {
+        abortWeixinQrLogin(sessionId);
+        return true;
+    });
+
+    ipcMainHandle("weixin-list-accounts", () => {
+        return listWeixinAccounts().map((account) => ({
+            accountId: account.account_id,
+            userId: account.user_id,
+            name: account.name,
+            baseUrl: account.base_url,
+            cdnBaseUrl: account.cdn_base_url,
+            enabled: account.enabled === 1,
+            hasToken: !!account.token,
+            lastLoginAt: account.last_login_at,
+            createdAt: account.created_at,
+            updatedAt: account.updated_at,
+        }));
+    });
+
+    ipcMainHandle("weixin-delete-account", (_: any, accountId: string) => {
+        return deleteWeixinAccount(accountId);
+    });
+
+    ipcMainHandle("weixin-set-account-enabled", (_: any, accountId: string, enabled: boolean) => {
+        setWeixinAccountEnabled(accountId, enabled);
+        return true;
+    });
+
     // Forward QQ Bot status changes to renderer
     onQQBotStatusChange((assistantId, status, detail) => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
             if (!win.isDestroyed()) {
                 win.webContents.send("qqbot-bot-status", { assistantId, status, detail });
+            }
+        }
+    });
+
+    // Forward WeChat bot status changes to renderer
+    onWeixinBotStatusChange((assistantId, status, detail) => {
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            if (!win.isDestroyed()) {
+                win.webContents.send("weixin-bot-status", { assistantId, status, detail });
+            }
+        }
+    });
+
+    // Forward WeChat session title/status updates to renderer
+    onWeixinSessionUpdate((sessionId, updates) => {
+        const event = JSON.stringify({
+            type: "session.status",
+            payload: { sessionId, status: updates.status ?? "idle", title: updates.title },
+        });
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            if (!win.isDestroyed()) {
+                win.webContents.send("server-event", event);
             }
         }
     });
@@ -1311,7 +1560,7 @@ app.on("ready", async () => {
     });
 
     // Scheduler handlers
-    initUsageTracker(join(app.getPath("userData"), "sessions.db"));
+    initUsageTracker(resolveSessionDbPath());
 
     ipcMainHandle("get-scheduled-tasks", () => {
         return loadScheduledTasks();

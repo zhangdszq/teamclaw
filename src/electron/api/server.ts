@@ -1,5 +1,5 @@
 /**
- * Embedded API server for AI Team
+ * DinoClaw 内嵌 API 服务
  * This replaces the external sidecar process
  */
 
@@ -39,7 +39,7 @@ honoApp.route('/webhook', webhookRoutes);
 // Root endpoint
 honoApp.get('/', (c) => {
   return c.json({
-    name: 'AI Team API (Embedded)',
+    name: 'DinoClaw API（内嵌）',
     version: '0.0.4',
     endpoints: {
       health: '/health',

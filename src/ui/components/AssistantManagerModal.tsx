@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { BotConfigModal } from "./BotConfigModal";
 import { useAppStore } from "../store/useAppStore";
+import { resolveAvatarSrc } from "../lib/avatar";
 
 
 interface AssistantManagerModalProps {
@@ -947,9 +948,9 @@ export function AssistantManagerModal({
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex min-w-0 items-center gap-3">
-                              {assistant.avatar ? (
+                              {resolveAvatarSrc(assistant.avatar) ? (
                                 <img
-                                  src={assistant.avatar}
+                                  src={resolveAvatarSrc(assistant.avatar)}
                                   alt={assistant.name}
                                   className="h-11 w-11 rounded-full object-cover shrink-0"
                                 />

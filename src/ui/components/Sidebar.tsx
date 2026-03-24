@@ -4,6 +4,8 @@ import { useAppStore } from "../store/useAppStore";
 import { SettingsModal } from "./SettingsModal";
 import { AssistantManagerModal } from "./AssistantManagerModal";
 import { SchedulerModal } from "./SchedulerModal";
+import { resolveAvatarSrc } from "../lib/avatar";
+import { clickTrack } from "../lib/analytics";
 
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
 export const ASSISTANT_PANEL_WIDTH = 168;
@@ -95,6 +97,7 @@ interface SidebarProps {
   titleBarHeight?: number;
   darkMode?: boolean;
   onDarkModeChange?: (enabled: boolean) => void;
+  onDingtalkLogout?: () => void;
 }
 
 export function Sidebar({
@@ -114,6 +117,7 @@ export function Sidebar({
   titleBarHeight = 0,
   darkMode,
   onDarkModeChange,
+  onDingtalkLogout,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -189,6 +193,12 @@ export function Sidebar({
 
   const handleSelectAssistant = (assistant?: AssistantConfig) => {
     if (!assistant) return;
+    clickTrack("assistant_switch_click", {
+      source_type: "ui",
+      source_channel: "main_window",
+      assistant_id: assistant.id,
+      assistant_name: assistant.name,
+    });
     setSelectedAssistant(assistant.id, assistant.skillNames ?? [], assistant.provider, assistant.model, assistant.persona, assistant.skillTags ?? []);
     // 切换助理时从 localStorage 恢复该助理的工作区（没有则清空）
     const savedCwd = loadAssistantCwdLocal(assistant.id);
@@ -246,9 +256,9 @@ export function Sidebar({
                   }`}
                   onClick={() => handleSelectAssistant(assistant)}
                 >
-                  {assistant.avatar ? (
+                  {resolveAvatarSrc(assistant.avatar) ? (
                     <img
-                      src={assistant.avatar}
+                      src={resolveAvatarSrc(assistant.avatar)}
                       alt={assistant.name}
                       className={`h-8 w-8 shrink-0 rounded-full object-cover border ${
                         selected ? "border-accent/30" : "border-ink-900/10"
@@ -383,10 +393,24 @@ export function Sidebar({
                     ? "bg-accent/8 shadow-[inset_0_0_0_1px_rgba(44,95,47,0.12)]"
                     : "hover:bg-ink-900/4"
                 }`}
-                onClick={() => setActiveSessionId(session.id)}
+                onClick={() => {
+                  clickTrack("session_select_click", {
+                    source_type: "ui",
+                    source_channel: "main_window",
+                    session_id: session.id,
+                    assistant_id: session.assistantId,
+                  });
+                  setActiveSessionId(session.id);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
+                    clickTrack("session_select_click", {
+                      source_type: "ui",
+                      source_channel: "main_window",
+                      session_id: session.id,
+                      assistant_id: session.assistantId,
+                    });
                     setActiveSessionId(session.id);
                   }
                 }}
@@ -468,7 +492,14 @@ export function Sidebar({
         )}
       </div>
 
-      <SettingsModal open={showSettings} onOpenChange={setShowSettings} onShowSplash={onShowSplash} darkMode={darkMode} onDarkModeChange={onDarkModeChange} />
+      <SettingsModal
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        onShowSplash={onShowSplash}
+        darkMode={darkMode}
+        onDarkModeChange={onDarkModeChange}
+        onDingtalkLogout={onDingtalkLogout}
+      />
 
       <AssistantManagerModal
         open={showAssistantManager}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientEvent } from "../types";
+import { clickTrack, setAnalyticsContext } from "../lib/analytics";
 
 const COLLAPSED_HEIGHT = 152;
 const EXPANDED_HEIGHT = 404;
@@ -162,6 +163,16 @@ export function QuickWindow() {
   const filteredSkills = slashSkillSections.flatMap((section) => section.skills);
 
   useEffect(() => {
+    setAnalyticsContext({
+      window_name: "quick_window",
+      page_id: "quick_window",
+      source_type: "ui",
+      source_channel: "quick_window",
+      assistant_id: selectedAssistantId,
+    });
+  }, [selectedAssistantId]);
+
+  useEffect(() => {
     window.electron.getAssistantsConfig().then((c) => {
       setAssistants(c.assistants ?? []);
       if (c.defaultAssistantId) setSelectedAssistantId(c.defaultAssistantId);
@@ -306,6 +317,15 @@ export function QuickWindow() {
         ? assistant.skillNames
         : undefined;
 
+    clickTrack("quick_window_claw_trigger", {
+      source_type: "ui",
+      source_channel: "quick_window",
+      assistant_id: selectedAssistantId,
+      provider: assistant?.provider || "claude",
+      prompt_length: finalPrompt.length,
+      has_skill: Boolean(resolvedSkillName),
+    });
+
     sendEvent({
       type: "session.start",
       payload: {
@@ -314,6 +334,8 @@ export function QuickWindow() {
         cwd: assistant?.defaultCwd || undefined,
         allowedTools: "Read,Edit,Bash",
         provider: assistant?.provider || "claude",
+        sourceType: "ui",
+        sourceChannel: "quick_window",
         ...(assistant?.model ? { model: assistant.model } : {}),
         ...(selectedAssistantId ? { assistantId: selectedAssistantId } : {}),
         ...(assistant?.persona ? { assistantPersona: assistant.persona } : {}),
@@ -467,6 +489,11 @@ export function QuickWindow() {
                   <button
                     key={a.id}
                     onClick={() => {
+                      clickTrack("quick_window_assistant_switch_click", {
+                        source_type: "ui",
+                        source_channel: "quick_window",
+                        assistant_id: a.id,
+                      });
                       setSelectedAssistantId(a.id);
                       setShowAssistantPicker(false);
                       inputRef.current?.focus();

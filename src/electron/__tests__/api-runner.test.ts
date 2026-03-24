@@ -64,6 +64,8 @@ describe("api runner background heartbeat permissions", () => {
     mockState.runAgent.mockReset();
     mockState.promptOnce.mockReset();
     mockState.buildSmartMemoryContext.mockReset();
+    mockState.createSharedMcpServer.mockReset();
+    mockState.createSharedMcpServer.mockReturnValue({});
     mockState.buildSmartMemoryContext.mockResolvedValue(null);
     mockState.addPendingPermission.mockReset();
   });
@@ -95,5 +97,20 @@ describe("api runner background heartbeat permissions", () => {
       message: "后台心跳/记忆任务禁止向用户提问，请直接完成任务或明确失败原因。",
     });
     expect(mockState.addPendingPermission).not.toHaveBeenCalled();
+  });
+
+  it("passes includeCursorDelegation through to shared MCP creation", async () => {
+    mockState.runAgent.mockResolvedValue((async function* () {})());
+
+    const iterator = runClaude({
+      prompt: "执行任务",
+      session: createSession() as any,
+      includeCursorDelegation: false,
+    });
+    await iterator.next();
+
+    expect(mockState.createSharedMcpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ includeCursorDelegation: false }),
+    );
   });
 });

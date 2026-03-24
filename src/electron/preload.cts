@@ -6,6 +6,14 @@ electron.contextBridge.exposeInMainWorld("electron", {
             callback(stats);
         }),
     getStaticData: () => ipcInvoke("getStaticData"),
+    getAppVersion: () =>
+        ipcInvoke("get-app-version"),
+    updaterCheck: () =>
+        ipcInvoke("updater-check"),
+    updaterInstall: () =>
+        ipcInvoke("updater-install"),
+    onUpdaterEvent: (callback: (event: UpdaterEvent) => void) =>
+        ipcOn("updater-event", callback),
     
     // Claude Agent IPC APIs
     sendClientEvent: (event: any) => {
@@ -33,6 +41,20 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("get-user-settings"),
     saveUserSettings: (settings: any) => 
         ipcInvoke("save-user-settings", settings),
+    analyticsSetContext: (context: Record<string, unknown>) =>
+        ipcInvoke("analytics-set-context", context),
+    analyticsTrack: (eventId: string, params?: Record<string, unknown>) =>
+        ipcInvoke("analytics-track", eventId, params),
+    analyticsClick: (eventId: string, params?: Record<string, unknown>) =>
+        ipcInvoke("analytics-click", eventId, params),
+    analyticsView: (eventId: string, params?: Record<string, unknown>) =>
+        ipcInvoke("analytics-view", eventId, params),
+    analyticsLog: (data: string | Record<string, unknown>, params?: Record<string, unknown>) =>
+        ipcInvoke("analytics-log", data, params),
+    analyticsError: (data: string | Record<string, unknown>, params?: Record<string, unknown>) =>
+        ipcInvoke("analytics-error", data, params),
+    analyticsPerf: (data: string | Record<string, unknown>, params?: Record<string, unknown>) =>
+        ipcInvoke("analytics-perf", data, params),
     getKnowledgeCandidates: () =>
         ipcInvoke("get-knowledge-candidates"),
     updateKnowledgeCandidateStatus: (id: string, status: "draft" | "verified" | "archived") =>
@@ -194,6 +216,32 @@ electron.contextBridge.exposeInMainWorld("electron", {
         };
         electron.ipcRenderer.on("qqbot-bot-status", handler);
         return () => electron.ipcRenderer.off("qqbot-bot-status", handler);
+    },
+    // WeChat Bot lifecycle
+    startWeixinBot: (input: StartWeixinBotInput) =>
+        ipcInvoke("start-weixin-bot", input),
+    stopWeixinBot: (assistantId: string) =>
+        ipcInvoke("stop-weixin-bot", assistantId),
+    getWeixinBotStatus: (assistantId: string) =>
+        ipcInvoke("get-weixin-bot-status", assistantId),
+    startWeixinQrLogin: () =>
+        ipcInvoke("weixin-start-qr-login"),
+    pollWeixinQrLogin: (sessionId: string) =>
+        ipcInvoke("weixin-poll-qr-login", sessionId),
+    cancelWeixinQrLogin: (sessionId: string) =>
+        ipcInvoke("weixin-cancel-qr-login", sessionId),
+    listWeixinAccounts: () =>
+        ipcInvoke("weixin-list-accounts"),
+    deleteWeixinAccount: (accountId: string) =>
+        ipcInvoke("weixin-delete-account", accountId),
+    setWeixinAccountEnabled: (accountId: string, enabled: boolean) =>
+        ipcInvoke("weixin-set-account-enabled", accountId, enabled),
+    onWeixinBotStatus: (cb: (assistantId: string, status: WeixinBotStatus, detail?: string) => void) => {
+        const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; status: WeixinBotStatus; detail?: string }) => {
+            cb(payload.assistantId, payload.status, payload.detail);
+        };
+        electron.ipcRenderer.on("weixin-bot-status", handler);
+        return () => electron.ipcRenderer.off("weixin-bot-status", handler);
     },
     onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => {
         const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; platform: string }) => {

@@ -59,6 +59,56 @@ type GoogleLoginResult = {
     error?: string;
 }
 
+type DingtalkTokens = {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+}
+
+type DingtalkUser = {
+    nick: string;
+    avatarUrl?: string;
+    openId: string;
+    unionId?: string;
+    email?: string;
+    mobile?: string;
+}
+
+type DingtalkAuthStatus = {
+    loggedIn: boolean;
+    nick?: string;
+    avatarUrl?: string;
+    openId?: string;
+    expiresAt?: number;
+}
+
+type DingtalkLoginResult = {
+    success: boolean;
+    nick?: string;
+    openId?: string;
+    error?: string;
+}
+
+type AnalyticsEnv = "test" | "prod";
+
+type AnalyticsSourceType = "ui" | "bot" | "system" | "session" | "src_api";
+
+type AnalyticsSourceChannel =
+    | "main_window"
+    | "quick_window"
+    | "dingtalk"
+    | "feishu"
+    | "telegram"
+    | "weixin"
+    | "qqbot"
+    | "webhook"
+    | "embedded_api"
+    | "scheduler";
+
+type AnalyticsRuntimeContext = Record<string, unknown>;
+
+type AnalyticsParams = Record<string, unknown>;
+
 type UserSettings = {
     anthropicBaseUrl?: string;
     anthropicAuthToken?: string;
@@ -76,6 +126,8 @@ type UserSettings = {
     quickWindowShortcut?: string;
     googleTokens?: GoogleTokens;
     googleUser?: GoogleUser;
+    dingtalkTokens?: DingtalkTokens;
+    dingtalkUser?: DingtalkUser;
     splashSeen?: boolean;
     alertDingtalkWebhook?: string;
     alertDingtalkSecret?: string;
@@ -367,7 +419,7 @@ type MemoryListResult = {
     lastCompactionAt?: string | null;
 }
 
-type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk" | "qqbot";
+type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk" | "qqbot" | "weixin";
 
 type TelegramBotConfig = {
     platform: "telegram";
@@ -478,13 +530,25 @@ type QQBotConfig = {
     connected: boolean;
 };
 
+type WeixinBotConfig = {
+    platform: "weixin";
+    accountId: string;
+    dmPolicy?: "open" | "allowlist";
+    allowFrom?: string[];
+    ownerUserIds?: string[];
+    /** Whether to download and forward media attachments. Default: true */
+    mediaEnabled?: boolean;
+    connected: boolean;
+};
+
 type BotPlatformConfig =
     | TelegramBotConfig
     | FeishuBotConfig
     | WecomBotConfig
     | DiscordBotConfig
     | DingtalkBotConfig
-    | QQBotConfig;
+    | QQBotConfig
+    | WeixinBotConfig;
 
 type BotConfig = {
     platforms: Partial<Record<BotPlatformType, BotPlatformConfig>>;
@@ -630,6 +694,8 @@ type FeishuBotStatusResult = {
 
 type QQBotStatus = "disconnected" | "connecting" | "connected" | "error";
 
+type WeixinBotStatus = "disconnected" | "connecting" | "connected" | "error";
+
 type StartQQBotInput = {
     appId: string;
     clientSecret: string;
@@ -653,6 +719,57 @@ type StartQQBotInput = {
 type QQBotStatusResult = {
     status: QQBotStatus;
     detail?: string;
+};
+
+type StartWeixinBotInput = {
+    accountId: string;
+    assistantId: string;
+    assistantName: string;
+    skillNames?: string[];
+    persona?: string;
+    coreValues?: string;
+    relationship?: string;
+    cognitiveStyle?: string;
+    operatingGuidelines?: string;
+    userContext?: string;
+    provider?: "claude" | "openai";
+    model?: string;
+    defaultCwd?: string;
+    dmPolicy?: "open" | "allowlist";
+    allowFrom?: string[];
+    ownerUserIds?: string[];
+};
+
+type WeixinBotStatusResult = {
+    status: WeixinBotStatus;
+    detail?: string;
+};
+
+type WeixinAccountInfo = {
+    accountId: string;
+    userId: string;
+    name: string;
+    baseUrl: string;
+    cdnBaseUrl: string;
+    enabled: boolean;
+    hasToken: boolean;
+    lastLoginAt?: number | null;
+    createdAt: number;
+    updatedAt: number;
+};
+
+type WeixinQrLoginStartResult = {
+    sessionId: string;
+    qrImage: string;
+};
+
+type WeixinQrLoginStatus = "waiting" | "scanned" | "confirmed" | "expired" | "failed";
+
+type WeixinQrLoginResult = {
+    status: WeixinQrLoginStatus;
+    qrImage: string;
+    accountId?: string;
+    error?: string;
 };
 
 type SendProactiveQQBotInput = {
@@ -694,14 +811,33 @@ type PlanItem = {
 
 type UnsubscribeFunction = () => void;
 
+type UpdaterEvent =
+    | { type: "checking" }
+    | { type: "available"; version: string; releaseNotes: string | null }
+    | { type: "not-available"; version: string }
+    | { type: "download-progress"; percent: number; bytesPerSecond: number; transferred: number; total: number }
+    | { type: "downloaded"; version: string; releaseNotes: string | null }
+    | { type: "error"; message: string };
+
 type EventPayloadMapping = {
     statistics: Statistics;
     getStaticData: StaticData;
+    "get-app-version": string;
+    "updater-check": boolean;
+    "updater-install": boolean;
+    "updater-event": UpdaterEvent;
     "generate-session-title": string;
     "get-recent-cwds": string[];
     "select-directory": string | null;
     "get-user-settings": UserSettings;
     "save-user-settings": boolean;
+    "analytics-set-context": boolean;
+    "analytics-track": boolean;
+    "analytics-click": boolean;
+    "analytics-view": boolean;
+    "analytics-log": boolean;
+    "analytics-error": boolean;
+    "analytics-perf": boolean;
     "get-knowledge-candidates": KnowledgeCandidate[];
     "update-knowledge-candidate-status": KnowledgeCandidate | null;
     "delete-knowledge-candidate": boolean;
@@ -760,6 +896,15 @@ type EventPayloadMapping = {
     "stop-qqbot": void;
     "get-qqbot-status": QQBotStatusResult;
     "send-proactive-qqbot": SendProactiveQQBotResult;
+    "start-weixin-bot": WeixinBotStatusResult;
+    "stop-weixin-bot": void;
+    "get-weixin-bot-status": WeixinBotStatusResult;
+    "weixin-start-qr-login": WeixinQrLoginStartResult;
+    "weixin-poll-qr-login": WeixinQrLoginResult;
+    "weixin-cancel-qr-login": boolean;
+    "weixin-list-accounts": WeixinAccountInfo[];
+    "weixin-delete-account": boolean;
+    "weixin-set-account-enabled": boolean;
     "is-sidecar-running": boolean;
     // OpenAI OAuth
     "openai-login": OpenAILoginResult;
@@ -868,6 +1013,10 @@ interface Window {
     electron: {
         subscribeStatistics: (callback: (statistics: Statistics) => void) => UnsubscribeFunction;
         getStaticData: () => Promise<StaticData>;
+        getAppVersion: () => Promise<string>;
+        updaterCheck: () => Promise<boolean>;
+        updaterInstall: () => Promise<boolean>;
+        onUpdaterEvent: (callback: (event: UpdaterEvent) => void) => UnsubscribeFunction;
         // Claude Agent IPC APIs
         sendClientEvent: (event: any) => void;
         onServerEvent: (callback: (event: any) => void) => UnsubscribeFunction;
@@ -876,6 +1025,13 @@ interface Window {
         selectDirectory: () => Promise<string | null>;
         getUserSettings: () => Promise<UserSettings>;
         saveUserSettings: (settings: UserSettings) => Promise<boolean>;
+        analyticsSetContext: (context: AnalyticsRuntimeContext) => Promise<boolean>;
+        analyticsTrack: (eventId: string, params?: AnalyticsParams) => Promise<boolean>;
+        analyticsClick: (eventId: string, params?: AnalyticsParams) => Promise<boolean>;
+        analyticsView: (eventId: string, params?: AnalyticsParams) => Promise<boolean>;
+        analyticsLog: (data: string | AnalyticsParams, params?: AnalyticsParams) => Promise<boolean>;
+        analyticsError: (data: string | AnalyticsParams, params?: AnalyticsParams) => Promise<boolean>;
+        analyticsPerf: (data: string | AnalyticsParams, params?: AnalyticsParams) => Promise<boolean>;
         getKnowledgeCandidates: () => Promise<KnowledgeCandidate[]>;
         updateKnowledgeCandidateStatus: (id: string, status: KnowledgeReviewStatus) => Promise<KnowledgeCandidate | null>;
         deleteKnowledgeCandidate: (id: string) => Promise<boolean>;
@@ -951,6 +1107,17 @@ interface Window {
         getQQBotStatus: (assistantId: string) => Promise<QQBotStatusResult>;
         onQQBotStatus: (cb: (assistantId: string, status: QQBotStatus, detail?: string) => void) => UnsubscribeFunction;
         sendProactiveQQBot: (input: SendProactiveQQBotInput) => Promise<SendProactiveQQBotResult>;
+        // WeChat bot lifecycle
+        startWeixinBot: (input: StartWeixinBotInput) => Promise<WeixinBotStatusResult>;
+        stopWeixinBot: (assistantId: string) => Promise<void>;
+        getWeixinBotStatus: (assistantId: string) => Promise<WeixinBotStatusResult>;
+        onWeixinBotStatus: (cb: (assistantId: string, status: WeixinBotStatus, detail?: string) => void) => UnsubscribeFunction;
+        startWeixinQrLogin: () => Promise<WeixinQrLoginStartResult>;
+        pollWeixinQrLogin: (sessionId: string) => Promise<WeixinQrLoginResult>;
+        cancelWeixinQrLogin: (sessionId: string) => Promise<boolean>;
+        listWeixinAccounts: () => Promise<WeixinAccountInfo[]>;
+        deleteWeixinAccount: (accountId: string) => Promise<boolean>;
+        setWeixinAccountEnabled: (accountId: string, enabled: boolean) => Promise<boolean>;
         onAssistantBotOwnerIdsChanged: (cb: (assistantId: string, platform: string) => void) => UnsubscribeFunction;
         onAssistantsConfigChanged: (cb: (config: AssistantsConfig) => void) => UnsubscribeFunction;
         // OpenAI OAuth

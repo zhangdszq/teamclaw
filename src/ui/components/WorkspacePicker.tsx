@@ -42,7 +42,7 @@ export function WorkspacePicker({ currentCwd, onSelect }: WorkspacePickerProps) 
 
         {/* Title & subtitle */}
         <div className="text-center space-y-1.5">
-          <h2 className="text-xl font-semibold text-ink-900">欢迎使用 AI Team</h2>
+          <h2 className="text-xl font-semibold text-ink-900">欢迎使用 DinoClaw</h2>
           <p className="text-sm text-ink-500">选择一个工作区开始与助理对话</p>
         </div>
 

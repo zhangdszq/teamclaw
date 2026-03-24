@@ -1,74 +1,133 @@
-name: Build & Release
+name: CI & Release
 
 on:
-  # 推送 tag 时触发（如 v0.0.1）
   push:
+    branches:
+      - main
     tags:
       - 'v*'
-  # 手动触发
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（如 v0.0.3），创建 Release 时必填'
+        description: '版本号（如 v0.0.83），手动创建 Release 时必填'
         required: false
         type: string
       release:
-        description: '是否创建 Release'
+        description: '手动触发时是否创建 GitHub Release'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
-# 取消正在运行的相同工作流
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14   # Apple Silicon (M 芯片) runner，构建 arm64
-            platform: mac-arm64
-            arch: arm64
-            artifact-name: macos-arm64
-          - os: macos-14   # 同一 runner 交叉编译 x64
-            platform: mac-x64
-            arch: x64
-            artifact-name: macos-x64
-          - os: ubuntu-latest
-            platform: linux
-            artifact-name: linux-x64
-          - os: windows-latest
-            platform: windows
-            artifact-name: windows-x64
+permissions:
+  contents: read
 
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
+env:
+  NODE_VERSION: '20'
+  ELECTRON_VERSION: '39.2.7'
+
+jobs:
+  verify:
+    name: Verify Build
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Cache node_modules
+      - name: Cache Bun dependencies
         uses: actions/cache@v4
         with:
-          path: node_modules
-          key: node-modules-${{ runner.os }}-${{ hashFiles('bun.lockb') }}
+          path: |
+            node_modules
+            ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
           restore-keys: |
-            node-modules-${{ runner.os }}-
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        env:
+          ELECTRON_GET_TIMEOUT: 300000
+
+      - name: Build React app
+        run: bun run build
+
+      - name: Transpile Electron
+        run: bun run transpile:electron
+
+  package:
+    name: Package ${{ matrix.platform }}
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      ALIYUN_OSS_UPDATE_URL: ${{ secrets.ALIYUN_OSS_UPDATE_URL }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: mac-arm64
+            arch: arm64
+          - os: macos-14
+            platform: mac-x64
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Cache Electron binary
         uses: actions/cache@v4
@@ -77,14 +136,13 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
             ~/AppData/Local/electron/Cache
-          key: electron-${{ runner.os }}-39.2.7
+          key: electron-${{ runner.os }}-${{ env.ELECTRON_VERSION }}
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
         env:
           ELECTRON_GET_TIMEOUT: 300000
 
-      # 构建 API sidecar
       - name: Build API sidecar (macOS ARM64)
         if: matrix.platform == 'mac-arm64'
         run: bun run build:api:mac-arm
@@ -101,7 +159,6 @@ jobs:
         if: matrix.platform == 'windows'
         run: bun run build:api:windows
 
-      # 构建 CLI bundle
       - name: Build CLI bundle (macOS ARM64)
         if: matrix.platform == 'mac-arm64'
         run: bun run build:cli:mac-arm
@@ -119,69 +176,108 @@ jobs:
         shell: pwsh
         run: bun run build:cli:windows
 
-      # 构建前端和 Electron
       - name: Build React app
         run: bun run build
 
       - name: Transpile Electron
         run: bun run transpile:electron
 
-      # 打包应用
+      # Separate latest-mac.yml per arch: parallel matrix jobs both uploaded to the same prefix and
+      # overwrote latest-mac.yml, so Apple silicon clients could fetch Intel-only metadata and install x64 builds.
+      - name: Scope OSS update URL per macOS architecture
+        if: startsWith(matrix.platform, 'mac-')
+        shell: bash
+        run: |
+          base="${ALIYUN_OSS_UPDATE_URL%/}"
+          if [ "${{ matrix.platform }}" = "mac-arm64" ]; then
+            echo "ALIYUN_OSS_UPDATE_URL=${base}/mac-arm64" >> "$GITHUB_ENV"
+          else
+            echo "ALIYUN_OSS_UPDATE_URL=${base}/mac-x64" >> "$GITHUB_ENV"
+          fi
+
       - name: Package (macOS ARM64)
         if: matrix.platform == 'mac-arm64'
-        run: npx electron-builder --mac --arm64
+        run: npx electron-builder --mac --arm64 --publish always
         env:
           BUILD_ARCH: arm64
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Package (macOS x64)
         if: matrix.platform == 'mac-x64'
-        run: npx electron-builder --mac --x64
+        run: npx electron-builder --mac --x64 --publish always
         env:
           BUILD_ARCH: x64
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Package (Linux)
         if: matrix.platform == 'linux'
-        run: npx electron-builder --linux --x64
+        run: npx electron-builder --linux --x64 --publish always
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALIYUN_OSS_UPDATE_URL: ${{ secrets.ALIYUN_OSS_UPDATE_URL }}
 
       - name: Package (Windows)
         if: matrix.platform == 'windows'
-        run: npx electron-builder --win --x64
+        run: npx electron-builder --win --x64 --publish always
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALIYUN_OSS_UPDATE_URL: ${{ secrets.ALIYUN_OSS_UPDATE_URL }}
 
-      # 直接上传到 GitHub Release（绕过 artifact 配额限制）
-      - name: Publish release assets
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
-        shell: pwsh
+      - name: Install OSS uploader dependencies
+        shell: bash
+        run: python -m pip install --upgrade pip oss2
+
+      - name: Upload release assets to Aliyun OSS
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name || github.event.inputs.version }}
+          ALIYUN_OSS_KEY_ID: ${{ secrets.ALIYUN_OSS_KEY_ID }}
+          ALIYUN_OSS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_KEY_SECRET }}
+          ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+          ALIYUN_OSS_ENDPOINT: ${{ secrets.ALIYUN_OSS_ENDPOINT }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) {
-            throw "RELEASE_TAG is empty. For workflow_dispatch, please provide inputs.version."
-          }
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from urllib.parse import urlparse
 
-          $patterns = @("dist/*.dmg", "dist/*.AppImage", "dist/*.exe", "dist/*.zip")
-          $files = @()
-          foreach ($pattern in $patterns) {
-            $files += Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-          }
+          import oss2
 
-          if ($files.Count -eq 0) {
-            Write-Host "No release files found for this matrix target, skip upload."
-            exit 0
-          }
+          update_url = os.environ["ALIYUN_OSS_UPDATE_URL"].rstrip("/")
+          parsed = urlparse(update_url)
+          prefix = parsed.path.strip("/")
+          dist_dir = Path("dist")
+          patterns = ["*.dmg", "*.AppImage", "*.exe", "*.zip", "*.blockmap", "latest*.yml"]
 
-          gh release view "$env:RELEASE_TAG" *> $null
-          if ($LASTEXITCODE -ne 0) {
-            # First finisher may create release; parallel creators can race safely.
-            gh release create "$env:RELEASE_TAG" --generate-notes
-          }
+          files = []
+          for pattern in patterns:
+              files.extend(dist_dir.glob(pattern))
 
-          foreach ($file in $files) {
-            gh release upload "$env:RELEASE_TAG" "$file" --clobber
-          }
+          unique_files = sorted({file.resolve() for file in files if file.is_file()})
+          if not unique_files:
+              print("No release files found for this matrix target, skip upload.")
+              raise SystemExit(0)
+
+          auth = oss2.Auth(
+              os.environ["ALIYUN_OSS_KEY_ID"],
+              os.environ["ALIYUN_OSS_KEY_SECRET"],
+          )
+          bucket = oss2.Bucket(
+              auth,
+              os.environ["ALIYUN_OSS_ENDPOINT"],
+              os.environ["ALIYUN_OSS_BUCKET"],
+          )
+
+          for file in unique_files:
+              object_key = f"{prefix}/{file.name}" if prefix else file.name
+              headers = {}
+              if file.suffix == ".yml":
+                  headers["Cache-Control"] = "no-cache"
+              bucket.put_object_from_file(object_key, str(file), headers=headers)
+              print(f"Uploaded {file.name} -> oss://{os.environ['ALIYUN_OSS_BUCKET']}/{object_key}")
+          PY

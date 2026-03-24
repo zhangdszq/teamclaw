@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { getWeixinAccount } from "./weixin-db.js";
 
-export type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk" | "qqbot";
+export type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk" | "qqbot" | "weixin";
 
 export type TelegramBotConfig = {
   platform: "telegram";
@@ -99,13 +100,25 @@ export type QQBotConfig = {
   connected: boolean;
 };
 
+export type WeixinBotConfig = {
+  platform: "weixin";
+  accountId: string;
+  dmPolicy?: "open" | "allowlist";
+  allowFrom?: string[];
+  ownerUserIds?: string[];
+  /** Whether to download and forward media attachments (images, voice, files, video). Default: true */
+  mediaEnabled?: boolean;
+  connected: boolean;
+};
+
 export type BotPlatformConfig =
   | TelegramBotConfig
   | FeishuBotConfig
   | WecomBotConfig
   | DiscordBotConfig
   | DingtalkBotConfig
-  | QQBotConfig;
+  | QQBotConfig
+  | WeixinBotConfig;
 
 export type BotConfig = {
   platforms: Partial<Record<BotPlatformType, BotPlatformConfig>>;
@@ -240,6 +253,15 @@ export async function testBotConnection(
         return { success: true, message: "凭证验证成功" };
       }
       return { success: false, message: `验证失败：${JSON.stringify(data)}` };
+    }
+
+    if (platformConfig.platform === "weixin") {
+      const { accountId } = platformConfig;
+      if (!accountId) return { success: false, message: "请选择微信账号" };
+      const account = getWeixinAccount(accountId);
+      if (!account) return { success: false, message: "未找到该微信账号，请重新扫码登录" };
+      if (!account.token) return { success: false, message: "该微信账号没有有效 token，请重新扫码登录" };
+      return { success: true, message: `已选择微信账号：${account.name || account.account_id}` };
     }
 
     if (platformConfig.platform === "discord") {

@@ -28,6 +28,7 @@ import type { SessionStore } from "./session-store.js";
 import type { StreamMessage } from "../types.js";
 import { createSharedMcpServer, type SharedMcpSensitiveTurnState } from "./shared-mcp.js";
 import { loadMcporterServers } from "./mcporter-loader.js";
+import { trackAnalytics } from "./analytics.js";
 import {
   type ConvMessage,
   type BaseBotOptions,
@@ -53,6 +54,7 @@ import {
   buildActivatedSkillSection,
   loadInstalledSkills,
   resolveSkillPromptContext,
+  shouldIncludeCursorDelegation,
 } from "./skill-context.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1040,7 +1042,14 @@ class TelegramConnection {
         ? `${skillContext.userText}\n\n${validPaths.map((p: string) => `文件路径: ${p}`).join("\n")}\n⚠️ 这是${count > 1 ? `一组 ${count} 个` : "一个新"}文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`
         : fullText;
 
-      await this.generateAndDeliver(firstCtx, finalText, chatId, skillContext?.skillContent, validPaths.length > 0);
+      await this.generateAndDeliver(
+        firstCtx,
+        finalText,
+        chatId,
+        skillContext?.skillContent,
+        skillContext?.skillName,
+        validPaths.length > 0,
+      );
       ok = true;
     } finally {
       for (const msgId of messageIds) {
@@ -1149,7 +1158,14 @@ class TelegramConnection {
     const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
     let ok = false;
     try {
-      await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent, hasFiles);
+      await this.generateAndDeliver(
+        ctx,
+        fullText,
+        chatId,
+        skillContext?.skillContent,
+        skillContext?.skillName,
+        hasFiles,
+      );
       ok = true;
     } finally {
       await this.setReaction(chatId, userMsgId, ok ? "👍" : "😢");
@@ -1239,13 +1255,14 @@ class TelegramConnection {
 
   // ── Skill command resolution ────────────────────────────────────────────────
 
-  private resolveSkillCommand(text: string): { skillContent: string; userText: string } | null {
+  private resolveSkillCommand(text: string): { skillName: string; skillContent: string; userText: string } | null {
     const resolved = resolveSkillPromptContext(text, this.opts.skillNames);
     if (!resolved) return null;
     console.log(
       `[Telegram] Skill command activated: ${resolved.skillName} (${resolved.skillContent.length} chars)`,
     );
     return {
+      skillName: resolved.skillName,
       skillContent: resolved.skillContent,
       userText: resolved.userText,
     };
@@ -1258,6 +1275,7 @@ class TelegramConnection {
     userText: string,
     chatId: string,
     skillContent?: string,
+    activatedSkillName?: string,
     hasFiles?: boolean,
   ): Promise<void> {
     const historyKey = `${this.opts.assistantId}:${chatId}`;
@@ -1287,6 +1305,16 @@ class TelegramConnection {
       this.opts.defaultCwd,
       this.opts.skillNames,
     );
+    trackAnalytics("bot_claw_trigger", {
+      source_type: "bot",
+      source_channel: "telegram",
+      assistant_id: this.opts.assistantId,
+      session_id: sessionId,
+      provider,
+      prompt_length: userText.length,
+      has_files: hasFiles,
+      is_owner: isOwner,
+    });
     const historyLengthBeforeTurn = history.length;
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
@@ -1301,6 +1329,11 @@ class TelegramConnection {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const nowStr = new Date().toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）`;
+    const includeCursorDelegation = shouldIncludeCursorDelegation(
+      userText,
+      activatedSkillName,
+      loadInstalledSkills(),
+    );
 
     const skillSection = buildActivatedSkillSection(skillContent);
 
@@ -1336,6 +1369,7 @@ class TelegramConnection {
         isOwner,
         sensitiveTurnState,
         persistedMessages,
+        includeCursorDelegation,
         hasFiles,
         contactKey,
       );
@@ -1540,6 +1574,7 @@ class TelegramConnection {
     isOwner: boolean,
     sensitiveTurnState: SharedMcpSensitiveTurnState,
     persistedMessages: StreamMessage[],
+    includeCursorDelegation: boolean,
     hasFiles?: boolean,
     contactKey?: string,
   ): Promise<StreamResult> {
@@ -1551,6 +1586,7 @@ class TelegramConnection {
       contactKey,
       isOwner,
       sensitiveTurnState,
+      includeCursorDelegation,
     });
     const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();

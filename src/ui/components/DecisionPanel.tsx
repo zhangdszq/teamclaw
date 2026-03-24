@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionRequest } from "../store/useAppStore";
+import type { FolderAccessRequestInput } from "../lib/permission-errors";
 
 type AskUserQuestionInput = {
   questions?: Array<{
@@ -11,6 +12,71 @@ type AskUserQuestionInput = {
   }>;
   answers?: Record<string, string>;
 };
+
+export function FolderAccessPanel({
+  request,
+  onGrant,
+  onOpenSettings,
+  onDismiss,
+  busy = false,
+}: {
+  request: PermissionRequest;
+  onGrant: () => void | Promise<void>;
+  onOpenSettings: () => void | Promise<void>;
+  onDismiss: () => void;
+  busy?: boolean;
+}) {
+  const input = (request.input as FolderAccessRequestInput | null) ?? null;
+  const path = input?.path?.trim() || "";
+
+  return (
+    <div className="rounded-2xl border border-accent/20 bg-accent/5 p-5">
+      <div className="mb-4 flex items-center gap-2 text-xs font-semibold text-accent">
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" />
+          <path d="M9 12l2 2 4-4" />
+        </svg>
+        需要授权
+      </div>
+
+      <p className="text-sm font-medium text-ink-800">
+        需要授予文件夹访问权限后，当前任务才能继续执行。
+      </p>
+      {path && (
+        <div className="mt-3 rounded-xl bg-surface px-3 py-2 text-xs text-ink-700 break-all">
+          {path}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-muted">
+        点击“授权并继续”后会打开系统目录选择器，授权成功后将自动继续当前会话。
+      </p>
+
+      <div className="mt-5 flex flex-wrap gap-3 pt-4 border-t border-accent/10">
+        <button
+          className="rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-white shadow-soft transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void onGrant()}
+          disabled={busy}
+        >
+          {busy ? "授权中..." : "授权并继续"}
+        </button>
+        <button
+          className="rounded-full border border-ink-900/10 bg-surface px-5 py-2.5 text-sm font-medium text-ink-700 transition-colors hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void onOpenSettings()}
+          disabled={busy}
+        >
+          打开系统设置
+        </button>
+        <button
+          className="rounded-full border border-ink-900/10 bg-surface px-5 py-2.5 text-sm font-medium text-ink-700 transition-colors hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={onDismiss}
+          disabled={busy}
+        >
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // Parse chapter list from question text or header
 // Matches patterns like: "1. [00:00-03:20] Title" or "1. Title [00:00-03:20]"

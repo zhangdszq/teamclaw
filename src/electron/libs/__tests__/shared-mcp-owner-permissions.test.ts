@@ -215,6 +215,16 @@ describe("shared MCP bot whitelist access", () => {
     expect(mockState.delegateToCursor).toHaveBeenCalledOnce();
   });
 
+  it("can hide delegate_to_cursor when explicitly disabled", () => {
+    const server = createSharedMcpServer({
+      assistantId: "assistant-1",
+      sessionCwd: tempHome,
+      includeCursorDelegation: false,
+    }) as any;
+
+    expect(getTool(server, "delegate_to_cursor")).toBeUndefined();
+  });
+
   it("blocks sensitive path reads for non-whitelist sessions but keeps normal files readable", async () => {
     const normalDir = join(tempHome, "project");
     const sensitivePath = join(tempHome, ".vk-cowork", "user-settings.json");

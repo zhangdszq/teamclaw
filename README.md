@@ -20,6 +20,17 @@ Teamclaw is an open-source desktop application for building, coordinating, and o
 
 It is built around **Anthropic Claude**. If you already use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Teamclaw can reuse its local configuration and MCP setup, but Claude Code is optional rather than required.
 
+## Screenshots
+
+| Screen | What it shows |
+|--------|----------------|
+| ![Main workspace](assets/readme/01-main-workspace.png) | **Main workspace** — assistant rail, session list, chat header (new task, workspace), and prompt area for the active session. |
+| ![Team management](assets/readme/02-team-management.png) | **Team management** — create and edit assistants, personas, providers, skills, and related shortcuts (MCP, knowledge, SOP, plan). |
+| ![Skill store](assets/readme/03-skill-store.png) | **Skill store** — browse and manage skills with search, categories, and install/remove actions. |
+| ![Workflow store](assets/readme/04-workflow-store.png) | **Workflow store (SOP)** — Hands workflows on a canvas, workflow library, and plan integration. |
+| ![Scheduler](assets/readme/05-scheduler.png) | **Calendar / scheduler** — scheduled tasks, hooks, and automation (once, interval, daily, heartbeat). |
+| ![Settings](assets/readme/06-settings.png) | **Settings** — provider accounts, embedded API, bots, personalization, updates, and diagnostics. |
+
 ## Quick Start
 
 ### Use a release build

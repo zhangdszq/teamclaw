@@ -26,8 +26,8 @@ It is built around **Anthropic Claude**. If you already use [Claude Code](https:
 |--------|----------------|
 | ![Main workspace](assets/readme/01-main-workspace.png) | **Main workspace** — assistant rail, session list, chat header (new task, workspace), and prompt area for the active session. |
 | ![Team management](assets/readme/02-team-management.png) | **Team management** — create and edit assistants, personas, providers, skills, and related shortcuts (MCP, knowledge, SOP, plan). |
-| ![Skill store](assets/readme/03-skill-store.png) | **Skill store** — browse and manage skills with search, categories, and install/remove actions. |
-| ![Workflow store](assets/readme/04-workflow-store.png) | **Workflow store (SOP)** — Hands workflows on a canvas, workflow library, and plan integration. |
+| ![Messaging channels — WeChat](assets/readme/03-messaging-channels-weixin.png) | **Messaging channels** — connect assistants to IM platforms (DingTalk, Feishu, Telegram, QQ, WeCom, Discord, **WeChat**, etc.); per-platform tokens, allowlists, and status. **WeChat** uses QR login to link a personal account for private messages. |
+| ![Skill store](assets/readme/04-skill-store.png) | **Skill store** — browse and manage skills with search, categories, and install/remove actions. |
 | ![Scheduler](assets/readme/05-scheduler.png) | **Calendar / scheduler** — scheduled tasks, hooks, and automation (once, interval, daily, heartbeat). |
 | ![Settings](assets/readme/06-settings.png) | **Settings** — provider accounts, embedded API, bots, personalization, updates, and diagnostics. |
 

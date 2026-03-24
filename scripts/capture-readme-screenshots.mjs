@@ -160,23 +160,37 @@ async function settleAfterLoad(ws, extraMs = 1200) {
   await sleep(extraMs);
 }
 
-/** @param {WebSocket} ws */
-async function closeSopOrOverlay(ws) {
-  const clicked = await evaluate(
+/** Open IM bot config from team management card (hover actions). @param {WebSocket} ws */
+async function clickAssistantBotDialogButton(ws) {
+  const ok = await evaluate(
     ws,
     `(() => {
-      const back = [...document.querySelectorAll("button")].find(
-        (b) => b.textContent?.includes("返回") && b.getBoundingClientRect().width > 0,
-      );
-      if (back) {
-        back.click();
+      const btn = document.querySelector('button[title="机器人对话"]');
+      if (btn) {
+        btn.click();
         return true;
       }
       return false;
     })()`,
   );
-  if (clicked) await sleep(1500);
-  return clicked;
+  if (!ok) console.warn("[capture] No button[title=机器人对话] — add at least one assistant.");
+  return ok;
+}
+
+/** Select 微信 in BotConfigModal left rail. @param {WebSocket} ws */
+async function clickWeixinPlatformTab(ws) {
+  await evaluate(
+    ws,
+    `(() => {
+      const buttons = [...document.querySelectorAll("button")];
+      const btn = buttons.find((b) => {
+        const t = (b.textContent || "").replace(/\\s+/g, " ").trim();
+        return t === "微信" || /^微信\\s*$/.test(t);
+      });
+      if (btn) btn.click();
+      return !!btn;
+    })()`,
+  );
 }
 
 async function main() {
@@ -232,48 +246,67 @@ async function main() {
   await waitForMainShell(ws);
   await settleAfterLoad(ws, 1800);
 
-  const shots = [
-    { file: "01-main-workspace.png", settleExtra: 2000 },
-    { label: "团队管理", file: "02-team-management.png", settleExtra: 2200, expectDialog: true },
-    { label: "技能商店", file: "03-skill-store.png", settleExtra: 3500, expectDialog: true },
-    { label: "流程商店", file: "04-workflow-store.png", settleExtra: 5500, expectDialog: false, fullPage: true },
-    { label: "日历", file: "05-scheduler.png", settleExtra: 2800, expectDialog: true },
-    { label: "设置", file: "06-settings.png", settleExtra: 3500, expectDialog: true },
+  const sidebarSteps = [
+    { label: "技能商店", file: "04-skill-store.png", settleExtra: 3500 },
+    { label: "日历", file: "05-scheduler.png", settleExtra: 2800 },
+    { label: "设置", file: "06-settings.png", settleExtra: 3500 },
   ];
 
   // 01 — main workspace
-  await capturePng(ws, path.join(OUT_DIR, shots[0].file));
-  await sleep(shots[0].settleExtra);
+  await capturePng(ws, path.join(OUT_DIR, "01-main-workspace.png"));
+  await sleep(2000);
 
-  for (let i = 1; i < shots.length; i++) {
-    const step = shots[i];
+  // 02 — team management
+  await evaluate(
+    ws,
+    `(() => {
+      const btn = [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("团队管理"));
+      if (btn) btn.click();
+      return !!btn;
+    })()`,
+  );
+  await sleep(800);
+  await waitForDialog(ws, 25000);
+  await settleAfterLoad(ws, 2200);
+  await capturePng(ws, path.join(OUT_DIR, "02-team-management.png"));
+
+  // 03 — messaging channels (BotConfigModal), 微信 tab
+  await clickAssistantBotDialogButton(ws);
+  await sleep(1000);
+  await waitUntilTrue(
+    ws,
+    `(() => document.body.innerText.includes("机器人对话") && document.body.innerText.includes("平台"))()`,
+    "bot config modal",
+    30000,
+  );
+  await settleAfterLoad(ws, 1200);
+  await clickWeixinPlatformTab(ws);
+  await sleep(800);
+  await settleAfterLoad(ws, 3800);
+  await capturePng(ws, path.join(OUT_DIR, "03-messaging-channels-weixin.png"));
+  await pressEscape(ws);
+  await sleep(600);
+  await pressEscape(ws);
+  await sleep(800);
+  await waitForMainShell(ws);
+  await settleAfterLoad(ws, 800);
+
+  for (const step of sidebarSteps) {
     await evaluate(
       ws,
       `(() => {
         const label = ${JSON.stringify(step.label)};
-        const btn = [...document.querySelectorAll("button")].find((b) =>
-          b.textContent?.includes(label),
-        );
+        const btn = [...document.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
         if (btn) btn.click();
         return !!btn;
       })()`,
     );
     await sleep(800);
-    // Workflow store opens full-page SOP (no role=dialog); others use modals
-    if (step.expectDialog) {
-      await waitForDialog(ws, 25000);
-    } else {
-      await sleep(1500);
-    }
+    await waitForDialog(ws, 25000);
     await settleAfterLoad(ws, step.settleExtra);
     await capturePng(ws, path.join(OUT_DIR, step.file));
-    if (step.fullPage) {
-      await closeSopOrOverlay(ws);
-      await pressEscape(ws);
-    } else {
-      await pressEscape(ws);
-      await waitForNoDialog(ws, 12000).catch(() => {});
-    }
+    await pressEscape(ws);
+    await waitForNoDialog(ws, 12000).catch(() => {});
     await sleep(800);
     await waitForMainShell(ws);
     await settleAfterLoad(ws, 600);

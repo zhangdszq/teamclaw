@@ -70,6 +70,20 @@ bun run dist:win
 bun run dist:linux
 ```
 
+### Tag a release (CI builds GitHub Release)
+
+Pushing a `v*` tag triggers [.github/workflows/build-release.yml](.github/workflows/build-release.yml): verify build, then package macOS / Linux / Windows and **publish artifacts to [GitHub Releases](https://github.com/zhangdszq/teamclaw/releases)** (no Aliyun OSS required; optional OSS upload if you add credentials).
+
+From a **clean** working tree, bump version, commit, tag, and push (default git remote `teamclaw`):
+
+```bash
+chmod +x scripts/release-github.sh
+./scripts/release-github.sh 0.0.99
+# or: REMOTE=origin ./scripts/release-github.sh 0.0.99
+```
+
+Or manually: update `package.json` `version`, commit, `git tag vX.Y.Z`, `git push <remote> main && git push <remote> vX.Y.Z`.
+
 ## Features
 
 ### Multi-Assistant System

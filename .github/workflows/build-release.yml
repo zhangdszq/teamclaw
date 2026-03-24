@@ -82,6 +82,8 @@ jobs:
     permissions:
       contents: write
     env:
+      # Required for electron-builder `publish` → GitHub Releases when not using Aliyun generic URL.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ALIYUN_OSS_UPDATE_URL: ${{ secrets.ALIYUN_OSS_UPDATE_URL }}
     strategy:
       fail-fast: false

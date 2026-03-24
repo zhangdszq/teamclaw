@@ -18,9 +18,11 @@ git commit -m "chore: bump version to x.x.y"
 # 3. 打 tag
 git tag vx.x.y
 
-# 4. 推送
-git push origin main && git push origin vx.x.y
+# 4. 推送（本仓库常用远端名 `teamclaw`）
+git push teamclaw main && git push teamclaw vx.x.y
 ```
+
+推送 `v*` tag 后，GitHub Actions **CI & Release** 会打包并发布到 **GitHub Releases**（无需阿里云；可选配置 OSS 再传对象存储）。也可使用脚本：`./scripts/release-github.sh x.x.y`（要求工作区干净）。
 
 ## ❌ 禁止
 

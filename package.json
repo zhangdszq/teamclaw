@@ -28,6 +28,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "capture:readme-screenshots": "node scripts/capture-readme-screenshots.mjs",
+    "release:github": "bash scripts/release-github.sh",
     "transpile:electron": "node -e \"require('fs').rmSync('dist-electron', { recursive: true, force: true })\" && tsc --project src/electron/tsconfig.json",
     "dist:mac": "bun run build:api:mac-arm && bun run build:cli:mac-arm && bun run transpile:electron && bun run build && electron-builder --mac --arm64",
     "dist:mac:quick": "bun run transpile:electron && bun run build && electron-builder --mac --arm64",

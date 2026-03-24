@@ -70,6 +70,20 @@ bun run dist:win
 bun run dist:linux
 ```
 
+### 打 tag 发版（自动构建并上传 GitHub Release）
+
+推送 **`v` 开头**的 tag 会触发 [.github/workflows/build-release.yml](.github/workflows/build-release.yml)：先校验构建，再在各平台打包，并把安装包发布到 **[GitHub Releases](https://github.com/zhangdszq/teamclaw/releases)**。未配置阿里云时走 GitHub 发布；若以后配置了 OSS 密钥，仍可选上传到阿里云。
+
+在**工作区干净**（无未提交改动）的前提下，一键提升版本号、提交、打 tag 并推送（默认远端名为 `teamclaw`）：
+
+```bash
+chmod +x scripts/release-github.sh
+./scripts/release-github.sh 0.0.99
+# 或指定远端: REMOTE=origin ./scripts/release-github.sh 0.0.99
+```
+
+也可手动：改 `package.json` 的 `version` → 提交 → `git tag vX.Y.Z` → `git push <远端> main && git push <远端> vX.Y.Z`。
+
 ## 功能
 
 ### 多助理系统
